@@ -222,6 +222,9 @@ export interface InsightsResult {
   model: string;
   generatedAt: string;
   runsAnalyzed: number;
+  /** Freshness gate bookkeeping: what the analysis covered. */
+  agentFilter: string | null;
+  runsTotalAtGeneration: number;
 }
 
 // Schema is dual-compatible: Anthropic structured outputs and OpenAI strict
@@ -305,6 +308,7 @@ Rules:
 export async function generateInsights(
   llm: LlmProvider,
   packet: InsightsPacket,
+  agentFilter?: string,
 ): Promise<InsightsResult> {
   const parsed = (await llm.generateJson({
     system: SYSTEM_PROMPT,
@@ -322,5 +326,7 @@ export async function generateInsights(
     model: llm.model,
     generatedAt: new Date().toISOString(),
     runsAnalyzed: packet.runsAnalyzed,
+    agentFilter: agentFilter ?? null,
+    runsTotalAtGeneration: packet.runsTotal,
   };
 }

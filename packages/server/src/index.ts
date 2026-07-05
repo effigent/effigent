@@ -162,8 +162,25 @@ app.post('/api/v1/analyze', async (req, reply) => {
 app.post('/api/v1/insights', async (req, reply) => {
   const auth = await authenticateFlexible(req);
   if (!auth) return reply.code(401).send({ error: 'invalid API key' });
-  const agentFilter = (req.query as { agent?: string })?.agent;
-  const maxRuns = Math.min(80, Number((req.query as { runs?: string })?.runs ?? 40) || 40);
+  const q = req.query as { agent?: string; runs?: string; force?: string; redirect?: string; key?: string };
+  const agentFilter = q.agent;
+  const maxRuns = Math.min(80, Number(q.runs ?? 40) || 40);
+  const backToUi = () =>
+    reply.redirect(`/ui?key=${encodeURIComponent(q.key ?? '')}${agentFilter ? `&agent=${encodeURIComponent(agentFilter)}` : ''}`);
+
+  // Freshness gate: don't re-run the (paid) AI pass unless ≥5 new runs arrived
+  // since the last analysis with the same scope. ?force=1 overrides.
+  if (q.force !== '1') {
+    const gate = await latestInsights(auth.tenantId, agentFilter);
+    if (gate) {
+      const runsNow = await countRuns(auth.tenantId, agentFilter);
+      const newRuns = runsNow - gate.runsTotalAtGeneration;
+      if (newRuns < 5) {
+        if (q.redirect === '1') return backToUi();
+        return { cached: true, newRunsSinceAnalysis: newRuns, hint: 'fewer than 5 new runs since the last analysis — pass ?force=1 to re-run anyway', ...gate };
+      }
+    }
+  }
 
   // Trigger-only semantics: analyzing an agent generates everything fresh at
   // this moment — first the deterministic report for the agent, then the AI pass.
@@ -240,11 +257,12 @@ app.post('/api/v1/insights', async (req, reply) => {
 
   try {
     const llm = createLlmProvider(process.env);
-    const insights = await generateInsights(llm, packet);
+    const insights = await generateInsights(llm, packet, agentFilter);
     await db.query(
       `update reports set report_json = jsonb_set(report_json, '{aiInsights}', $2::jsonb) where id = $1`,
       [rows[0].id, JSON.stringify(sanitizeForJsonb(insights))],
     );
+    if (q.redirect === '1') return backToUi();
     return { reportId: rows[0].id, ...insights };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -255,6 +273,32 @@ app.post('/api/v1/insights', async (req, reply) => {
     });
   }
 });
+
+async function countRuns(tenantId: string, agentFilter?: string): Promise<number> {
+  const r = await db.query<{ n: string }>(
+    agentFilter
+      ? `select count(*) as n from runs where tenant_id = $1 and agent_id ilike '%' || $2 || '%'`
+      : `select count(*) as n from runs where tenant_id = $1`,
+    agentFilter ? [tenantId, agentFilter] : [tenantId],
+  );
+  return Number(r.rows[0].n);
+}
+
+/** Most recent stored AI analysis whose scope matches the requested filter. */
+async function latestInsights(tenantId: string, agentFilter?: string) {
+  const { rows } = await db.query<{ ai: { agentFilter: string | null; runsTotalAtGeneration?: number } & Record<string, unknown> }>(
+    `select report_json->'aiInsights' as ai from reports
+     where tenant_id = $1 and report_json ? 'aiInsights'
+     order by generated_at desc limit 5`,
+    [tenantId],
+  );
+  for (const r of rows) {
+    if ((r.ai.agentFilter ?? null) === (agentFilter ?? null)) {
+      return { ...r.ai, runsTotalAtGeneration: Number(r.ai.runsTotalAtGeneration ?? 0) };
+    }
+  }
+  return rows[0]?.ai ? { ...rows[0].ai, runsTotalAtGeneration: Number(rows[0].ai.runsTotalAtGeneration ?? 0) } : null;
+}
 
 /** Agent inventory for the tenant: every agent we've seen, with run/cost stats. */
 app.get('/api/v1/agents', async (req, reply) => {
@@ -340,27 +384,33 @@ app.get('/ui', async (req, reply) => {
   const auth = await authenticateFlexible(req);
   if (!auth) return reply.code(401).type('text/plain').send('add ?key=cck_… (your tenant API key)');
   const key = (req.query as { key?: string }).key ?? '';
-  const [tenant, agents, runs, reports, latest] = await Promise.all([
+  const uiAgent = (req.query as { agent?: string }).agent;
+  const [tenant, agents, runs, reports] = await Promise.all([
     db.query<{ name: string }>(`select name from tenants where id = $1`, [auth.tenantId]),
     db.query(
-      `select agent_id, count(*)::int as n_runs, round(sum(cost_usd),2) as total_cost_usd, max(started_at) as last_seen
-       from runs where tenant_id = $1 group by agent_id order by sum(cost_usd) desc limit 50`,
-      [auth.tenantId],
+      uiAgent
+        ? `select agent_id, count(*)::int as n_runs, round(sum(cost_usd),2) as total_cost_usd, max(started_at) as last_seen
+           from runs where tenant_id = $1 and agent_id ilike '%' || $2 || '%' group by agent_id order by sum(cost_usd) desc limit 50`
+        : `select agent_id, count(*)::int as n_runs, round(sum(cost_usd),2) as total_cost_usd, max(started_at) as last_seen
+           from runs where tenant_id = $1 group by agent_id order by sum(cost_usd) desc limit 50`,
+      uiAgent ? [auth.tenantId, uiAgent] : [auth.tenantId],
     ),
     db.query(
-      `select session_id, agent_id, started_at, round(cost_usd,2) as cost_usd, n_steps
-       from runs where tenant_id = $1 order by started_at desc nulls last limit 50`,
-      [auth.tenantId],
+      uiAgent
+        ? `select session_id, agent_id, started_at, round(cost_usd,2) as cost_usd, n_steps
+           from runs where tenant_id = $1 and agent_id ilike '%' || $2 || '%' order by started_at desc nulls last limit 50`
+        : `select session_id, agent_id, started_at, round(cost_usd,2) as cost_usd, n_steps
+           from runs where tenant_id = $1 order by started_at desc nulls last limit 50`,
+      uiAgent ? [auth.tenantId, uiAgent] : [auth.tenantId],
     ),
     db.query(
       `select id, generated_at, totals from reports where tenant_id = $1 order by generated_at desc limit 20`,
       [auth.tenantId],
     ),
-    db.query(
-      `select report_json->'aiInsights' as ai from reports where tenant_id = $1 order by generated_at desc limit 1`,
-      [auth.tenantId],
-    ),
   ]);
+  const ai = await latestInsights(auth.tenantId, uiAgent);
+  const runsNow = await countRuns(auth.tenantId, uiAgent);
+  const newRunsSince = ai ? runsNow - ai.runsTotalAtGeneration : runsNow;
   return reply
     .type('text/html')
     .send(
@@ -370,7 +420,8 @@ app.get('/ui', async (req, reply) => {
         runs.rows,
         reports.rows,
         key,
-        latest.rows[0]?.ai ?? undefined,
+        (ai as never) ?? undefined,
+        { agentFilter: uiAgent, newRunsSince, canRun: !ai || newRunsSince >= 5 },
       ),
     );
 });

@@ -73,6 +73,12 @@ export interface AiInsightsBlock {
   runsAnalyzed?: number;
 }
 
+export interface OptimizeState {
+  agentFilter?: string;
+  newRunsSince: number;
+  canRun: boolean;
+}
+
 export function renderDashboardHtml(
   tenantName: string,
   agents: AgentRow[],
@@ -80,8 +86,25 @@ export function renderDashboardHtml(
   reports: ReportRow[],
   key: string,
   aiInsights?: AiInsightsBlock,
+  optimize?: OptimizeState,
 ): string {
   const k = encodeURIComponent(key);
+  const agentQ = optimize?.agentFilter ? `&agent=${encodeURIComponent(optimize.agentFilter)}` : '';
+  const optimizeHtml = optimize
+    ? `<div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #e4e4e8;border-radius:10px;padding:12px 16px;margin:14px 0">
+  <form method="post" action="/api/v1/insights?redirect=1&key=${k}${agentQ}" style="margin:0">
+    <button type="submit" ${optimize.canRun ? '' : 'disabled'} style="padding:8px 16px;border-radius:8px;border:none;background:${optimize.canRun ? '#5b3df5' : '#c9c9cf'};color:#fff;font-weight:700;cursor:${optimize.canRun ? 'pointer' : 'not-allowed'}">
+      Run optimization${optimize.agentFilter ? ` for ${esc(optimize.agentFilter)}` : ''}
+    </button>
+  </form>
+  <span style="font-size:12px;color:#66666e">
+    ${optimize.canRun
+      ? `${optimize.newRunsSince} new run(s) since the last analysis — ready.`
+      : `up to date: only ${optimize.newRunsSince} new run(s) since the last analysis (needs 5).`}
+    ${optimize.canRun ? '' : `<a href="#" onclick="this.closest('div').querySelector('form').action+='&force=1';this.closest('div').querySelector('button').disabled=false;this.remove();return false">force re-run</a>`}
+  </span>
+</div>`
+    : '';
   const insightsHtml = aiInsights
     ? `<h2>AI cost analysis <span style="font-weight:400;color:#66666e;font-size:12px">(${esc(aiInsights.provider ?? '')} ${esc(aiInsights.model)} · ${aiInsights.runsAnalyzed ?? '?'} runs analyzed · ${esc(aiInsights.generatedAt)})</span></h2>
 <p style="font-size:14px">${esc(aiInsights.summary)}</p>
@@ -104,7 +127,8 @@ ${aiInsights.insights
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ccopt — ${esc(tenantName)}</title><style>${SHELL_CSS}</style></head><body><div class="wrap">
 <h1>ccopt workspace: ${esc(tenantName)}</h1>
-<div class="sub">agents, sessions, and reports in this tenant</div>
+<div class="sub">agents, sessions, and reports in this tenant${optimize?.agentFilter ? ` · filtered to <code>${esc(optimize.agentFilter)}</code> · <a href="/ui?key=${k}">clear filter</a>` : ''}</div>
+${optimizeHtml}
 
 <h2>Agents</h2>
 <table><thead><tr><th>agent</th><th>runs</th><th>total cost</th><th>last seen</th></tr></thead><tbody>
