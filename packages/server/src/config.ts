@@ -3,7 +3,6 @@ export interface Config {
   databaseUrl: string;
   dataDir: string;
   adminToken: string;
-  disableJobs: boolean;
   publicBaseUrl: string;
 }
 
@@ -18,7 +17,6 @@ export function loadConfig(): Config {
       process.env.DATABASE_URL ?? 'postgres://ccopt:ccopt@localhost:5433/ccopt',
     dataDir: process.env.CCOPT_DATA_DIR ?? './data',
     adminToken,
-    disableJobs: process.env.CCOPT_DISABLE_JOBS === '1',
     publicBaseUrl: process.env.CCOPT_PUBLIC_BASE_URL ?? `http://localhost:${process.env.PORT ?? 8787}`,
   };
 }

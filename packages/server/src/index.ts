@@ -11,7 +11,6 @@ import { loadConfig } from './config.js';
 import { createPool, migrate, type Db } from './db.js';
 import { createBlobStore } from './blobs.js';
 import { runPipeline } from './pipeline.js';
-import { OutboxEmailSender } from './email.js';
 import { renderClusterHtml, renderDashboardHtml, renderGraphHtml, renderSessionHtml } from './views.js';
 import { sanitizeForJsonb } from './jsonb.js';
 import { buildInsightsPacket, buildRunDigest, generateInsights } from './insights.js';
@@ -20,7 +19,6 @@ import { createLlmProvider } from './llm.js';
 const config = loadConfig();
 const db: Db = createPool(config.databaseUrl);
 const blobs = createBlobStore(process.env, config.dataDir);
-const email = new OutboxEmailSender(config.dataDir);
 
 const app = Fastify({ logger: true, bodyLimit: 64 * 1024 * 1024 });
 
@@ -167,11 +165,14 @@ app.post('/api/v1/insights', async (req, reply) => {
   const agentFilter = (req.query as { agent?: string })?.agent;
   const maxRuns = Math.min(80, Number((req.query as { runs?: string })?.runs ?? 40) || 40);
 
+  // Trigger-only semantics: analyzing an agent generates everything fresh at
+  // this moment — first the deterministic report for the agent, then the AI pass.
+  const pipelineResult = await runPipeline(db, blobs, auth.tenantId, agentFilter);
+  if (!pipelineResult) return reply.code(404).send({ error: 'no runs ingested for this agent yet' });
   const { rows } = await db.query<{ id: string; report_json: WasteReport }>(
-    `select id, report_json from reports where tenant_id = $1 order by generated_at desc limit 1`,
-    [auth.tenantId],
+    `select id, report_json from reports where id = $1`,
+    [pipelineResult.reportId],
   );
-  if (rows.length === 0) return reply.code(404).send({ error: 'no report yet — POST /api/v1/analyze first' });
   const report = rows[0].report_json;
 
   const clusterRows = await db.query(
@@ -476,50 +477,8 @@ app.get('/r/:reportId', async (req, reply) => {
   return reply.type('text/html').send(html);
 });
 
-/** Nightly analyze + weekly email — a simple in-process scheduler, no queues. */
-async function nightlyJob(): Promise<void> {
-  const { rows: tenants } = await db.query<{ id: string; email: string | null; name: string }>(
-    `select id, email, name from tenants`,
-  );
-  for (const t of tenants) {
-    try {
-      const result = await runPipeline(db, blobs, t.id);
-      if (!result) continue;
-      app.log.info({ tenant: t.id, ...result }, 'nightly analysis complete');
-      const { rows } = await db.query<{ id: string; emailed_at: string | null }>(
-        `select id, emailed_at from reports where tenant_id = $1 order by generated_at desc limit 1`,
-        [t.id],
-      );
-      const lastEmail = await db.query<{ m: string | null }>(
-        `select max(emailed_at)::text as m from reports where tenant_id = $1`,
-        [t.id],
-      );
-      const weekMs = 7 * 86_400_000;
-      const due =
-        !lastEmail.rows[0].m || Date.now() - Date.parse(lastEmail.rows[0].m) >= weekMs;
-      if (due && t.email && rows.length > 0) {
-        const html = await blobs.get(
-          (
-            await db.query<{ html_blob_path: string }>(
-              `select html_blob_path from reports where id = $1`,
-              [rows[0].id],
-            )
-          ).rows[0].html_blob_path,
-        );
-        await email.send(t.email, `Your weekly Agent Waste Report — ${t.name}`, html.toString('utf8'));
-        await db.query(`update reports set emailed_at = now() where id = $1`, [rows[0].id]);
-      }
-    } catch (err) {
-      app.log.error({ tenant: t.id, err }, 'nightly analysis failed');
-    }
-  }
-}
-
 async function main(): Promise<void> {
   await migrate(db);
-  if (!config.disableJobs) {
-    setInterval(() => void nightlyJob(), 24 * 3600 * 1000).unref();
-  }
   await app.listen({ port: config.port, host: '0.0.0.0' });
 }
 
