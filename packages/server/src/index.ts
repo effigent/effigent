@@ -151,6 +151,60 @@ app.post('/api/v1/analyze', async (req, reply) => {
   return { ...result, reportUrl: `${config.publicBaseUrl}/r/${result.reportId}` };
 });
 
+/** Agent inventory for the tenant: every agent we've seen, with run/cost stats. */
+app.get('/api/v1/agents', async (req, reply) => {
+  const auth = await authenticate(req.headers.authorization);
+  if (!auth) return reply.code(401).send({ error: 'invalid API key' });
+  const { rows } = await db.query(
+    `select agent_id,
+            count(*)::int                as n_runs,
+            round(sum(cost_usd), 2)      as total_cost_usd,
+            min(started_at)              as first_seen,
+            max(started_at)              as last_seen,
+            (select coalesce(jsonb_agg(distinct m), '[]'::jsonb)
+               from runs r2, jsonb_array_elements_text(r2.models) m
+              where r2.tenant_id = runs.tenant_id and r2.agent_id = runs.agent_id) as models
+     from runs
+     where tenant_id = $1
+     group by tenant_id, agent_id
+     order by sum(cost_usd) desc`,
+    [auth.tenantId],
+  );
+  return { agents: rows };
+});
+
+/** Admin: fleet overview across ALL tenants — every agent our service is set up on. */
+app.get('/api/v1/admin/overview', async (req, reply) => {
+  if (req.headers['x-admin-token'] !== config.adminToken) {
+    return reply.code(401).send({ error: 'admin token required' });
+  }
+  const { rows } = await db.query(
+    `select t.id as tenant_id, t.name as tenant, r.agent_id,
+            count(r.id)::int             as n_runs,
+            round(sum(r.cost_usd), 2)    as total_cost_usd,
+            max(r.started_at)            as last_seen
+     from tenants t
+     left join runs r on r.tenant_id = t.id
+     group by t.id, t.name, r.agent_id
+     order by t.name, sum(r.cost_usd) desc nulls last`,
+  );
+  const tenants = new Map<string, { tenantId: string; tenant: string; agents: unknown[] }>();
+  for (const row of rows) {
+    const entry =
+      tenants.get(row.tenant_id) ??
+      tenants.set(row.tenant_id, { tenantId: row.tenant_id, tenant: row.tenant, agents: [] }).get(row.tenant_id)!;
+    if (row.agent_id) {
+      entry.agents.push({
+        agentId: row.agent_id,
+        nRuns: row.n_runs,
+        totalCostUsd: row.total_cost_usd,
+        lastSeen: row.last_seen,
+      });
+    }
+  }
+  return { tenants: [...tenants.values()] };
+});
+
 /** Report history for the tenant. */
 app.get('/api/v1/reports', async (req, reply) => {
   const auth = await authenticate(req.headers.authorization);
