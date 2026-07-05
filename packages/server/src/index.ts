@@ -12,6 +12,7 @@ import { createPool, migrate, type Db } from './db.js';
 import { createBlobStore } from './blobs.js';
 import { runPipeline } from './pipeline.js';
 import { OutboxEmailSender } from './email.js';
+import { renderDashboardHtml, renderSessionHtml } from './views.js';
 import { sanitizeForJsonb } from './jsonb.js';
 
 const config = loadConfig();
@@ -217,6 +218,74 @@ app.get('/api/v1/reports', async (req, reply) => {
   return {
     reports: rows.map((r) => ({ ...r, url: `${config.publicBaseUrl}/r/${r.id}` })),
   };
+});
+
+/** Browser auth: Bearer header (API) or ?key= query (dashboard links). */
+async function authenticateFlexible(req: {
+  headers: { authorization?: string };
+  query: unknown;
+}): Promise<TenantAuth | null> {
+  const fromHeader = await authenticate(req.headers.authorization);
+  if (fromHeader) return fromHeader;
+  const key = (req.query as { key?: string })?.key;
+  return key ? authenticate(`Bearer ${key}`) : null;
+}
+
+/** Workspace dashboard: agents, sessions, reports — open /ui?key=cck_… in a browser. */
+app.get('/ui', async (req, reply) => {
+  const auth = await authenticateFlexible(req);
+  if (!auth) return reply.code(401).type('text/plain').send('add ?key=cck_… (your tenant API key)');
+  const key = (req.query as { key?: string }).key ?? '';
+  const [tenant, agents, runs, reports] = await Promise.all([
+    db.query<{ name: string }>(`select name from tenants where id = $1`, [auth.tenantId]),
+    db.query(
+      `select agent_id, count(*)::int as n_runs, round(sum(cost_usd),2) as total_cost_usd, max(started_at) as last_seen
+       from runs where tenant_id = $1 group by agent_id order by sum(cost_usd) desc limit 50`,
+      [auth.tenantId],
+    ),
+    db.query(
+      `select session_id, agent_id, started_at, round(cost_usd,2) as cost_usd, n_steps
+       from runs where tenant_id = $1 order by started_at desc nulls last limit 50`,
+      [auth.tenantId],
+    ),
+    db.query(
+      `select id, generated_at, totals from reports where tenant_id = $1 order by generated_at desc limit 20`,
+      [auth.tenantId],
+    ),
+  ]);
+  return reply
+    .type('text/html')
+    .send(
+      renderDashboardHtml(
+        tenant.rows[0]?.name ?? 'workspace',
+        agents.rows,
+        runs.rows,
+        reports.rows,
+        key,
+      ),
+    );
+});
+
+/** Session transcript viewer — full fidelity, parsed from the raw S3 blob. */
+app.get('/s/:sessionId', async (req, reply) => {
+  const auth = await authenticateFlexible(req);
+  if (!auth) return reply.code(401).type('text/plain').send('add ?key=cck_… (your tenant API key)');
+  const { sessionId } = req.params as { sessionId: string };
+  const key = (req.query as { key?: string }).key ?? '';
+  const { rows } = await db.query<{ blob_path: string; agent_id: string; parsed: Run }>(
+    `select blob_path, agent_id, parsed from runs where tenant_id = $1 and session_id = $2`,
+    [auth.tenantId, sessionId],
+  );
+  if (rows.length === 0) return reply.code(404).send('session not found');
+  let run: Run | null = null;
+  try {
+    const blob = await blobs.get(rows[0].blob_path);
+    run = parseTranscript(gunzipSync(blob).toString('utf8'), { agentId: rows[0].agent_id });
+  } catch {
+    run = rows[0].parsed; // blob unavailable — fall back to the trimmed DB copy
+  }
+  if (!run) return reply.code(422).send('session could not be parsed');
+  return reply.type('text/html').send(renderSessionHtml(run, key));
 });
 
 /** Hosted report viewer — report ids are unguessable UUIDs (share-by-link). */
