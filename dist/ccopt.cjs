@@ -4398,7 +4398,10 @@ ${cronLine}
     first.status === 0 ? "\nDone. This machine now reports to the workspace continuously." : "\nSetup saved; first sync failed (see above) \u2014 the schedule will retry every 15 minutes."
   );
 });
-program2.command("sync").description("Upload local session transcripts to the ccopt service").option("--server <url>", "ccopt server base URL (default: ccopt login config)").option("--key <apiKey>", "tenant API key (default: ccopt login config)").option("--source <dir...>", "transcript directories", defaultSources()).option("--days <n>", "only sync sessions modified in the last N days", "30").option("--agent <substr>", "only sync sessions whose resolved agentId contains this substring").action(async (opts) => {
+program2.command("sync").description("Upload local session transcripts to the ccopt service").option("--server <url>", "ccopt server base URL (default: ccopt login config)").option("--key <apiKey>", "tenant API key (default: ccopt login config)").option("--source <dir...>", "transcript directories", defaultSources()).option("--days <n>", "only sync sessions modified in the last N days", "30").option("--agent <substr>", "only sync sessions whose resolved agentId contains this substring").option(
+  "--all",
+  "DANGER: also upload unattributed sessions (everything on this machine). Default is attributed-only: a session uploads only when a tag or agentRule claims it."
+).action(async (opts) => {
   const config = loadConfig();
   const server = opts.server ?? process.env.CCOPT_SERVER ?? config.server;
   const apiKey = opts.key ?? process.env.CCOPT_API_KEY ?? config.apiKey;
@@ -4410,9 +4413,11 @@ program2.command("sync").description("Upload local session transcripts to the cc
   const cutoff = Date.now() - Number(opts.days) * 864e5;
   const sourceDirs = Array.isArray(opts.source) ? opts.source : [opts.source];
   const seen = /* @__PURE__ */ new Set();
-  const sessions = sourceDirs.flatMap((d) => discoverSessions((0, import_node_path2.resolve)(d))).filter((s) => s.mtimeMs >= cutoff).filter((s) => seen.has(s.sessionId) ? false : (seen.add(s.sessionId), true)).map((s) => ({ ...s, agentId: resolveAgentId(s.sessionId, s.path) })).filter((s) => !opts.agent || (s.agentId ?? "").includes(opts.agent));
+  const sessions = sourceDirs.flatMap((d) => discoverSessions((0, import_node_path2.resolve)(d))).filter((s) => s.mtimeMs >= cutoff).filter((s) => seen.has(s.sessionId) ? false : (seen.add(s.sessionId), true)).map((s) => ({ ...s, agentId: resolveAgentId(s.sessionId, s.path) })).filter((s) => opts.all ? true : s.agentId !== void 0).filter((s) => !opts.agent || (s.agentId ?? "").includes(opts.agent));
   if (sessions.length === 0) {
-    console.error("Nothing to sync.");
+    console.error(
+      "Nothing to sync. (Only attributed sessions upload \u2014 add an agentRule, use `ccopt tag`/`ccopt run`, or pass --all.)"
+    );
     return;
   }
   const target = (0, import_node_crypto3.createHash)("sha256").update(`${server}|${apiKey}`).digest("hex").slice(0, 12);

@@ -6,7 +6,9 @@
 
 import type { Run } from '@ccopt/core';
 
-function esc(s: string): string {
+/** HTML-escape any value — pg returns Dates for timestamptz, numerics as strings. */
+function esc(v: unknown): string {
+  const s = v instanceof Date ? v.toISOString() : String(v ?? '—');
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -14,9 +16,9 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function usd(n: number | string): string {
+function usd(n: number | string | null | undefined): string {
   const v = typeof n === 'string' ? Number(n) : n;
-  return `$${v.toFixed(2)}`;
+  return v == null || Number.isNaN(v) ? '—' : `$${v.toFixed(2)}`;
 }
 
 const SHELL_CSS = `
@@ -38,18 +40,18 @@ export interface AgentRow {
   agent_id: string;
   n_runs: number;
   total_cost_usd: string;
-  last_seen: string | null;
+  last_seen: string | Date | null;
 }
 export interface RunRow {
   session_id: string;
   agent_id: string;
-  started_at: string | null;
+  started_at: string | Date | null;
   cost_usd: string;
   n_steps: number;
 }
 export interface ReportRow {
   id: string;
-  generated_at: string;
+  generated_at: string | Date;
   totals: { runs?: number; costUsd?: number };
 }
 

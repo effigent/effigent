@@ -230,6 +230,11 @@ program
   .option('--source <dir...>', 'transcript directories', defaultSources())
   .option('--days <n>', 'only sync sessions modified in the last N days', '30')
   .option('--agent <substr>', 'only sync sessions whose resolved agentId contains this substring')
+  .option(
+    '--all',
+    'DANGER: also upload unattributed sessions (everything on this machine). ' +
+      'Default is attributed-only: a session uploads only when a tag or agentRule claims it.',
+  )
   .action(async (opts) => {
     const config = loadConfig();
     const server: string | undefined = opts.server ?? process.env.CCOPT_SERVER ?? config.server;
@@ -247,9 +252,14 @@ program
       .filter((s) => s.mtimeMs >= cutoff)
       .filter((s) => (seen.has(s.sessionId) ? false : (seen.add(s.sessionId), true)))
       .map((s) => ({ ...s, agentId: resolveAgentId(s.sessionId, s.path) }))
+      // Privacy default: only sessions explicitly claimed by a tag or rule leave
+      // this machine. `--all` is the deliberate opt-out.
+      .filter((s) => (opts.all ? true : s.agentId !== undefined))
       .filter((s) => !opts.agent || (s.agentId ?? '').includes(opts.agent));
     if (sessions.length === 0) {
-      console.error('Nothing to sync.');
+      console.error(
+        'Nothing to sync. (Only attributed sessions upload — add an agentRule, use `ccopt tag`/`ccopt run`, or pass --all.)',
+      );
       return;
     }
     // State is per server+key: the same session must upload once per tenant,
