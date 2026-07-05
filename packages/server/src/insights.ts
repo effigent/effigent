@@ -15,7 +15,7 @@
  * any OpenAI-compatible endpoint via env). See llm.ts.
  */
 
-import { buildRunGraph, type Run, type WasteReport } from '@ccopt/core';
+import { buildRunGraph, mineSegments, toolProfile, type MinedSegment, type Run, type RunGraph, type WasteReport } from '@ccopt/core';
 import type { LlmProvider } from './llm.js';
 
 // ─── Per-run digest ───────────────────────────────────────────────────────────
@@ -32,6 +32,8 @@ export interface RunDigest {
   tokenUsage: { input: number; output: number; cacheRead: number; cacheWrite: number };
   cacheReadRatio: number;
   toolCounts: Record<string, number>;
+  /** Taxonomy profile: how much of this run needs no intelligence. */
+  toolClassProfile: { mechanical: number; cacheable: number; generative: number; sideEffect: number; mechanicalRatio: number };
   /** Semantic signals: what the agent actually spent its steps on. */
   signals: {
     filesRead: string[];
@@ -50,8 +52,9 @@ function push(list: string[], value: string, max = 12): void {
   if (value && !list.includes(value) && list.length < max) list.push(value);
 }
 
-export function buildRunDigest(run: Run, publicBaseUrl: string): RunDigest {
-  const graph = buildRunGraph(run);
+export function buildRunDigest(run: Run, publicBaseUrl: string, graph?: RunGraph): RunDigest {
+  graph = graph ?? buildRunGraph(run);
+  const profile = toolProfile(run.steps);
   const toolCounts: Record<string, number> = {};
   const signals: RunDigest['signals'] = {
     filesRead: [],
@@ -129,6 +132,13 @@ export function buildRunDigest(run: Run, publicBaseUrl: string): RunDigest {
     tokenUsage: usage,
     cacheReadRatio: allInput === 0 ? 0 : Math.round((usage.cacheRead / allInput) * 100) / 100,
     toolCounts,
+    toolClassProfile: {
+      mechanical: profile.mechanical,
+      cacheable: profile.cacheable,
+      generative: profile.generative,
+      sideEffect: profile.sideEffect,
+      mechanicalRatio: profile.mechanicalRatio,
+    },
     signals,
     firstPrompt: run.firstPrompt?.slice(0, 300),
     stepSequence:
@@ -158,6 +168,7 @@ export interface InsightsPacket {
   runsAnalyzed: number;
   runsTotal: number;
   runs: RunDigest[];
+  segments: MinedSegment[];
   clusters: InsightsPacketCluster[];
   engineFindings: { kind: string; title: string; estMonthlySavingUsd: number; recommendation: string }[];
 }
@@ -167,6 +178,7 @@ export function buildInsightsPacket(
   clusters: InsightsPacketCluster[],
   digests: RunDigest[],
   runsTotal: number,
+  segments: MinedSegment[] = [],
 ): InsightsPacket {
   return {
     windowDays: report.windowDays,
@@ -175,6 +187,7 @@ export function buildInsightsPacket(
     runsAnalyzed: digests.length,
     runsTotal,
     runs: digests,
+    segments,
     clusters: clusters
       .sort((a, b) => b.totalCostUsd - a.totalCostUsd)
       .slice(0, 12)
@@ -289,6 +302,10 @@ const INSIGHTS_SCHEMA = {
 const SYSTEM_PROMPT = `You are ccopt's cost-optimization agent. You are given telemetry for ONE tenant's AI agent: a digest of every analyzed run (tool calls, files read, folders listed, web fetches/searches, bash commands, prompt sizes, token/cache economics, canonical step sequence, error/dataflow structure) plus procedure clusters with determinism scores from a deterministic graph engine.
 
 Your job: produce concrete bullets on how to make this agent cost less WITHOUT hurting its task performance.
+
+Two fields encode what is safe:
+- Each run's toolClassProfile and each segment's mechanicalRatio classify steps as mechanical (pure lookups — scriptable with no LLM), cacheable (idempotent fetches), generative (the intelligence), or side_effect (must be preserved; automate only with guards). The mechanicalRatio is the compile/route headroom.
+- `segments` are repeated sub-sequences mined ACROSS runs (support = runs containing them), with segment-level determinism (canonical-I/O equality across occurrences) and attributed cost. A high-support, high-determinism, high-mechanicalRatio segment is the safest money in the report: compile it to a script, or route just that segment to a small model. Reference segments by their labels and evidence runs.
 
 What to look for (use the run content, not just aggregates):
 - REPEATED LOOKUPS: the same files, folders, repos, or web domains read across many runs → precompute a summary/context artifact (e.g. a knowledge file or CLAUDE.md section) and stop re-discovering. Repeated web searches on stable topics → replace with a cached summary refreshed on a schedule.

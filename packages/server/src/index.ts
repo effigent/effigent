@@ -6,7 +6,7 @@
 import Fastify from 'fastify';
 import { createHash, randomBytes } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { buildRunGraph, parseTranscript, type Run, type WasteReport } from '@ccopt/core';
+import { buildRunGraph, mineSegments, parseTranscript, type Run, type WasteReport } from '@ccopt/core';
 import { loadConfig } from './config.js';
 import { createPool, migrate, type Db } from './db.js';
 import { createBlobStore } from './blobs.js';
@@ -236,6 +236,7 @@ app.post('/api/v1/insights', async (req, reply) => {
   );
 
   const digests = [];
+  const digestGraphs = [];
   for (const r of runRows.rows) {
     let run: Run | null = null;
     try {
@@ -245,9 +246,14 @@ app.post('/api/v1/insights', async (req, reply) => {
     } catch {
       run = r.parsed; // blob unavailable — the trimmed DB copy still carries the signals
     }
-    if (run) digests.push(buildRunDigest(run, config.publicBaseUrl));
+    if (run) {
+      const graph = buildRunGraph(run);
+      digestGraphs.push(graph);
+      digests.push(buildRunDigest(run, config.publicBaseUrl, graph));
+    }
   }
   if (digests.length === 0) return reply.code(404).send({ error: 'no runs to analyze' });
+  const minedSegments = mineSegments(digestGraphs);
 
   const packet = buildInsightsPacket(
     report,
@@ -271,6 +277,7 @@ app.post('/api/v1/insights', async (req, reply) => {
     })),
     digests,
     Number(totalCount.rows[0].n),
+    minedSegments,
   );
 
   try {
