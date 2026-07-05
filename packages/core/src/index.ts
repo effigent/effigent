@@ -9,3 +9,5 @@ export * from './findings.js';
 export * from './analyze.js';
 export * from './report.js';
 export * from './graph-svg.js';
+export * from './taxonomy.js';
+export * from './segments.js';

@@ -3043,7 +3043,7 @@ var {
 // packages/cli/src/index.ts
 var import_node_fs3 = require("node:fs");
 var import_node_child_process = require("node:child_process");
-var import_node_crypto3 = require("node:crypto");
+var import_node_crypto4 = require("node:crypto");
 var import_node_os2 = require("node:os");
 var import_node_path2 = require("node:path");
 
@@ -3098,7 +3098,7 @@ var RE_UUID = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
 var RE_EMAIL = /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g;
 var RE_ISO_TS = /\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/g;
 var RE_CLOCK = /\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
-var RE_HEX_ID = /\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{7,64}\b/g;
+var RE_HEX_ID = /(?<![A-Za-z0-9])(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{7,64}(?![A-Za-z0-9])/g;
 var RE_PATH = /(?:~|\.{1,2})?(?:\/[\w.@+~-]+){2,}\/?/g;
 var RE_GIT_REF = /\b(?:refs\/[\w/.-]+|origin\/[\w/.-]+)\b/g;
 var RE_ISSUE_REF = /#\d+\b/g;
@@ -3895,6 +3895,48 @@ function mode(values) {
       best = v, bestN = n;
   return best;
 }
+function mapSegmentFindings(segments, windowDays) {
+  const findings = [];
+  for (const seg of segments) {
+    if (seg.support < 3)
+      continue;
+    const monthlyCost = monthly(seg.totalCostUsd, windowDays);
+    if (seg.determinism >= 0.9 && seg.mechanicalRatio >= 0.6) {
+      findings.push({
+        kind: "compile",
+        title: `Compile segment: ${seg.length} steps repeated in ${seg.support}/${seg.runsTotal} runs (${(seg.mechanicalRatio * 100).toFixed(0)}% mechanical)`,
+        agentId: "*",
+        clusterIds: [],
+        estMonthlySavingUsd: round(monthlyCost * 0.85),
+        confidence: round(Math.min(0.95, seg.determinism * (0.6 + 0.4 * (seg.support / seg.runsTotal)))),
+        effort: 2,
+        score: 0,
+        recommendation: `This ${seg.length}-step segment recurs in ${seg.support} of ${seg.runsTotal} runs (${seg.occurrences} occurrences, ~$${seg.avgCostPerOccurrenceUsd}/occurrence) and is ${(seg.determinism * 100).toFixed(0)}% deterministic. ${(seg.mechanicalRatio * 100).toFixed(0)}% of its steps are mechanical/cacheable \u2014 replace the segment with a plain script (a "meta-tool") and skip the LLM for it entirely.`,
+        evidenceRunIds: seg.examples.map((e) => e.runId),
+        labelSequence: seg.labels,
+        details: { segment: { ...seg, classes: seg.classes } }
+      });
+    } else if (seg.determinism >= 0.7 && seg.mechanicalRatio >= 0.5) {
+      findings.push({
+        kind: "rightsize",
+        title: `Route segment to a smaller model: ${seg.length} steps, ${seg.support}/${seg.runsTotal} runs`,
+        agentId: "*",
+        clusterIds: [],
+        estMonthlySavingUsd: round(monthlyCost * 0.6),
+        confidence: round(0.4 + 0.4 * seg.determinism),
+        effort: 2,
+        score: 0,
+        recommendation: `This recurring segment is ${(seg.determinism * 100).toFixed(0)}% deterministic and mostly mechanical \u2014 not safe to fully script yet, but safe to route to a much smaller model (the decisions inside it are predictable) while the surrounding reasoning stays on the capable model.`,
+        evidenceRunIds: seg.examples.map((e) => e.runId),
+        labelSequence: seg.labels,
+        details: { segment: { ...seg, classes: seg.classes } }
+      });
+    }
+  }
+  for (const f of findings)
+    f.score = f.estMonthlySavingUsd * f.confidence / f.effort;
+  return findings;
+}
 function mapFindings(clusters, options) {
   const { windowDays } = options;
   const all = [
@@ -3911,6 +3953,160 @@ function mapFindings(clusters, options) {
   return all.filter((f) => f.estMonthlySavingUsd >= 0.01).sort((a, b) => b.score - a.score).slice(0, options.maxFindings ?? MAX_FINDINGS);
 }
 
+// packages/core/dist/segments.js
+var import_node_crypto3 = require("node:crypto");
+
+// packages/core/dist/taxonomy.js
+var MECHANICAL_TOOLS = /* @__PURE__ */ new Set([
+  "read",
+  "glob",
+  "grep",
+  "ls",
+  "notebookread",
+  "toolsearch",
+  "tasklist",
+  "taskget"
+]);
+var CACHEABLE_TOOLS = /* @__PURE__ */ new Set(["webfetch", "web_fetch", "websearch", "web_search"]);
+var SIDE_EFFECT_TOOLS = /* @__PURE__ */ new Set([
+  "write",
+  "edit",
+  "multiedit",
+  "notebookedit",
+  "taskcreate",
+  "taskupdate",
+  "sendmessage"
+]);
+var GENERATIVE_TOOLS = /* @__PURE__ */ new Set(["task", "agent", "workflow", "skill", "advisor"]);
+var RO_BASH = /^\s*(ls|cat|head|tail|wc|grep|rg|find|pwd|which|whoami|echo|printf|stat|du|df|ps|env|printenv|jq|yq|sort|uniq|cut|awk|sed -n|tr|diff|cmp|file|basename|dirname|realpath|readlink|md5|shasum|sha256sum|git (status|log|diff|show|branch|remote|rev-parse|describe|blame|ls-files)|npm (ls|view|outdated)|node --version|python3? --version|curl (-s+ )?-?-head|type)\b/i;
+var FETCH_BASH = /^\s*(curl|wget|http)\b(?![^|]*(-X\s*(POST|PUT|DELETE|PATCH)|--data|-d\s))/i;
+function classifyBashCommand(command) {
+  const stages = command.split(/\||&&|;/).map((s) => s.trim()).filter(Boolean);
+  let cls = "mechanical";
+  for (const stage of stages) {
+    if (RO_BASH.test(stage))
+      continue;
+    if (FETCH_BASH.test(stage)) {
+      if (cls === "mechanical")
+        cls = "cacheable";
+      continue;
+    }
+    return "side_effect";
+  }
+  return cls;
+}
+function classifyStep(step) {
+  if (step.kind === "model_turn" || step.kind === "thinking")
+    return "generative";
+  if (step.kind === "tool_result")
+    return classifyStep({ ...step, kind: "tool_use" });
+  const name = step.name.toLowerCase();
+  if (MECHANICAL_TOOLS.has(name))
+    return "mechanical";
+  if (CACHEABLE_TOOLS.has(name))
+    return "cacheable";
+  if (SIDE_EFFECT_TOOLS.has(name))
+    return "side_effect";
+  if (GENERATIVE_TOOLS.has(name))
+    return "generative";
+  if (name === "bash" || name === "shell") {
+    try {
+      const input = JSON.parse(step.payload);
+      if (typeof input.command === "string")
+        return classifyBashCommand(input.command);
+    } catch {
+    }
+    return "side_effect";
+  }
+  return "side_effect";
+}
+function classifyNode(node) {
+  const name = node.label.startsWith("tool:") ? node.label.slice(5).split(" ")[0] : node.label.startsWith("result:") ? node.label.slice(7).split(" ")[0] : node.label.split(":")[0];
+  const kind = node.label.startsWith("tool:") ? "tool_use" : node.label.startsWith("result:") ? "tool_result" : node.label === "thinking" ? "thinking" : "model_turn";
+  return classifyStep({ kind, name, payload: node.raw });
+}
+
+// packages/core/dist/segments.js
+var MIN_LEN = 3;
+var MAX_LEN = 12;
+var MAX_SEGMENTS = 12;
+function attributeStepCosts(graph) {
+  const weights = graph.nodes.map((n) => {
+    const size = Math.max(50, n.raw.length);
+    return n.kind === "model_turn" || n.kind === "thinking" ? size * 4 : size;
+  });
+  const total = weights.reduce((s, w) => s + w, 0) || 1;
+  return weights.map((w) => graph.costUsd * w / total);
+}
+function mineSegments(graphs, maxSegments = MAX_SEGMENTS) {
+  if (graphs.length < 2)
+    return [];
+  const stepCosts = new Map(graphs.map((g) => [g.runId, attributeStepCosts(g)]));
+  const byKey = /* @__PURE__ */ new Map();
+  for (const g of graphs) {
+    const costs = stepCosts.get(g.runId);
+    const seq = g.labelSequence;
+    for (let n = MIN_LEN; n <= Math.min(MAX_LEN, seq.length); n++) {
+      for (let i = 0; i + n <= seq.length; i++) {
+        const labels = seq.slice(i, i + n);
+        const key2 = (0, import_node_crypto3.createHash)("sha256").update(labels.join("\u241E")).digest("hex").slice(0, 16);
+        const acc = byKey.get(key2) ?? byKey.set(key2, { labels, runs: /* @__PURE__ */ new Set(), occurrences: [] }).get(key2);
+        acc.runs.add(g.runId);
+        acc.occurrences.push({
+          runId: g.runId,
+          startIndex: i,
+          costUsd: costs.slice(i, i + n).reduce((s, c) => s + c, 0),
+          valueHash: (0, import_node_crypto3.createHash)("sha256").update(g.nodes.slice(i, i + n).map((nd) => nd.canonicalValue).join("\u241F")).digest("hex")
+        });
+      }
+    }
+  }
+  const minSupport = Math.max(2, Math.ceil(graphs.length * 0.3));
+  let candidates = [...byKey.values()].filter((a) => a.runs.size >= minSupport);
+  const key = (labels) => labels.join("\u241E");
+  const byJoined = new Map(candidates.map((c) => [key(c.labels), c]));
+  candidates = candidates.filter((c) => {
+    for (const other of byJoined.values()) {
+      if (other.labels.length <= c.labels.length)
+        continue;
+      if (other.runs.size < c.runs.size)
+        continue;
+      if (key(other.labels).includes(key(c.labels)))
+        return false;
+    }
+    return true;
+  });
+  const graphById = new Map(graphs.map((g) => [g.runId, g]));
+  const segments = candidates.map((c) => {
+    const totalCost = c.occurrences.reduce((s, o) => s + o.costUsd, 0);
+    const hashCounts = /* @__PURE__ */ new Map();
+    for (const o of c.occurrences)
+      hashCounts.set(o.valueHash, (hashCounts.get(o.valueHash) ?? 0) + 1);
+    const modal = Math.max(...hashCounts.values());
+    const rep = c.occurrences[0];
+    const repNodes = graphById.get(rep.runId).nodes.slice(rep.startIndex, rep.startIndex + c.labels.length);
+    const classes = repNodes.map((n) => classifyNode(n));
+    const nonGenerative = classes.filter((cl) => cl === "mechanical" || cl === "cacheable").length;
+    const seen = /* @__PURE__ */ new Set();
+    const examples = c.occurrences.filter((o) => seen.has(o.runId) ? false : (seen.add(o.runId), true)).slice(0, 5).map((o) => ({ runId: o.runId, startIndex: o.startIndex }));
+    return {
+      segmentId: (0, import_node_crypto3.createHash)("sha256").update(key(c.labels)).digest("hex").slice(0, 12),
+      labels: c.labels,
+      length: c.labels.length,
+      support: c.runs.size,
+      runsTotal: graphs.length,
+      occurrences: c.occurrences.length,
+      avgCostPerOccurrenceUsd: Math.round(totalCost / c.occurrences.length * 1e4) / 1e4,
+      totalCostUsd: Math.round(totalCost * 100) / 100,
+      determinism: Math.round(modal / c.occurrences.length * 100) / 100,
+      mechanicalRatio: Math.round(nonGenerative / classes.length * 100) / 100,
+      classes,
+      examples
+    };
+  });
+  return segments.sort((a, b) => b.totalCostUsd * b.support - a.totalCostUsd * a.support).slice(0, maxSegments);
+}
+
 // packages/core/dist/analyze.js
 function windowDaysOf(graphs) {
   const dates = graphs.map((g) => g.startedAt).filter((d) => !!d).map((d) => Date.parse(d)).filter((t) => !Number.isNaN(t));
@@ -3923,7 +4119,8 @@ function analyzeRuns(runs, now) {
   const graphs = runs.map(buildRunGraph);
   const clusters = clusterRuns(graphs);
   const windowDays = windowDaysOf(graphs);
-  const findings = mapFindings(clusters, { windowDays });
+  const segments = mineSegments(graphs);
+  const findings = [...mapFindings(clusters, { windowDays, maxFindings: 99 }), ...mapSegmentFindings(segments, windowDays)].sort((a, b) => b.score - a.score).slice(0, 5);
   const totalCost = graphs.reduce((s, g) => s + g.costUsd, 0);
   const clusteredRuns = clusters.filter((c) => c.metrics.nRuns >= 2).reduce((s, c) => s + c.metrics.nRuns, 0);
   const clusterSummaries = clusters.map((c) => ({
@@ -3950,7 +4147,8 @@ function analyzeRuns(runs, now) {
       cacheReadRatio: Math.round(cacheReadRatio(graphs.flatMap((g) => Object.values(g.usageByModel))) * 100) / 100
     },
     findings,
-    clusters: clusterSummaries
+    clusters: clusterSummaries,
+    segments
   };
   return { report, clusters, graphs };
 }
@@ -4191,7 +4389,7 @@ function discoverSessions(sourceDir) {
     for (const entry of (0, import_node_fs.readdirSync)(dir, { withFileTypes: true })) {
       const p = (0, import_node_path.join)(dir, entry.name);
       if (entry.isDirectory()) walk(p);
-      else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      else if (entry.isFile() && entry.name.endsWith(".jsonl") && !entry.name.startsWith("agent-")) {
         out.push({
           path: p,
           sessionId: entry.name.replace(/\.jsonl$/, ""),
@@ -4420,7 +4618,7 @@ program2.command("sync").description("Upload local session transcripts to the cc
     );
     return;
   }
-  const target = (0, import_node_crypto3.createHash)("sha256").update(`${server}|${apiKey}`).digest("hex").slice(0, 12);
+  const target = (0, import_node_crypto4.createHash)("sha256").update(`${server}|${apiKey}`).digest("hex").slice(0, 12);
   const statePath = `${CCOPT_HOME}/sync-state-${target}.json`;
   let state = {};
   try {
@@ -4530,7 +4728,7 @@ program2.command("run").description(
   }
   const preTagged = [];
   if (argv[0] === "claude" && !argv.includes("--session-id")) {
-    const sessionId = (0, import_node_crypto3.randomUUID)();
+    const sessionId = (0, import_node_crypto4.randomUUID)();
     argv.splice(1, 0, "--session-id", sessionId);
     preTagged.push(sessionId);
   }

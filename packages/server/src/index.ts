@@ -429,6 +429,11 @@ app.get('/ui', async (req, reply) => {
   const ai = await latestInsights(auth.tenantId, uiAgent);
   const runsNow = await countRuns(auth.tenantId, uiAgent);
   const newRunsSince = ai ? runsNow - ai.runsTotalAtGeneration : runsNow;
+  const segRows = await db.query<{ segments: unknown }>(
+    `select report_json->'segments' as segments from reports
+     where tenant_id = $1 and report_json ? 'segments' order by generated_at desc limit 1`,
+    [auth.tenantId],
+  );
   return reply
     .type('text/html')
     .send(
@@ -440,6 +445,7 @@ app.get('/ui', async (req, reply) => {
         key,
         (ai as never) ?? undefined,
         { agentFilter: uiAgent, newRunsSince, canRun: !ai || newRunsSince >= 5 },
+        (segRows.rows[0]?.segments as never) ?? undefined,
       ),
     );
 });

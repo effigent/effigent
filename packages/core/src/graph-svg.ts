@@ -6,6 +6,7 @@
  */
 
 import type { RunGraph } from './types.js';
+import { classifyNode, type StepClass } from './taxonomy.js';
 
 function esc(s: string): string {
   return s
@@ -20,11 +21,12 @@ const BOX_W = 620;
 const PAD = 12;
 const ARC_GAP = 14;
 
-const KIND_STYLE: Record<string, { fill: string; stroke: string }> = {
-  tool_use: { fill: '#eef2ff', stroke: '#7c5cff' },
-  tool_result: { fill: '#f0faf5', stroke: '#00a37a' },
-  model_turn: { fill: '#f7f7f8', stroke: '#9a9aa2' },
-  thinking: { fill: '#fbfbfc', stroke: '#d5d5da' },
+/** Color by optimization class — what the step IS decides what's safe to do to it. */
+export const CLASS_STYLE: Record<StepClass, { fill: string; stroke: string; label: string }> = {
+  mechanical: { fill: '#e9f9f2', stroke: '#00a37a', label: 'mechanical (scriptable)' },
+  cacheable: { fill: '#e8f2ff', stroke: '#0b84ff', label: 'cacheable fetch' },
+  generative: { fill: '#f0ecff', stroke: '#7c5cff', label: 'generative (the intelligence)' },
+  side_effect: { fill: '#fff4e5', stroke: '#f5a623', label: 'side effect (guard it)' },
 };
 
 export interface GraphSvgOptions {
@@ -54,7 +56,7 @@ export function runGraphSvg(graph: RunGraph, options: GraphSvgOptions = {}): str
 
   nodes.forEach((n, i) => {
     const y = PAD + i * ROW_H;
-    const style = KIND_STYLE[n.kind] ?? KIND_STYLE.model_turn;
+    const style = CLASS_STYLE[classifyNode(n)];
     const stroke = n.isError ? '#e5484d' : style.stroke;
     const fill = n.isError ? '#fdecec' : style.fill;
     const label = n.label.length > 82 ? `${n.label.slice(0, 81)}…` : n.label;

@@ -8,6 +8,8 @@ import { buildRunGraph } from './graph.js';
 import { clusterRuns } from './cluster.js';
 import { mapFindings } from './findings.js';
 import { cacheReadRatio } from './cost.js';
+import { mineSegments } from './segments.js';
+import { mapSegmentFindings } from './findings.js';
 
 export interface AnalyzeResult {
   report: WasteReport;
@@ -30,7 +32,10 @@ export function analyzeRuns(runs: Run[], now?: string): AnalyzeResult {
   const graphs = runs.map(buildRunGraph);
   const clusters = clusterRuns(graphs);
   const windowDays = windowDaysOf(graphs);
-  const findings = mapFindings(clusters, { windowDays });
+  const segments = mineSegments(graphs);
+  const findings = [...mapFindings(clusters, { windowDays, maxFindings: 99 }), ...mapSegmentFindings(segments, windowDays)]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
 
   const totalCost = graphs.reduce((s, g) => s + g.costUsd, 0);
   const clusteredRuns = clusters
@@ -67,6 +72,7 @@ export function analyzeRuns(runs: Run[], now?: string): AnalyzeResult {
     },
     findings,
     clusters: clusterSummaries,
+    segments,
   };
 
   return { report, clusters, graphs };

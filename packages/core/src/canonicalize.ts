@@ -16,7 +16,7 @@ const RE_ISO_TS =
 const RE_CLOCK = /\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
 // Hex ids: git SHAs, content hashes. Require ≥7 chars and at least one digit so
 // ordinary words ("deadbeef" passes, "accede" does not).
-const RE_HEX_ID = /\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{7,64}\b/g;
+const RE_HEX_ID = /(?<![A-Za-z0-9])(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{7,64}(?![A-Za-z0-9])/g;
 // Unix-style paths with at least two segments; captures a trailing extension.
 const RE_PATH = /(?:~|\.{1,2})?(?:\/[\w.@+~-]+){2,}\/?/g;
 // Git refs: refs/..., origin/..., PR/issue "#123"

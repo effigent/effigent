@@ -136,7 +136,10 @@ export function discoverSessions(sourceDir: string): DiscoveredSession[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name);
       if (entry.isDirectory()) walk(p);
-      else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      else if (entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.startsWith('agent-')) {
+        // agent-*.jsonl are subagent SIDECHAIN transcripts — fragments of a
+        // parent session, never standalone runs. Syncing them pollutes both
+        // the bucket and the analytics.
         out.push({
           path: p,
           sessionId: entry.name.replace(/\.jsonl$/, ''),

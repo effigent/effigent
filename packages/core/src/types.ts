@@ -163,6 +163,8 @@ export interface WasteReport {
   };
   findings: Finding[];
   clusters: ClusterSummary[];
+  /** Repeated sub-sequences mined across runs — the fine-grained compile units. */
+  segments?: unknown[];
 }
 
 export interface ClusterSummary {

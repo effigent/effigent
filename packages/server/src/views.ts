@@ -4,7 +4,7 @@
  * Auth for browsers: ?key=cck_… query param (same tenant API key as the CLI).
  */
 
-import { runGraphSvg, type Run, type RunGraph, type VolatileSlot } from '@ccopt/core';
+import { CLASS_STYLE, classifyStep, runGraphSvg, toolProfile, type MinedSegment, type Run, type RunGraph, type StepClass, type VolatileSlot } from '@ccopt/core';
 
 /** HTML-escape any value — pg returns Dates for timestamptz, numerics as strings. */
 function esc(v: unknown): string {
@@ -73,6 +73,33 @@ export interface AiInsightsBlock {
   runsAnalyzed?: number;
 }
 
+const CATEGORY_STYLE: Record<string, { bg: string; label: string }> = {
+  'prompt-reduction': { bg: '#0b84ff', label: 'PROMPT REDUCTION' },
+  'prompt-caching': { bg: '#00a37a', label: 'PROMPT CACHING' },
+  'result-caching': { bg: '#00a37a', label: 'RESULT CACHING' },
+  'knowledge-summary': { bg: '#0b84ff', label: 'KNOWLEDGE SUMMARY' },
+  'model-rightsizing': { bg: '#7c5cff', label: 'RIGHT-SIZE MODEL' },
+  'deterministic-to-script': { bg: '#00794f', label: 'COMPILE TO SCRIPT' },
+  'fix-failures': { bg: '#e5484d', label: 'FIX FAILURES' },
+  'precompute-context': { bg: '#f5a623', label: 'PRECOMPUTE CONTEXT' },
+  other: { bg: '#8f8f8f', label: 'OTHER' },
+};
+const RISK_STYLE: Record<string, string> = {
+  none: '#00794f',
+  low: '#0b84ff',
+  medium: '#f5a623',
+  high: '#e5484d',
+};
+
+function categoryTag(category: string): string {
+  const c = CATEGORY_STYLE[category] ?? CATEGORY_STYLE.other;
+  return `<span style="background:${c.bg};color:#fff;font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:6px">${c.label}</span>`;
+}
+function riskTag(risk: string): string {
+  const color = RISK_STYLE[risk] ?? '#8f8f8f';
+  return `<span style="border:1.5px solid ${color};color:${color};font-size:10px;font-weight:700;padding:1px 7px;border-radius:6px">risk: ${esc(risk)}</span>`;
+}
+
 export interface OptimizeState {
   agentFilter?: string;
   newRunsSince: number;
@@ -87,6 +114,7 @@ export function renderDashboardHtml(
   key: string,
   aiInsights?: AiInsightsBlock,
   optimize?: OptimizeState,
+  segments?: MinedSegment[],
 ): string {
   const k = encodeURIComponent(key);
   const agentQ = optimize?.agentFilter ? `&agent=${encodeURIComponent(optimize.agentFilter)}` : '';
@@ -111,11 +139,12 @@ export function renderDashboardHtml(
 ${aiInsights.insights
   .map(
     (i) => `<div style="background:#fff;border:1px solid #e4e4e8;border-radius:10px;padding:12px 16px;margin-bottom:10px">
-  <div style="display:flex;gap:10px;align-items:center;font-size:12px;color:#66666e">
+  <div style="display:flex;gap:8px;align-items:center;font-size:12px;color:#66666e;flex-wrap:wrap">
+    ${categoryTag(i.category)}
+    ${riskTag(i.performance_risk)}
     <b style="color:#1a1a1e;font-size:14px">${esc(i.title)}</b>
     <span style="margin-left:auto;font-weight:800;color:#00794f">${usd(i.est_monthly_saving_usd)}/mo</span>
   </div>
-  <div style="font-size:12px;color:#66666e;margin:2px 0 6px">${esc(i.category)} · performance risk: <b>${esc(i.performance_risk)}</b></div>
   <div style="font-size:13px">${esc(i.rationale)}</div>
   <div style="font-size:13px;color:#3c3c44;margin-top:6px"><b>Do:</b> ${esc(i.implementation)}</div>
   ${(i.evidence_runs ?? []).length ? `<div style="font-size:12px;color:#66666e;margin-top:6px">evidence: ${(i.evidence_runs ?? []).slice(0, 6).map((r) => `<a href="/g/${esc(r)}?key=${k}"><code>${esc(r.slice(0, 8))}…</code></a>`).join(' ')}</div>` : ''}
@@ -151,6 +180,24 @@ ${reports
   )
   .join('')}
 </tbody></table>
+
+${(segments ?? []).length ? `<h2>Repeated procedure segments <span style="font-weight:400;color:#66666e;font-size:12px">(mined across runs — the compile/route units)</span></h2>
+<table><thead><tr><th>steps</th><th>seen in</th><th>determinism</th><th>mechanical</th><th>total cost</th><th>first step</th><th>example</th></tr></thead><tbody>
+${(segments ?? [])
+  .slice(0, 8)
+  .map(
+    (sg) => `<tr>
+  <td>${sg.length}</td>
+  <td>${sg.support}/${sg.runsTotal} runs · ${sg.occurrences}×</td>
+  <td><b style="color:${sg.determinism >= 0.9 ? '#00794f' : sg.determinism >= 0.7 ? '#a86500' : '#e5484d'}">${(sg.determinism * 100).toFixed(0)}%</b></td>
+  <td>${(sg.mechanicalRatio * 100).toFixed(0)}%</td>
+  <td>${usd(sg.totalCostUsd)}</td>
+  <td><code>${esc(sg.labels[0].slice(0, 60))}</code></td>
+  <td>${sg.examples[0] ? `<a href="/g/${esc(sg.examples[0].runId)}?key=${k}#node-${sg.examples[0].startIndex}">graph #${sg.examples[0].startIndex}</a>` : '—'}</td>
+</tr>`,
+  )
+  .join('')}
+</tbody></table>` : ''}
 
 <h2>Recent sessions</h2>
 <table><thead><tr><th>started</th><th>agent</th><th>steps</th><th>cost</th><th>session</th></tr></thead><tbody>
@@ -236,11 +283,36 @@ export function renderGraphHtml(
 ): string {
   const k = encodeURIComponent(key);
   const dataflowCount = graph.edges.filter((e) => e.type === 'dataflow').length;
+  const profile = toolProfile(
+    graph.nodes
+      .filter((n) => n.label.startsWith('tool:'))
+      .map((n) => ({ kind: 'tool_use' as const, name: n.label.slice(5).split(' ')[0], payload: n.raw })),
+  );
+  const errorCount = graph.nodes.filter((n) => n.isError).length;
+  const conclusionsHtml = `<div class="node-card" style="border-left:4px solid #5b3df5">
+  <div class="head"><b>What this graph says</b></div>
+  <div style="font-size:13px;line-height:1.7">
+  • <b>${(profile.mechanicalRatio * 100).toFixed(0)}%</b> of the ${profile.total} tool calls are mechanical or cacheable
+    (${profile.mechanical} mechanical, ${profile.cacheable} fetches) — that share needs no intelligence and is the
+    <b>compile/route headroom</b> of this run.<br>
+  • <b>${profile.generative}</b> generative step(s) are where the model earns its cost — only prompt work or
+    right-sizing applies there.<br>
+  • <b>${profile.sideEffect}</b> side-effect step(s) (writes/mutating shell) must be preserved exactly — automate only with guards.<br>
+  ${errorCount > 0 ? `• <b style="color:#e5484d">${errorCount} error step(s)</b> — every non-final attempt is pure re-payment; see the red nodes.<br>` : ''}
+  • ${dataflowCount} dataflow edge(s) prove which steps feed which — segments with dataflow inside them are real procedures, not coincidence.
+  </div>
+</div>`;
   const nodeCards = graph.nodes
     .map((nRaw) => {
       const n = { ...nRaw, canonicalValue: redact(nRaw.canonicalValue), raw: redact(nRaw.raw) };
-      return `<div class="node-card" id="node-${n.index}">
-  <div class="head">#${n.index} · <b>${esc(n.kind)}</b>${n.isError ? ' · <b style="color:#e5484d">error</b>' : ''}</div>
+      const cls: StepClass = n.label.startsWith('tool:')
+        ? classifyStep({ kind: 'tool_use', name: n.label.slice(5).split(' ')[0], payload: nRaw.raw })
+        : n.kind === 'model_turn' || n.kind === 'thinking'
+          ? 'generative'
+          : 'mechanical';
+      const cs = CLASS_STYLE[cls];
+      return `<div class="node-card" id="node-${n.index}" style="border-left:4px solid ${cs.stroke}">
+  <div class="head">#${n.index} · <b>${esc(n.kind)}</b> · <span style="color:${cs.stroke};font-weight:700">${esc(cs.label)}</span>${n.isError ? ' · <b style="color:#e5484d">error</b>' : ''}</div>
   <div style="font-size:12px"><code>${esc(n.label)}</code></div>
   ${n.canonicalValue ? `<details><summary>canonical I/O (what L0 hashes)</summary><pre>${esc(n.canonicalValue)}</pre></details>` : ''}
   ${n.raw ? `<details><summary>raw payload</summary><pre>${esc(n.raw)}</pre></details>` : ''}
@@ -260,12 +332,14 @@ ${revealed
   : '<b>Protected view:</b> credential-shaped values are redacted. <a href="?key=' + k + '&reveal=1">reveal raw content</a> (owner only)'}
 </div>
 <div class="legend">
-  <span class="sw" style="background:#eef2ff;border:1px solid #7c5cff"></span> tool call
-  <span class="sw" style="background:#f0faf5;border:1px solid #00a37a"></span> tool result
-  <span class="sw" style="background:#f7f7f8;border:1px solid #9a9aa2"></span> model turn
+  <span class="sw" style="background:#e9f9f2;border:1px solid #00a37a"></span> mechanical (scriptable)
+  <span class="sw" style="background:#e8f2ff;border:1px solid #0b84ff"></span> cacheable fetch
+  <span class="sw" style="background:#f0ecff;border:1px solid #7c5cff"></span> generative (the intelligence)
+  <span class="sw" style="background:#fff4e5;border:1px solid #f5a623"></span> side effect (guard it)
   <span class="sw" style="background:#fdecec;border:1px solid #e5484d"></span> error
-  — colored arcs on the right are <b>dataflow</b>: an output feeding a later input (click a node for its I/O)
+  — arcs on the right are <b>dataflow</b>: an output feeding a later input (click a node for its I/O)
 </div>
+${conclusionsHtml}
 <div class="graph-scroll">${runGraphSvg(graph)}</div>
 <h2>Nodes — canonical label, canonical I/O, raw payload</h2>
 ${nodeCards}

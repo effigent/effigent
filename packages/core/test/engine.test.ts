@@ -5,6 +5,8 @@ import { clusterRuns } from '../src/cluster.js';
 import { analyzeRuns } from '../src/analyze.js';
 import { renderReportHtml } from '../src/report.js';
 import { scrapeRun, synthTranscript } from './helpers.js';
+import { classifyStep, classifyBashCommand, toolProfile } from '../src/taxonomy.js';
+import { mineSegments, attributeStepCosts } from '../src/segments.js';
 
 function graphOf(jsonl: string) {
   const run = parseTranscript(jsonl);
@@ -161,5 +163,76 @@ describe('findings & report', () => {
     expect(html).toContain('<svg');
     expect(html).toContain('The Agent Waste Report');
     expect(html).toContain('COMPILE IT');
+  });
+});
+
+describe('tool taxonomy', () => {
+
+  it('classifies tools by optimization class', () => {
+    expect(classifyStep({ kind: 'tool_use', name: 'Read', payload: '{}' })).toBe('mechanical');
+    expect(classifyStep({ kind: 'tool_use', name: 'WebFetch', payload: '{}' })).toBe('cacheable');
+    expect(classifyStep({ kind: 'tool_use', name: 'Write', payload: '{}' })).toBe('side_effect');
+    expect(classifyStep({ kind: 'model_turn', name: 'assistant', payload: 'x' })).toBe('generative');
+    expect(classifyStep({ kind: 'tool_use', name: 'Task', payload: '{}' })).toBe('generative');
+  });
+
+  it('classifies bash commands: read-only vs fetch vs mutating', () => {
+    expect(classifyBashCommand('git status && git log -3')).toBe('mechanical');
+    expect(classifyBashCommand('grep -rn "foo" src | head -5')).toBe('mechanical');
+    expect(classifyBashCommand('curl -s https://api.example.com/items')).toBe('cacheable');
+    expect(classifyBashCommand('rm -rf dist')).toBe('side_effect');
+    expect(classifyBashCommand('git push origin main')).toBe('side_effect');
+    expect(classifyBashCommand('ls | rm file')).toBe('side_effect'); // worst stage wins
+  });
+
+  it('computes the mechanical ratio (compile headroom)', () => {
+    const profile = toolProfile([
+      { kind: 'tool_use', name: 'Read', payload: '{}' },
+      { kind: 'tool_use', name: 'Grep', payload: '{}' },
+      { kind: 'tool_use', name: 'WebFetch', payload: '{}' },
+      { kind: 'tool_use', name: 'Write', payload: '{}' },
+    ]);
+    expect(profile.total).toBe(4);
+    expect(profile.mechanicalRatio).toBe(0.75);
+  });
+});
+
+describe('segment mining', () => {
+
+  it('finds a repeated segment inside otherwise-different runs', () => {
+    // Same 3-tool "scrape" segment embedded in runs with different tails
+    const runs = Array.from({ length: 5 }, (_, i) =>
+      parseTranscript(
+        synthTranscript({
+          sessionId: `mix-${i}`,
+          prompt: `Job ${i}: refresh the feed`,
+          tools: [
+            { name: 'WebFetch', input: { url: `https://shop.example.com/products?page=${i}` }, result: `page ${i}` },
+            { name: 'Bash', input: { command: `jq '.items | length' /data/tmp/page_${i}.json` }, result: '20' },
+            { name: 'Write', input: { file_path: `/data/out/products_${i}.json`, content: `{"n":${i}}` }, result: 'ok' },
+            // divergent tail per run
+            ...(i % 2 === 0
+              ? [{ name: 'Read', input: { file_path: `/etc/config_${i}.yaml` }, result: 'cfg' }]
+              : [{ name: 'Grep', input: { pattern: `error_${i}` }, result: 'none' }]),
+          ],
+          finalText: `Job ${i} done differently ${'x'.repeat(i * 7)}`,
+        }),
+      )!,
+    ).map(buildRunGraph);
+
+    const segments = mineSegments(runs);
+    expect(segments.length).toBeGreaterThan(0);
+    const top = segments[0];
+    expect(top.support).toBe(5);
+    expect(top.mechanicalRatio).toBeGreaterThan(0);
+    expect(top.totalCostUsd).toBeGreaterThan(0);
+  });
+
+  it('attributes step costs summing to the run cost', () => {
+    const g = buildRunGraph(parseTranscript(scrapeRun(1))!);
+    const costs = attributeStepCosts(g);
+    const sum = costs.reduce((s, c) => s + c, 0);
+    expect(Math.abs(sum - g.costUsd)).toBeLessThan(1e-9);
+    expect(costs.length).toBe(g.nodes.length);
   });
 });

@@ -5,6 +5,7 @@
 
 import type { Cluster, Finding, RunGraph } from './types.js';
 import { pricingFor } from './cost.js';
+import type { MinedSegment } from './segments.js';
 
 const MAX_FINDINGS = 5;
 
@@ -268,6 +269,61 @@ function mode(values: string[]): string {
   let bestN = -1;
   for (const [v, n] of m) if (n > bestN) ((best = v), (bestN = n));
   return best;
+}
+
+/**
+ * Segment-level findings — the fine-grained compile/route units. A segment that
+ * repeats across otherwise-different runs, is deterministic, and is mostly
+ * mechanical is the safest money in the report:
+ *   determinism ≥ 0.9 + mechanicalRatio ≥ 0.6 → compile to a script (no LLM);
+ *   determinism ≥ 0.7 + mostly mechanical    → route the segment to a small model.
+ */
+export function mapSegmentFindings(segments: MinedSegment[], windowDays: number): Finding[] {
+  const findings: Finding[] = [];
+  for (const seg of segments) {
+    if (seg.support < 3) continue;
+    const monthlyCost = monthly(seg.totalCostUsd, windowDays);
+    if (seg.determinism >= 0.9 && seg.mechanicalRatio >= 0.6) {
+      findings.push({
+        kind: 'compile',
+        title: `Compile segment: ${seg.length} steps repeated in ${seg.support}/${seg.runsTotal} runs (${(seg.mechanicalRatio * 100).toFixed(0)}% mechanical)`,
+        agentId: '*',
+        clusterIds: [],
+        estMonthlySavingUsd: round(monthlyCost * 0.85),
+        confidence: round(Math.min(0.95, seg.determinism * (0.6 + 0.4 * (seg.support / seg.runsTotal)))),
+        effort: 2,
+        score: 0,
+        recommendation:
+          `This ${seg.length}-step segment recurs in ${seg.support} of ${seg.runsTotal} runs ` +
+          `(${seg.occurrences} occurrences, ~$${seg.avgCostPerOccurrenceUsd}/occurrence) and is ` +
+          `${(seg.determinism * 100).toFixed(0)}% deterministic. ${(seg.mechanicalRatio * 100).toFixed(0)}% of its steps ` +
+          `are mechanical/cacheable — replace the segment with a plain script (a "meta-tool") and skip the LLM for it entirely.`,
+        evidenceRunIds: seg.examples.map((e) => e.runId),
+        labelSequence: seg.labels,
+        details: { segment: { ...seg, classes: seg.classes } },
+      });
+    } else if (seg.determinism >= 0.7 && seg.mechanicalRatio >= 0.5) {
+      findings.push({
+        kind: 'rightsize',
+        title: `Route segment to a smaller model: ${seg.length} steps, ${seg.support}/${seg.runsTotal} runs`,
+        agentId: '*',
+        clusterIds: [],
+        estMonthlySavingUsd: round(monthlyCost * 0.6),
+        confidence: round(0.4 + 0.4 * seg.determinism),
+        effort: 2,
+        score: 0,
+        recommendation:
+          `This recurring segment is ${(seg.determinism * 100).toFixed(0)}% deterministic and mostly ` +
+          `mechanical — not safe to fully script yet, but safe to route to a much smaller model ` +
+          `(the decisions inside it are predictable) while the surrounding reasoning stays on the capable model.`,
+        evidenceRunIds: seg.examples.map((e) => e.runId),
+        labelSequence: seg.labels,
+        details: { segment: { ...seg, classes: seg.classes } },
+      });
+    }
+  }
+  for (const f of findings) f.score = (f.estMonthlySavingUsd * f.confidence) / f.effort;
+  return findings;
 }
 
 /** All finding rules, ranked, top-N. */

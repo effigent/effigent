@@ -62,7 +62,7 @@
   {
     "name": "opaque token with digits",
     "input": "api key zz_fake_ABCdef123456789012345678 leaked",
-    "expected": "api key <ID> leaked"
+    "expected": "api key zz_fake_<ID> leaked"
   },
   {
     "name": "and/or is not a path",
