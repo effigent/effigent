@@ -174,10 +174,16 @@ const SESSION_CSS = `${SHELL_CSS}
   details > summary { cursor: pointer; font-size: 12px; color: #55555e; }
 `;
 
-export function renderSessionHtml(run: Run, key: string): string {
+export function renderSessionHtml(
+  run: Run,
+  key: string,
+  redact: (t: string) => string,
+  revealed: boolean,
+): string {
   const models = run.models.join(', ');
   const steps = run.steps
-    .map((s, i) => {
+    .map((sRaw, i) => {
+      const s = { ...sRaw, payload: redact(sRaw.payload) };
       if (s.kind === 'thinking') {
         return `<div class="step"><div class="head"><span class="badge b-think">THINKING</span><span>#${i}</span></div></div>`;
       }
@@ -201,6 +207,11 @@ export function renderSessionHtml(run: Run, key: string): string {
 <h1>Session <code>${esc(run.runId)}</code></h1>
 <div class="sub">agent <code>${esc(run.agentId)}</code> · ${esc(run.startedAt ?? '')} · ${run.steps.length} steps · ${usd(run.costUsd)} · ${esc(models)}
  · <a href="/ui?key=${encodeURIComponent(key)}">← dashboard</a></div>
+<div style="background:${revealed ? '#fdecec' : '#fff8e8'};border:1px solid ${revealed ? '#e5484d' : '#eedc9a'};border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:14px">
+${revealed
+  ? '<b>Revealed:</b> raw content including any secrets. <a href="?key=' + encodeURIComponent(key) + '">back to redacted view</a>'
+  : '<b>Protected view:</b> credential-shaped values are redacted. <a href="?key=' + encodeURIComponent(key) + '&reveal=1">reveal raw content</a> (owner only)'}
+</div>
 ${steps}
 </div></body></html>`;
 }
@@ -217,18 +228,24 @@ const GRAPH_CSS = `${SHELL_CSS}
   .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin: 0 4px 0 12px; vertical-align: -1px; }
 `;
 
-export function renderGraphHtml(graph: RunGraph, key: string): string {
+export function renderGraphHtml(
+  graph: RunGraph,
+  key: string,
+  redact: (t: string) => string,
+  revealed: boolean,
+): string {
   const k = encodeURIComponent(key);
   const dataflowCount = graph.edges.filter((e) => e.type === 'dataflow').length;
   const nodeCards = graph.nodes
-    .map(
-      (n) => `<div class="node-card" id="node-${n.index}">
+    .map((nRaw) => {
+      const n = { ...nRaw, canonicalValue: redact(nRaw.canonicalValue), raw: redact(nRaw.raw) };
+      return `<div class="node-card" id="node-${n.index}">
   <div class="head">#${n.index} · <b>${esc(n.kind)}</b>${n.isError ? ' · <b style="color:#e5484d">error</b>' : ''}</div>
   <div style="font-size:12px"><code>${esc(n.label)}</code></div>
   ${n.canonicalValue ? `<details><summary>canonical I/O (what L0 hashes)</summary><pre>${esc(n.canonicalValue)}</pre></details>` : ''}
   ${n.raw ? `<details><summary>raw payload</summary><pre>${esc(n.raw)}</pre></details>` : ''}
-</div>`,
-    )
+</div>`;
+    })
     .join('\n');
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -237,6 +254,11 @@ export function renderGraphHtml(graph: RunGraph, key: string): string {
 <h1>Run graph <code>${esc(graph.runId)}</code></h1>
 <div class="sub">agent <code>${esc(graph.agentId)}</code> · ${graph.nodes.length} nodes · ${dataflowCount} dataflow edge(s) · ${usd(graph.costUsd)}
  · L1 <code>${esc(graph.l1.slice(0, 12))}</code> · <a href="/s/${esc(graph.runId)}?key=${k}">transcript</a> · <a href="/ui?key=${k}">dashboard</a></div>
+<div style="background:${revealed ? '#fdecec' : '#fff8e8'};border:1px solid ${revealed ? '#e5484d' : '#eedc9a'};border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:10px">
+${revealed
+  ? '<b>Revealed:</b> raw content including any secrets. <a href="?key=' + k + '">back to redacted view</a>'
+  : '<b>Protected view:</b> credential-shaped values are redacted. <a href="?key=' + k + '&reveal=1">reveal raw content</a> (owner only)'}
+</div>
 <div class="legend">
   <span class="sw" style="background:#eef2ff;border:1px solid #7c5cff"></span> tool call
   <span class="sw" style="background:#f0faf5;border:1px solid #00a37a"></span> tool result

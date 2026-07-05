@@ -13,6 +13,7 @@ import { createBlobStore } from './blobs.js';
 import { runPipeline } from './pipeline.js';
 import { renderClusterHtml, renderDashboardHtml, renderGraphHtml, renderSessionHtml } from './views.js';
 import { sanitizeForJsonb } from './jsonb.js';
+import { redactDeep, redactSecrets } from './redact.js';
 import { buildInsightsPacket, buildRunDigest, generateInsights } from './insights.js';
 import { createLlmProvider } from './llm.js';
 
@@ -35,18 +36,19 @@ function hashKey(key: string): string {
 
 interface TenantAuth {
   tenantId: string;
+  role: 'owner' | 'member';
 }
 
 async function authenticate(authorization?: string): Promise<TenantAuth | null> {
   const m = authorization?.match(/^Bearer (cck_[A-Za-z0-9]+)$/);
   if (!m) return null;
-  const { rows } = await db.query<{ tenant_id: string; id: string }>(
-    `select id, tenant_id from api_keys where key_hash = $1`,
+  const { rows } = await db.query<{ tenant_id: string; id: string; role: string }>(
+    `select id, tenant_id, role from api_keys where key_hash = $1`,
     [hashKey(m[1])],
   );
   if (rows.length === 0) return null;
   await db.query(`update api_keys set last_used_at = now() where id = $1`, [rows[0].id]);
-  return { tenantId: rows[0].tenant_id };
+  return { tenantId: rows[0].tenant_id, role: rows[0].role === 'owner' ? 'owner' : 'member' };
 }
 
 app.get('/healthz', async () => {
@@ -71,6 +73,22 @@ app.post('/api/v1/tenants', async (req, reply) => {
     [tenant.rows[0].id, hashKey(apiKey)],
   );
   return { tenantId: tenant.rows[0].id, apiKey };
+});
+
+/** Admin: mint an additional API key for a tenant (role: owner | member). */
+app.post('/api/v1/tenants/:tenantId/keys', async (req, reply) => {
+  if (req.headers['x-admin-token'] !== config.adminToken) {
+    return reply.code(401).send({ error: 'admin token required' });
+  }
+  const { tenantId } = req.params as { tenantId: string };
+  const body = (req.body ?? {}) as { label?: string; role?: string };
+  const role = body.role === 'owner' ? 'owner' : 'member';
+  const apiKey = `cck_${randomBytes(24).toString('hex')}`;
+  await db.query(
+    `insert into api_keys (tenant_id, key_hash, label, role) values ($1, $2, $3, $4)`,
+    [tenantId, hashKey(apiKey), body.label ?? role, role],
+  );
+  return { tenantId, role, apiKey };
 });
 
 /** Ingest one gzipped session transcript. */
@@ -257,7 +275,7 @@ app.post('/api/v1/insights', async (req, reply) => {
 
   try {
     const llm = createLlmProvider(process.env);
-    const insights = await generateInsights(llm, packet, agentFilter);
+    const insights = await generateInsights(llm, redactDeep(packet), agentFilter);
     await db.query(
       `update reports set report_json = jsonb_set(report_json, '{aiInsights}', $2::jsonb) where id = $1`,
       [rows[0].id, JSON.stringify(sanitizeForJsonb(insights))],
@@ -430,6 +448,9 @@ app.get('/ui', async (req, reply) => {
 app.get('/s/:sessionId', async (req, reply) => {
   const auth = await authenticateFlexible(req);
   if (!auth) return reply.code(401).type('text/plain').send('add ?key=cck_… (your tenant API key)');
+  if (auth.role !== 'owner') {
+    return reply.code(403).type('text/plain').send('session transcripts are restricted to the workspace owner key');
+  }
   const { sessionId } = req.params as { sessionId: string };
   const key = (req.query as { key?: string }).key ?? '';
   const { rows } = await db.query<{ blob_path: string; agent_id: string; parsed: Run }>(
@@ -445,13 +466,19 @@ app.get('/s/:sessionId', async (req, reply) => {
     run = rows[0].parsed; // blob unavailable — fall back to the trimmed DB copy
   }
   if (!run) return reply.code(422).send('session could not be parsed');
-  return reply.type('text/html').send(renderSessionHtml(run, key));
+  const revealed = (req.query as { reveal?: string }).reveal === '1';
+  return reply
+    .type('text/html')
+    .send(renderSessionHtml(run, key, revealed ? (t) => t : redactSecrets, revealed));
 });
 
 /** Run-graph viewer: canonical DAG with dataflow edges + full I/O per node. */
 app.get('/g/:sessionId', async (req, reply) => {
   const auth = await authenticateFlexible(req);
   if (!auth) return reply.code(401).type('text/plain').send('add ?key=cck_… (your tenant API key)');
+  if (auth.role !== 'owner') {
+    return reply.code(403).type('text/plain').send('run graphs expose raw payloads — restricted to the workspace owner key');
+  }
   const { sessionId } = req.params as { sessionId: string };
   const key = (req.query as { key?: string }).key ?? '';
   const { rows } = await db.query<{ blob_path: string; agent_id: string; parsed: Run }>(
@@ -467,7 +494,10 @@ app.get('/g/:sessionId', async (req, reply) => {
     run = rows[0].parsed;
   }
   if (!run) return reply.code(422).send('session could not be parsed');
-  return reply.type('text/html').send(renderGraphHtml(buildRunGraph(run), key));
+  const revealed = (req.query as { reveal?: string }).reveal === '1';
+  return reply
+    .type('text/html')
+    .send(renderGraphHtml(buildRunGraph(run), key, revealed ? (t) => t : redactSecrets, revealed));
 });
 
 /** Cluster view: shape, determinism, volatile slots, evidence — the money page. */
@@ -505,7 +535,7 @@ app.get('/c/:clusterId', async (req, reply) => {
         nRuns: c.n_runs,
         totalCostUsd: c.total_cost_usd,
         determinism: c.determinism,
-        metrics: c.metrics,
+        metrics: redactDeep(c.metrics),
         labelSequence: c.label_sequence,
         sessions: sessions.rows,
         findings: findings.rows,
