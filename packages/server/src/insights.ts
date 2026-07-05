@@ -305,7 +305,7 @@ Your job: produce concrete bullets on how to make this agent cost less WITHOUT h
 
 Two fields encode what is safe:
 - Each run's toolClassProfile and each segment's mechanicalRatio classify steps as mechanical (pure lookups — scriptable with no LLM), cacheable (idempotent fetches), generative (the intelligence), or side_effect (must be preserved; automate only with guards). The mechanicalRatio is the compile/route headroom.
-- `segments` are repeated sub-sequences mined ACROSS runs (support = runs containing them), with segment-level determinism (canonical-I/O equality across occurrences) and attributed cost. A high-support, high-determinism, high-mechanicalRatio segment is the safest money in the report: compile it to a script, or route just that segment to a small model. Reference segments by their labels and evidence runs.
+- "segments" are repeated sub-sequences mined ACROSS runs (support = runs containing them), with segment-level determinism (canonical-I/O equality across occurrences) and attributed cost. A high-support, high-determinism, high-mechanicalRatio segment is the safest money in the report: compile it to a script, or route just that segment to a small model. Reference segments by their labels and evidence runs.
 
 What to look for (use the run content, not just aggregates):
 - REPEATED LOOKUPS: the same files, folders, repos, or web domains read across many runs → precompute a summary/context artifact (e.g. a knowledge file or CLAUDE.md section) and stop re-discovering. Repeated web searches on stable topics → replace with a cached summary refreshed on a schedule.
