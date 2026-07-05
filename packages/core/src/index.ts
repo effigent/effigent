@@ -8,3 +8,4 @@ export * from './cluster.js';
 export * from './findings.js';
 export * from './analyze.js';
 export * from './report.js';
+export * from './graph-svg.js';

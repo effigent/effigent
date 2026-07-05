@@ -20,10 +20,13 @@ export async function runPipeline(
   db: Db,
   blobs: BlobStore,
   tenantId: string,
+  agentFilter?: string,
 ): Promise<PipelineResult | null> {
   const { rows } = await db.query<{ id: string; parsed: Run }>(
-    `select id, parsed from runs where tenant_id = $1 order by started_at asc nulls last`,
-    [tenantId],
+    agentFilter
+      ? `select id, parsed from runs where tenant_id = $1 and agent_id ilike '%' || $2 || '%' order by started_at asc nulls last`
+      : `select id, parsed from runs where tenant_id = $1 order by started_at asc nulls last`,
+    agentFilter ? [tenantId, agentFilter] : [tenantId],
   );
   if (rows.length === 0) return null;
 
