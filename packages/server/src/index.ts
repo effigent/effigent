@@ -30,6 +30,15 @@ app.addContentTypeParser(
   (_req, body, done) => done(null, body),
 );
 
+// HTML forms (the dashboard's "Run optimization" button) post as
+// x-www-form-urlencoded with an empty body — accept and ignore it, all
+// parameters travel in the query string.
+app.addContentTypeParser(
+  'application/x-www-form-urlencoded',
+  { parseAs: 'string' },
+  (_req, _body, done) => done(null, {}),
+);
+
 function hashKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
 }
