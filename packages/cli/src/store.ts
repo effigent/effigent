@@ -39,6 +39,8 @@ export interface CcoptConfig {
   apiKey?: string;
   /** cwd-based attribution for agents that run in unpredictable dirs (temp clones, daemons). */
   agentRules?: AgentRule[];
+  /** Registered agents and their scoped capture keys (from `ccopt agent add`). */
+  agents?: Record<string, { agentId: string; key: string; harness?: string }>;
 }
 
 export function loadConfig(): CcoptConfig {

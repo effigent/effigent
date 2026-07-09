@@ -141,16 +141,13 @@ export function renderDashboardHtml(
   const agentQ = optimize?.agentFilter ? `&agent=${encodeURIComponent(optimize.agentFilter)}` : '';
   const optimizeHtml = optimize
     ? `<div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #e4e4e8;border-radius:10px;padding:12px 16px;margin:14px 0">
-  <form method="post" action="/api/v1/insights?redirect=1&key=${k}${agentQ}" style="margin:0">
-    <button type="submit" ${optimize.canRun ? '' : 'disabled'} style="padding:8px 16px;border-radius:8px;border:none;background:${optimize.canRun ? '#5b3df5' : '#c9c9cf'};color:#fff;font-weight:700;cursor:${optimize.canRun ? 'pointer' : 'not-allowed'}">
+  <form method="post" action="/api/v1/insights?redirect=1&force=1&key=${k}${agentQ}" style="margin:0">
+    <button type="submit" style="padding:8px 16px;border-radius:8px;border:none;background:#5b3df5;color:#fff;font-weight:700;cursor:pointer">
       Run optimization${optimize.agentFilter ? ` for ${esc(optimize.agentFilter)}` : ''}
     </button>
   </form>
   <span style="font-size:12px;color:#66666e">
-    ${optimize.canRun
-      ? `${optimize.newRunsSince} new run(s) since the last analysis — ready.`
-      : `up to date: only ${optimize.newRunsSince} new run(s) since the last analysis (needs 5).`}
-    ${optimize.canRun ? '' : `<a href="#" onclick="this.closest('div').querySelector('form').action+='&force=1';this.closest('div').querySelector('button').disabled=false;this.remove();return false">force re-run</a>`}
+    ${optimize.newRunsSince} new run(s) since the last analysis — the paid AI pass runs only when you click this.
   </span>
 </div>`
     : '';

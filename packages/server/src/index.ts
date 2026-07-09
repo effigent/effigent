@@ -5,8 +5,16 @@
 
 import Fastify from 'fastify';
 import { createHash, randomBytes } from 'node:crypto';
-import { gunzipSync } from 'node:zlib';
-import { buildRunGraph, mineSegments, parseTranscript, type Run, type WasteReport } from '@ccopt/core';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import {
+  buildRunGraph,
+  mineSegments,
+  otelToRuns,
+  parseTranscript,
+  type OtlpTracesPayload,
+  type Run,
+  type WasteReport,
+} from '@ccopt/core';
 import { loadConfig } from './config.js';
 import { createPool, migrate, type Db } from './db.js';
 import { createBlobStore } from './blobs.js';
@@ -47,18 +55,83 @@ function hashKey(key: string): string {
 interface TenantAuth {
   tenantId: string;
   role: 'owner' | 'member';
+  /** Set when the key is scoped to a registered agent — binds capture to that agent. */
+  agentId?: string;
+  agentName?: string;
 }
 
 async function authenticate(authorization?: string): Promise<TenantAuth | null> {
   const m = authorization?.match(/^Bearer (cck_[A-Za-z0-9]+)$/);
   if (!m) return null;
-  const { rows } = await db.query<{ tenant_id: string; id: string; role: string }>(
-    `select id, tenant_id, role from api_keys where key_hash = $1`,
+  const { rows } = await db.query<{
+    id: string;
+    tenant_id: string;
+    role: string;
+    agent_id: string | null;
+    agent_name: string | null;
+  }>(
+    `select k.id, k.tenant_id, k.role, k.agent_id, a.name as agent_name
+       from api_keys k
+       left join agents a on a.id = k.agent_id
+      where k.key_hash = $1`,
     [hashKey(m[1])],
   );
   if (rows.length === 0) return null;
   await db.query(`update api_keys set last_used_at = now() where id = $1`, [rows[0].id]);
-  return { tenantId: rows[0].tenant_id, role: rows[0].role === 'owner' ? 'owner' : 'member' };
+  return {
+    tenantId: rows[0].tenant_id,
+    role: rows[0].role === 'owner' ? 'owner' : 'member',
+    agentId: rows[0].agent_id ?? undefined,
+    agentName: rows[0].agent_name ?? undefined,
+  };
+}
+
+/**
+ * Shared write path for a parsed Run — used by BOTH ingestion shapes (transcript
+ * `/api/v1/ingest` and OTLP `/v1/traces`) so they can't drift. Inserts the upload
+ * row (marked parsed) and upserts the run with step payloads trimmed (the blob
+ * keeps full fidelity). Returns the upload id.
+ */
+async function persistParsedRun(
+  auth: TenantAuth,
+  sessionId: string,
+  run: Run,
+  blobPath: string,
+  bytes: number,
+  source: 'transcript' | 'otlp',
+): Promise<string> {
+  const upload = await db.query<{ id: string }>(
+    `insert into uploads (tenant_id, session_id, agent_id, blob_path, bytes, source, status)
+     values ($1,$2,$3,$4,$5,$6,'parsed') returning id`,
+    [auth.tenantId, sessionId, run.agentId, blobPath, bytes, source],
+  );
+  const trimmed: Run = sanitizeForJsonb({
+    ...run,
+    steps: run.steps.map((s) => ({ ...s, payload: s.payload.slice(0, 8000) })),
+  });
+  await db.query(
+    `insert into runs (tenant_id, session_id, agent_id, started_at, ended_at,
+                       cost_usd, models, n_steps, blob_path, parsed)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     on conflict (tenant_id, session_id) do update
+       set agent_id = excluded.agent_id, started_at = excluded.started_at,
+           ended_at = excluded.ended_at, cost_usd = excluded.cost_usd,
+           models = excluded.models, n_steps = excluded.n_steps,
+           blob_path = excluded.blob_path, parsed = excluded.parsed`,
+    [
+      auth.tenantId,
+      sessionId,
+      run.agentId,
+      run.startedAt ?? null,
+      run.endedAt ?? null,
+      run.costUsd,
+      JSON.stringify(run.models),
+      run.steps.length,
+      blobPath,
+      JSON.stringify(trimmed),
+    ],
+  );
+  return upload.rows[0].id;
 }
 
 app.get('/healthz', async () => {
@@ -123,52 +196,61 @@ app.post('/api/v1/ingest', async (req, reply) => {
     return reply.code(400).send({ error: 'failed to decompress body' });
   }
 
+  // A scoped agent key binds attribution to its agent — it wins over the
+  // client-supplied x-ccopt-agent-id header (which a leaked/misconfigured key
+  // must not be able to spoof).
+  const effectiveAgentId = auth.agentName ?? agentIdHeader;
+
   const blobPath = `${auth.tenantId}/sessions/${sessionId}.jsonl.gz`;
   await blobs.put(blobPath, req.headers['content-encoding'] === 'gzip' ? raw : Buffer.from(jsonl));
 
-  const upload = await db.query<{ id: string }>(
-    `insert into uploads (tenant_id, session_id, agent_id, blob_path, bytes)
-     values ($1,$2,$3,$4,$5) returning id`,
-    [auth.tenantId, sessionId, agentIdHeader ?? null, blobPath, raw.length],
-  );
-
-  const run: Run | null = parseTranscript(jsonl, { agentId: agentIdHeader });
+  const run: Run | null = parseTranscript(jsonl, { agentId: effectiveAgentId });
   if (!run) {
-    await db.query(`update uploads set status = 'failed', error = 'no assistant activity' where id = $1`, [
-      upload.rows[0].id,
-    ]);
+    const upload = await db.query<{ id: string }>(
+      `insert into uploads (tenant_id, session_id, agent_id, blob_path, bytes, source, status, error)
+       values ($1,$2,$3,$4,$5,'transcript','failed','no assistant activity') returning id`,
+      [auth.tenantId, sessionId, effectiveAgentId ?? null, blobPath, raw.length],
+    );
     return reply.code(202).send({ uploadId: upload.rows[0].id, parsed: false });
   }
 
-  // Persist with step payloads trimmed — the blob keeps full fidelity.
-  const trimmed: Run = sanitizeForJsonb({
-    ...run,
-    steps: run.steps.map((s) => ({ ...s, payload: s.payload.slice(0, 8000) })),
+  const uploadId = await persistParsedRun(auth, sessionId, run, blobPath, raw.length, 'transcript');
+  return { uploadId, parsed: true, agentId: run.agentId, costUsd: run.costUsd };
+});
+
+/**
+ * OTLP/HTTP ingestion — OpenTelemetry GenAI spans from OpenLLMetry-instrumented
+ * agents (any framework). Phase 1 requires UNCOMPRESSED JSON: exporters must set
+ * OTEL_EXPORTER_OTLP_PROTOCOL=http/json and OTEL_EXPORTER_OTLP_COMPRESSION=none
+ * (protobuf/gzip decode is a fast-follow). Normalizes spans into the same `Run`
+ * model as the transcript path, keyed by the scoped agent when present.
+ */
+app.post('/v1/traces', async (req, reply) => {
+  const auth = await authenticate(req.headers.authorization);
+  if (!auth) return reply.code(401).send({ error: 'invalid API key' });
+  if (Buffer.isBuffer(req.body) || typeof req.body !== 'object' || req.body === null) {
+    return reply.code(415).send({
+      error: 'send OTLP/HTTP as uncompressed JSON',
+      hint: 'set OTEL_EXPORTER_OTLP_PROTOCOL=http/json and OTEL_EXPORTER_OTLP_COMPRESSION=none',
+    });
+  }
+  const payload = req.body as OtlpTracesPayload;
+  const runs = otelToRuns(payload, {
+    agentId: auth.agentName, // scoped key forces attribution; overrides span attrs
+    defaultAgentId: 'unknown-otel-agent',
   });
-  await db.query(
-    `insert into runs (tenant_id, session_id, agent_id, started_at, ended_at,
-                       cost_usd, models, n_steps, blob_path, parsed)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     on conflict (tenant_id, session_id) do update
-       set agent_id = excluded.agent_id, started_at = excluded.started_at,
-           ended_at = excluded.ended_at, cost_usd = excluded.cost_usd,
-           models = excluded.models, n_steps = excluded.n_steps,
-           blob_path = excluded.blob_path, parsed = excluded.parsed`,
-    [
-      auth.tenantId,
-      sessionId,
-      run.agentId,
-      run.startedAt ?? null,
-      run.endedAt ?? null,
-      run.costUsd,
-      JSON.stringify(run.models),
-      run.steps.length,
-      blobPath,
-      JSON.stringify(trimmed),
-    ],
-  );
-  await db.query(`update uploads set status = 'parsed' where id = $1`, [upload.rows[0].id]);
-  return { uploadId: upload.rows[0].id, parsed: true, agentId: run.agentId, costUsd: run.costUsd };
+  if (runs.length === 0) return reply.code(202).send({ parsed: false, runs: 0 });
+
+  const body = gzipSync(Buffer.from(JSON.stringify(payload)));
+  let persisted = 0;
+  for (const run of runs) {
+    const sessionId = run.runId; // 'otel:<conversation|trace id>'
+    const blobPath = `${auth.tenantId}/otel/${encodeURIComponent(sessionId)}.json.gz`;
+    await blobs.put(blobPath, body);
+    await persistParsedRun(auth, sessionId, run, blobPath, body.length, 'otlp');
+    persisted++;
+  }
+  return { parsed: true, runs: persisted };
 });
 
 /** Trigger analysis now (also runs nightly). */
@@ -203,18 +285,19 @@ app.post('/api/v1/insights', async (req, reply) => {
   const backToUi = () =>
     reply.redirect(`/ui?key=${encodeURIComponent(q.key ?? '')}${agentFilter ? `&agent=${encodeURIComponent(agentFilter)}` : ''}`);
 
-  // Freshness gate: don't re-run the (paid) AI pass unless ≥5 new runs arrived
-  // since the last analysis with the same scope. ?force=1 overrides.
+  // Explicit-trigger only: the (paid) OpenRouter/LLM pass runs ONLY when ?force=1
+  // is passed. Every other request returns the last cached analysis without ever
+  // calling the LLM — so background/automated callers can't rack up spend on their
+  // own. It runs only when a human explicitly asks for it.
   if (q.force !== '1') {
+    if (q.redirect === '1') return backToUi();
     const gate = await latestInsights(auth.tenantId, agentFilter);
     if (gate) {
       const runsNow = await countRuns(auth.tenantId, agentFilter);
       const newRuns = runsNow - gate.runsTotalAtGeneration;
-      if (newRuns < 5) {
-        if (q.redirect === '1') return backToUi();
-        return { cached: true, newRunsSinceAnalysis: newRuns, hint: 'fewer than 5 new runs since the last analysis — pass ?force=1 to re-run anyway', ...gate };
-      }
+      return { cached: true, newRunsSinceAnalysis: newRuns, hint: 'AI analysis runs only on explicit request — pass ?force=1 to run it now', ...gate };
     }
+    return { cached: false, hint: 'AI analysis runs only on explicit request — pass ?force=1 to run it now' };
   }
 
   analysisInFlight.add(auth.tenantId);
@@ -346,6 +429,34 @@ async function latestInsights(tenantId: string, agentFilter?: string) {
   }
   return rows[0]?.ai ? { ...rows[0].ai, runsTotalAtGeneration: Number(rows[0].ai.runsTotalAtGeneration ?? 0) } : null;
 }
+
+/**
+ * Register an agent and mint a per-agent SCOPED key (returned exactly once).
+ * Requires a TENANT-level key (owner or member) — an agent-scoped capture key
+ * cannot mint further keys, so a leaked capture key can't escalate. Scoped keys
+ * are always role 'member', so they never unlock the raw-transcript viewers.
+ */
+app.post('/api/v1/agents', async (req, reply) => {
+  const auth = await authenticate(req.headers.authorization);
+  if (!auth) return reply.code(401).send({ error: 'invalid API key' });
+  if (auth.agentId) {
+    return reply.code(403).send({ error: 'agent registration requires a tenant key, not an agent-scoped key' });
+  }
+  const body = (req.body ?? {}) as { name?: string; harness?: string };
+  if (!body.name) return reply.code(400).send({ error: 'name required' });
+  const agent = await db.query<{ id: string }>(
+    `insert into agents (tenant_id, name, harness) values ($1,$2,$3)
+     on conflict (tenant_id, name) do update set harness = coalesce(excluded.harness, agents.harness)
+     returning id`,
+    [auth.tenantId, body.name, body.harness ?? null],
+  );
+  const apiKey = `cck_${randomBytes(24).toString('hex')}`;
+  await db.query(
+    `insert into api_keys (tenant_id, key_hash, label, role, agent_id) values ($1,$2,$3,'member',$4)`,
+    [auth.tenantId, hashKey(apiKey), body.name, agent.rows[0].id],
+  );
+  return { agentId: agent.rows[0].id, name: body.name, apiKey };
+});
 
 /** Agent inventory for the tenant: every agent we've seen, with run/cost stats. */
 app.get('/api/v1/agents', async (req, reply) => {

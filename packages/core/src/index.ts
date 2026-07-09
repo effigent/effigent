@@ -11,3 +11,4 @@ export * from './report.js';
 export * from './graph-svg.js';
 export * from './taxonomy.js';
 export * from './segments.js';
+export * from './otel.js';

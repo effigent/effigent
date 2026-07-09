@@ -490,6 +490,135 @@ program
     process.exitCode = res.status ?? 1;
   });
 
+const agentCmd = program.command('agent').description('Register agents and mint scoped capture keys');
+agentCmd
+  .command('add <name>')
+  .description('Register an agent in your workspace and save its scoped capture key')
+  .option('--harness <name>', 'harness label (e.g. claude-code, codex, hermes, langgraph)')
+  .option('--server <url>', 'ccopt server base URL (default: ccopt login config)')
+  .option('--key <apiKey>', 'tenant OWNER key (default: ccopt login config)')
+  .action(async (name: string, opts) => {
+    const config = loadConfig();
+    const server: string | undefined = opts.server ?? process.env.CCOPT_SERVER ?? config.server;
+    const apiKey: string | undefined = opts.key ?? process.env.CCOPT_API_KEY ?? config.apiKey;
+    if (!server || !apiKey) {
+      console.error('No server/key: run `ccopt login` first (owner key), or pass --server/--key.');
+      process.exitCode = 2;
+      return;
+    }
+    let res: Response;
+    try {
+      res = await fetch(`${server.replace(/\/$/, '')}/api/v1/agents`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ name, harness: opts.harness }),
+      });
+    } catch (err) {
+      console.error(`Cannot reach ${server}: ${err instanceof Error ? err.message : err}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!res.ok) {
+      console.error(`Agent registration failed (HTTP ${res.status}): ${await res.text()}`);
+      if (res.status === 403) console.error('Use your tenant key (from `ccopt login`), not an agent-scoped capture key.');
+      process.exitCode = 1;
+      return;
+    }
+    const out = (await res.json()) as { agentId: string; apiKey: string };
+    config.agents = { ...(config.agents ?? {}), [name]: { agentId: out.agentId, key: out.apiKey, harness: opts.harness } };
+    saveConfig(config);
+    const base = server.replace(/\/$/, '');
+    console.log(`✓ registered agent '${name}' — scoped key saved to ${CONFIG_PATH}\n`);
+    console.log('Capture options for this agent:');
+    console.log(`  • Claude Code (this machine):  ccopt install claude --agent ${name}`);
+    console.log('  • SDK / OpenLLMetry agent — export before running it:');
+    console.log(`      export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${base}/v1/traces`);
+    console.log('      export OTEL_EXPORTER_OTLP_PROTOCOL=http/json');
+    console.log('      export OTEL_EXPORTER_OTLP_COMPRESSION=none');
+    console.log(`      export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${out.apiKey}"`);
+  });
+
+const installCmd = program.command('install').description('Wire up capture on this machine for a registered agent');
+installCmd
+  .command('claude')
+  .description('Install a Claude Code SessionEnd hook that uploads each finished session (event-driven; no polling)')
+  .requiredOption('--agent <name>', 'registered agent name (from `ccopt agent add`)')
+  .action((opts) => {
+    const config = loadConfig();
+    if (!config.agents?.[opts.agent]) {
+      console.error(`Agent '${opts.agent}' not found in config — run \`ccopt agent add ${opts.agent}\` first.`);
+      process.exitCode = 2;
+      return;
+    }
+    const settingsPath = join(homedir(), '.claude', 'settings.json');
+    let settings: Record<string, unknown> = {};
+    if (existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+      } catch {
+        console.error(`Could not parse ${settingsPath} — fix or remove it, then retry.`);
+        process.exitCode = 1;
+        return;
+      }
+    }
+    // Absolute node + cli paths: hooks run without nvm/homebrew PATH. The scoped
+    // key is NOT written here — claude-hook reads it from ~/.ccopt/config.json.
+    const command = `${process.execPath} ${resolve(process.argv[1])} claude-hook --agent ${opts.agent}`;
+    const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
+    const sessionEnd = (Array.isArray(hooks.SessionEnd) ? hooks.SessionEnd : []) as Array<{
+      hooks?: Array<{ type?: string; command?: string }>;
+    }>;
+    const already = sessionEnd.some((g) =>
+      (g.hooks ?? []).some((h) => typeof h.command === 'string' && h.command.includes(`claude-hook --agent ${opts.agent}`)),
+    );
+    if (already) {
+      console.log(`✓ hook for '${opts.agent}' already present in ${settingsPath}`);
+      return;
+    }
+    sessionEnd.push({ hooks: [{ type: 'command', command }] });
+    hooks.SessionEnd = sessionEnd;
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    console.log(`✓ installed SessionEnd hook for '${opts.agent}' in ${settingsPath}`);
+    console.log('Each finished Claude Code session now uploads automatically — no polling; key stays in ~/.ccopt/config.json.');
+  });
+
+program
+  .command('claude-hook')
+  .description('(internal) Claude Code SessionEnd hook — uploads the finished session for a scoped agent')
+  .requiredOption('--agent <name>', 'registered agent name')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const entry = config.agents?.[opts.agent];
+    const server: string | undefined = process.env.CCOPT_SERVER ?? config.server;
+    if (!entry || !server) {
+      console.error(`[ccopt] claude-hook: agent '${opts.agent}' or server not configured`);
+      process.exitCode = 2;
+      return;
+    }
+    let payload: { session_id?: string; transcript_path?: string };
+    try {
+      payload = JSON.parse(readFileSync(0, 'utf8')) as { session_id?: string; transcript_path?: string };
+    } catch {
+      console.error('[ccopt] claude-hook: could not read hook JSON from stdin');
+      process.exitCode = 1;
+      return;
+    }
+    const { session_id: sessionId, transcript_path: transcriptPath } = payload;
+    if (!sessionId || !transcriptPath || !existsSync(transcriptPath)) {
+      console.error('[ccopt] claude-hook: missing/unreadable session_id or transcript_path');
+      process.exitCode = 1;
+      return;
+    }
+    const r = await uploadSessionFile({ server, apiKey: entry.key }, transcriptPath, sessionId, opts.agent);
+    console.error(
+      r.ok
+        ? `[ccopt] uploaded session ${sessionId} as ${opts.agent}`
+        : `[ccopt] upload failed (HTTP ${r.status}) ${r.detail ?? ''}`,
+    );
+    process.exitCode = r.ok ? 0 : 1;
+  });
+
 program.parseAsync().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
