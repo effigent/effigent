@@ -10,7 +10,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ccopt/core": "*",
     "@clerk/nextjs": "^6.9.6",
     "next": "^14.2.15",
     "pg": "^8.13.1",
