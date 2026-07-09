@@ -12,8 +12,8 @@ export function Nav({ cta = true }: { cta?: boolean }) {
       </Link>
       <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 36, fontSize: 14, color: 'var(--ink-2)', fontWeight: 500 }}>
         <Link href="/#how">How it works</Link>
-        <Link href="/#engine">Engine</Link>
         <Link href="/developers">Developers</Link>
+        <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security</Link>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -36,6 +36,7 @@ export function Footer() {
       <div>© 2026 Optimizer — the compiler for AI agents</div>
       <div style={{ display: 'flex', gap: 24 }}>
         <Link href="/developers">Developer guide</Link>
+        <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security</Link>
         <a href="https://github.com/SpectorHacked/ccopt" target="_blank" rel="noreferrer">GitHub</a>
       </div>

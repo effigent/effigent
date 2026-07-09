@@ -7,4 +7,5 @@
  */
 export const COLLECTOR_URL = process.env.NEXT_PUBLIC_COLLECTOR_URL || '<collector-url>';
 export const DASHBOARD_URL = process.env.NEXT_PUBLIC_DASHBOARD_URL || '<dashboard-url>';
+export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || 'sales@your-domain';
 export const TRACES_URL = `${COLLECTOR_URL}/v1/traces`;

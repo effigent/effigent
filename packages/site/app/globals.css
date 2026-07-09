@@ -31,8 +31,33 @@ a:hover { color: oklch(0.4 0.14 250); }
 @keyframes glowPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.9; } }
 @keyframes flowOut { 0% { transform: translateX(0); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateX(150px); opacity: 0; } }
 
+@keyframes marqueeX { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes floatY { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; }
+}
+
+/* works-with marquee */
+.marquee { overflow: hidden; position: relative; }
+.marquee-track { display: flex; gap: 56px; width: max-content; animation: marqueeX 28s linear infinite; }
+.marquee:hover .marquee-track { animation-play-state: paused; }
+.marquee-item { display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 13px;
+  font-weight: 600; color: var(--ink-3); white-space: nowrap; }
+.marquee-item .mdot { width: 6px; height: 6px; border-radius: 50%; background: oklch(0.75 0.02 260); }
+
+/* pricing / preview cards */
+.tier-card { transition: transform .25s ease, box-shadow .25s ease; }
+.tier-card:hover { transform: translateY(-4px); box-shadow: 0 18px 40px -22px oklch(0.2 0.012 260 / 0.3); }
+.tier-mini { transition: transform .22s ease, border-color .22s ease; }
+.tier-mini:hover { transform: translateY(-3px); border-color: oklch(0.6 0.012 260) !important; }
+.float-soft { animation: floatY 6s ease-in-out infinite; }
+
+@media (max-width: 900px) {
+  .pricing-grid { grid-template-columns: 1fr !important; }
+  .stats-band { grid-template-columns: 1fr 1fr !important; }
+  .preview-grid { grid-template-columns: 1fr !important; }
+  .tier-mini-row { grid-template-columns: 1fr 1fr !important; }
 }
 
 .eyebrow { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px;

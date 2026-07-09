@@ -8,6 +8,7 @@ import {
 } from './data';
 import { Nav, Footer } from './ui';
 import { Reveal } from './reveal';
+import { CountUp } from './countup';
 
 const ACCENT = '#1a1d24';
 const CONTENT = 1080;
@@ -138,6 +139,42 @@ export default function Page() {
         </div>
       </div>
 
+      {/* WORKS WITH — marquee */}
+      <div style={{ borderTop: '1px solid var(--line)', padding: '22px 0', background: 'oklch(0.975 0.004 90)' }}>
+        <div className="marquee">
+          <div className="marquee-track">
+            {[0, 1].map((dup) => (
+              <div key={dup} style={{ display: 'flex', gap: 56 }} aria-hidden={dup === 1}>
+                {['Claude Code', 'OpenAI Codex', 'LangGraph', 'CrewAI', 'AutoGen', 'OpenAI Agents SDK', 'n8n', 'MCP agents', 'OpenTelemetry'].map((h) => (
+                  <span key={h} className="marquee-item"><span className="mdot" />{h}</span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* IMPACT STATS */}
+      <div style={{ borderTop: '1px solid var(--line)' }}>
+        <div className="stats-band" style={{ maxWidth: CONTENT, margin: '0 auto', padding: '54px 32px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 24 }}>
+          {([
+            [81, '%', 'fewer steps per run'],
+            [76, '%', 'lower token cost'],
+            [76, '%', 'faster executions'],
+            [2, ' min', 'to install on an agent'],
+          ] as Array<[number, string, string]>).map(([n, suffix, label]) => (
+            <Reveal key={label}>
+              <div style={{ textAlign: 'center' }}>
+                <div className="h-serif" style={{ fontSize: 44, lineHeight: 1, color: 'var(--ink)' }}>
+                  <CountUp to={n} suffix={suffix} />
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 8 }}>{label}</div>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+      </div>
+
       {/* PROBLEM */}
       <Section>
         <Reveal>
@@ -257,6 +294,70 @@ export default function Page() {
         </Reveal>
       </Section>
 
+      {/* PRODUCT PREVIEW */}
+      <Section>
+        <Reveal>
+          <Eyebrow hue="150">The product</Eyebrow>
+          <div className="h-serif" style={{ fontSize: 32, marginBottom: 8, maxWidth: 620 }}>See every run. Then watch it get cheaper.</div>
+          <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 36, maxWidth: 620 }}>
+            Every session lands as a navigable execution graph with per-model cost — and once an agent has history, the determinism engine turns it into concrete optimization actions.
+          </div>
+          <div className="preview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 18, alignItems: 'stretch' }}>
+            {/* sessions panel */}
+            <div className="float-soft" style={{ borderRadius: 12, background: 'oklch(0.15 0.012 265)', border: '1px solid oklch(0.24 0.012 265)', overflow: 'hidden', boxShadow: '0 24px 60px -30px oklch(0.15 0.012 265 / 0.55)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid oklch(0.22 0.012 265)' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'oklch(0.9 0.005 265)' }}>Sessions</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'oklch(0.55 0.01 265)' }}>184 runs · $1.77 total</div>
+              </div>
+              <div style={{ padding: '6px 0' }}>
+                {([
+                  ['seed-invo-021', 'invoice-reconciliation', '12', '$0.017', true],
+                  ['seed-repo-014', 'repo-explorer', '12', '$0.021', true],
+                  ['seed-tria-008', 'support-triage', '9', '$0.014', false],
+                  ['seed-ci-004', 'ci-fixer', '11', '$0.012', false],
+                  ['seed-docs-011', 'docs-writer', '7', '$0.016', false],
+                ] as Array<[string, string, string, string, boolean]>).map(([id, agent, steps, cost, opt]) => (
+                  <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 16px', borderBottom: '1px solid oklch(0.19 0.012 265)', fontSize: 11.5 }}>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.85 0.005 265)', width: 110, flexShrink: 0 }}>{id}</span>
+                    <span style={{ color: 'oklch(0.65 0.01 265)', flex: 1, display: 'flex', alignItems: 'center', gap: 7 }}>
+                      {agent}
+                      {opt && <span style={{ fontSize: 9, fontWeight: 700, color: 'oklch(0.72 0.14 150)', border: '1px solid oklch(0.4 0.1 150)', borderRadius: 8, padding: '1px 7px' }}>Optimized</span>}
+                    </span>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.6 0.01 265)' }}>{steps} steps</span>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.85 0.005 265)', width: 46, textAlign: 'right' }}>{cost}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* insights panel */}
+            <div className="float-soft" style={{ animationDelay: '0.8s', borderRadius: 12, background: 'oklch(0.15 0.012 265)', border: '1px solid oklch(0.24 0.012 265)', overflow: 'hidden', boxShadow: '0 24px 60px -30px oklch(0.15 0.012 265 / 0.55)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid oklch(0.22 0.012 265)' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'oklch(0.9 0.005 265)' }}>Optimization Insights</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'oklch(0.55 0.01 265)' }}>last 40 runs</div>
+              </div>
+              <div style={{ padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {([
+                  ['Replace with tool', 'planner turn', '100', 'oklch(0.72 0.14 150)'],
+                  ['Memoize by input', 'tax_rate()', '100', 'oklch(0.75 0.12 210)'],
+                  ['Synthesize template', 'report body', '89', 'oklch(0.72 0.12 250)'],
+                  ['Route to smaller model', 'final summary', '80', 'oklch(0.7 0.12 290)'],
+                ] as Array<[string, string, string, string]>).map(([action, target, score, color]) => (
+                  <div key={action} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11.5 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color, border: `1px solid ${color}`, borderRadius: 9, padding: '2px 9px', whiteSpace: 'nowrap' }}>{action}</span>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.7 0.01 265)', flex: 1 }}>{target}</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'oklch(0.88 0.005 265)' }}>{score}</span>
+                  </div>
+                ))}
+                <div style={{ marginTop: 6, borderTop: '1px solid oklch(0.22 0.012 265)', paddingTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span style={{ fontSize: 10.5, color: 'oklch(0.55 0.01 265)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. removable cost</span>
+                  <span className="h-serif" style={{ fontSize: 22, color: 'oklch(0.72 0.14 150)' }}>$1.04 / run-set</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+      </Section>
+
       {/* INSTALL */}
       <Section id="install">
         <Reveal>
@@ -289,6 +390,34 @@ export default function Page() {
           <div style={{ fontSize: 15, color: 'oklch(0.68 0.01 260)', marginTop: 28 }}>The compiler for AI agents.</div>
         </div>
       </div>
+
+      {/* PRICING TEASER */}
+      <Section id="pricing">
+        <Reveal>
+          <div style={{ textAlign: 'center', marginBottom: 36 }}>
+            <div style={{ display: 'flex', justifyContent: 'center' }}><Eyebrow hue="150">Pricing</Eyebrow></div>
+            <div className="h-serif" style={{ fontSize: 32, marginBottom: 10 }}>Start free. Scale when your fleet does.</div>
+            <div style={{ fontSize: 15, color: 'var(--ink-2)' }}>Flat plans — never a percentage of your model spend.</div>
+          </div>
+          <div className="tier-mini-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+            {([
+              ['Free', '$0', '2 agents · 1 GB'],
+              ['Starter', '$15/mo', '5 agents · 20 GB'],
+              ['Pro', '$80/mo', '20 agents · 100 GB'],
+              ['Enterprise', 'Custom', 'Unlimited · Talk to us'],
+            ] as Array<[string, string, string]>).map(([name, price, spec]) => (
+              <Link key={name} href="/pricing" className="tier-mini" style={{ display: 'block', border: '1px solid var(--line)', borderRadius: 12, padding: '20px 20px', background: 'oklch(0.995 0.002 90)' }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>{name}</div>
+                <div className="h-serif" style={{ fontSize: 26, marginBottom: 6 }}>{price}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{spec}</div>
+              </Link>
+            ))}
+          </div>
+          <div style={{ textAlign: 'center', marginTop: 24 }}>
+            <Link href="/pricing" style={{ fontSize: 14, fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>Compare all plans &rarr;</Link>
+          </div>
+        </Reveal>
+      </Section>
 
       {/* FOOTER CTA */}
       <div style={{ borderTop: '1px solid var(--line)', padding: '90px 32px', textAlign: 'center' }}>
