@@ -74,6 +74,7 @@ jobs:
             --cache-control "no-cache"
       - name: Invalidate CloudFront
         if: ${{ vars.SITE_DISTRIBUTION_ID != '' }}
+        continue-on-error: true  # best-effort; index.html is no-cache so content is fresh regardless
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.SITE_DISTRIBUTION_ID }}" --paths "/index.html" "/"
@@ -108,6 +109,7 @@ jobs:
             --cache-control "no-cache"
       - name: Invalidate CloudFront
         if: ${{ vars.DASHBOARD_DISTRIBUTION_ID != '' }}
+        continue-on-error: true  # best-effort; index.html is no-cache so content is fresh regardless
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.DASHBOARD_DISTRIBUTION_ID }}" --paths "/index.html" "/"
