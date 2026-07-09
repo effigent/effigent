@@ -66,7 +66,7 @@ export function Dashboard() {
     kg: { title: 'Knowledge Graph', sub: 'What Optimizer knows about your agents’ world' },
   };
   const head = heads[view] ?? heads.overview;
-  const showToolbar = view === 'overview' || view === 'sessions';
+  const showToolbar = view === 'overview' || view === 'sessions' || view === 'kg';
 
   return (
     <div className="app">
@@ -118,7 +118,7 @@ export function Dashboard() {
                 <SessionDetail sessionId={session.id} optimized={session.optimized} onBack={() => setView('sessions')} />
               )}
               {view === 'tools' && <ToolSynthesis />}
-              {view === 'kg' && <KnowledgeGraph />}
+              {view === 'kg' && <KnowledgeGraph agent={agent} />}
               {view === 'overview' && (
                 <>
                   <Kpis agent={agent} />
