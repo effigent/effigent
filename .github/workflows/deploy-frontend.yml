@@ -50,6 +50,7 @@ jobs:
       (github.event_name == 'push' && needs.changes.outputs.site == 'true') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'all' || github.event.inputs.app == 'site'))
     runs-on: ubuntu-latest
+    environment: prod
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -83,6 +84,7 @@ jobs:
       (github.event_name == 'push' && needs.changes.outputs.dashboard == 'true') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'all' || github.event.inputs.app == 'dashboard'))
     runs-on: ubuntu-latest
+    environment: prod
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
