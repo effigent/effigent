@@ -1,42 +1,27 @@
+'use client';
+
 import { useState, useEffect } from 'react';
-import { Sidebar } from './components/Sidebar.tsx';
-import { Kpis } from './components/Kpis.tsx';
-import { ExecutionGraph } from './components/ExecutionGraph.tsx';
-import { Rail } from './components/Rail.tsx';
-import { Bottom } from './components/Bottom.tsx';
-import { Install } from './components/Install.tsx';
-import { Login } from './components/Login.tsx';
-import { Ic } from './icons.tsx';
-import { loadAuth, saveAuth, clearAuth, fetchAgents, type Auth } from './auth.ts';
-import { ALL_AGENTS, demoAgents } from './data.ts';
+import { UserButton, OrganizationSwitcher } from '@clerk/nextjs';
+import { Sidebar } from '@/components/Sidebar.tsx';
+import { Kpis } from '@/components/Kpis.tsx';
+import { ExecutionGraph } from '@/components/ExecutionGraph.tsx';
+import { Rail } from '@/components/Rail.tsx';
+import { Bottom } from '@/components/Bottom.tsx';
+import { Install } from '@/components/Install.tsx';
+import { Ic } from '@/icons.tsx';
+import { ALL_AGENTS } from '@/data.ts';
 
-type Mode = 'login' | 'demo' | 'live';
-
-export default function App() {
-  const [mode, setMode] = useState<Mode>(() => (loadAuth() ? 'live' : 'login'));
-  const [auth, setAuth] = useState<Auth | null>(() => loadAuth());
+export function Dashboard() {
   const [agents, setAgents] = useState<string[]>([]);
   const [agent, setAgent] = useState<string>(ALL_AGENTS);
   const [view, setView] = useState<'dashboard' | 'install'>('dashboard');
 
   useEffect(() => {
-    if (mode === 'live' && auth) {
-      fetchAgents(auth).then((list) => setAgents(list.length ? list : demoAgents));
-    } else if (mode === 'demo') {
-      setAgents(demoAgents);
-    }
-  }, [mode, auth]);
-
-  if (mode === 'login') {
-    return (
-      <Login
-        onAuth={(a) => { saveAuth(a); setAuth(a); setMode('live'); }}
-        onDemo={() => setMode('demo')}
-      />
-    );
-  }
-
-  const logout = () => { clearAuth(); setAuth(null); setAgents([]); setAgent(ALL_AGENTS); setMode('login'); };
+    fetch('/api/v1/agents')
+      .then((r) => (r.ok ? r.json() : { agents: [] }))
+      .then((d: { agents?: Array<{ agent_id: string }> }) => setAgents((d.agents ?? []).map((a) => a.agent_id)))
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="app">
@@ -64,13 +49,8 @@ export default function App() {
                 <button className="btn-primary" onClick={() => setView('install')}>
                   <Ic n="spark" style={{ width: 15, height: 15 }} /> Install Optimizer
                 </button>
-                {mode === 'live' ? (
-                  <button className="pill session" onClick={logout} title="Sign out">
-                    <span className="dot" /> Signed in · Sign out
-                  </button>
-                ) : (
-                  <button className="pill session" onClick={() => setMode('login')}>Demo · Sign in</button>
-                )}
+                <OrganizationSwitcher afterCreateOrganizationUrl="/" afterSelectOrganizationUrl="/" />
+                <UserButton afterSignOutUrl="/sign-in" />
               </div>
             </header>
 

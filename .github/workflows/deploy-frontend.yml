@@ -1,54 +1,26 @@
-name: Deploy frontend
+name: Deploy site
 
-# Deploys the static frontends (marketing site + dashboard) to S3 (+ CloudFront
-# invalidation once a distribution id is configured). Only the app(s) whose
-# files changed are deployed on push; a manual run can target either or both.
-# Auth: AWS access-key secrets (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).
+# Deploys the marketing site (Next.js static export) to S3 + CloudFront.
+# The dashboard is a full-stack Next.js app and deploys to Vercel (not here).
+# Auth: AWS access-key secrets under the `prod` environment.
 
 on:
   push:
     branches: [main]
     paths:
       - 'packages/site/**'
-      - 'packages/dashboard/**'
       - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
-    inputs:
-      app:
-        description: Which app to deploy
-        type: choice
-        options: [all, site, dashboard]
-        default: all
 
 concurrency:
-  group: deploy-frontend-${{ github.ref }}
+  group: deploy-site-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      site: ${{ steps.filter.outputs.site }}
-      dashboard: ${{ steps.filter.outputs.dashboard }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            site:
-              - 'packages/site/**'
-            dashboard:
-              - 'packages/dashboard/**'
-
   site:
-    needs: changes
-    if: >-
-      (github.event_name == 'push' && needs.changes.outputs.site == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'all' || github.event.inputs.app == 'site'))
     runs-on: ubuntu-latest
     environment: prod
     steps:
@@ -77,42 +49,7 @@ jobs:
             --cache-control "no-cache"
       - name: Invalidate CloudFront
         if: ${{ vars.SITE_DISTRIBUTION_ID != '' }}
-        continue-on-error: true  # best-effort; index.html is no-cache so content is fresh regardless
+        continue-on-error: true
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.SITE_DISTRIBUTION_ID }}" --paths "/index.html" "/"
-
-  dashboard:
-    needs: changes
-    if: >-
-      (github.event_name == 'push' && needs.changes.outputs.dashboard == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'all' || github.event.inputs.app == 'dashboard'))
-    runs-on: ubuntu-latest
-    environment: prod
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run -w @ccopt/dashboard build
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - name: Sync to S3
-        run: |
-          aws s3 sync packages/dashboard/dist "s3://${{ vars.DASHBOARD_BUCKET }}" \
-            --delete --exclude index.html \
-            --cache-control "public,max-age=31536000,immutable"
-          aws s3 cp packages/dashboard/dist/index.html "s3://${{ vars.DASHBOARD_BUCKET }}/index.html" \
-            --cache-control "no-cache"
-      - name: Invalidate CloudFront
-        if: ${{ vars.DASHBOARD_DISTRIBUTION_ID != '' }}
-        continue-on-error: true  # best-effort; index.html is no-cache so content is fresh regardless
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "${{ vars.DASHBOARD_DISTRIBUTION_ID }}" --paths "/index.html" "/"

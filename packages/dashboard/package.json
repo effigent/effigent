@@ -2,23 +2,26 @@
   "name": "@ccopt/dashboard",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "description": "Optimizer dashboard — React SPA (static build for S3/CloudFront).",
+  "description": "Optimizer dashboard — full-stack Next.js app (UI + API + Clerk auth) for Vercel.",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ccopt/core": "*",
+    "@clerk/nextjs": "^6.9.6",
+    "next": "^14.2.15",
+    "pg": "^8.13.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.10",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "typescript": "^5.6.3"
   }
 }

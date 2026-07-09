@@ -4,6 +4,8 @@ packages/*/.next/
 packages/*/out/
 data/
 *.log
+.env.local
+.env*.local
 ccopt-report.html
 ccopt-report.json
 demo-report.html
