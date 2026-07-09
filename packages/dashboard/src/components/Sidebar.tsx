@@ -6,7 +6,7 @@ export function Sidebar({ active, onSelect }: { active: string; onSelect: (key: 
     <aside className="sidebar">
       <div className="brand">
         <span className="brand-mark"><Ic n="spark" /></span>
-        <span className="brand-name">Optimizer</span>
+        <span className="brand-name">Effigent</span>
       </div>
 
       {nav.map((block) => (
@@ -25,7 +25,7 @@ export function Sidebar({ active, onSelect }: { active: string; onSelect: (key: 
       ))}
 
       <div className="sidebar-foot">
-        <div className="live"><span className="dot" /> Optimizer is active</div>
+        <div className="live"><span className="dot" /> Effigent is active</div>
         <div className="meta">Runtime compiler for AI agents</div>
       </div>
     </aside>

@@ -68,10 +68,10 @@ export function Dashboard() {
   const sidebarActive = view === 'install' ? 'overview' : view === 'session-detail' ? 'sessions' : view;
 
   const heads: Record<string, { title: string; sub: string }> = {
-    overview: { title: 'Agent Optimization Overview', sub: agent === ALL_AGENTS ? "Optimizer continuously improves your agents' performance" : `Showing agent: ${agent}` },
+    overview: { title: 'Agent Optimization Overview', sub: agent === ALL_AGENTS ? "Effigent continuously improves your agents' performance" : `Showing agent: ${agent}` },
     sessions: { title: 'Sessions', sub: 'Every run captured for this workspace' },
     tools: { title: 'Tool Synthesis', sub: 'Deterministic tools generated for your agents' },
-    kg: { title: 'Knowledge Graph', sub: 'What Optimizer knows about your agents’ world' },
+    kg: { title: 'Knowledge Graph', sub: 'What Effigent knows about your agents’ world' },
     insights: { title: 'Optimization Insights', sub: 'Deterministic steps we can replace, cache, or keep' },
   };
   const head = heads[view] ?? heads.overview;
@@ -115,7 +115,7 @@ export function Dashboard() {
                     <span className="opt-badge lg"><Ic n="spark" style={{ width: 12, height: 12 }} /> Optimized</span>
                   )}
                   <button className="btn-primary" onClick={() => setView('install')}>
-                    <Ic n="spark" style={{ width: 15, height: 15 }} /> Install Optimizer
+                    <Ic n="spark" style={{ width: 15, height: 15 }} /> Install Effigent
                   </button>
                 </div>
               )}
@@ -129,7 +129,7 @@ export function Dashboard() {
                 <SessionDetail sessionId={session.id} optimized={session.optimized} onBack={() => setView('sessions')} />
               )}
               {view === 'tools' && (demo ? <ToolSynthesis /> : (
-                <div className="dag-empty">No synthesized tools yet — they appear once Optimizer compiles deterministic steps for your agents. Check <b>Insights</b> for the current candidates.</div>
+                <div className="dag-empty">No synthesized tools yet — they appear once Effigent compiles deterministic steps for your agents. Check <b>Insights</b> for the current candidates.</div>
               ))}
               {view === 'kg' && (demo ? <KnowledgeGraph agent={agent} /> : (
                 <div className="dag-empty">The knowledge graph builds up as your agents run — nothing indexed for this workspace yet.</div>

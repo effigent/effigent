@@ -82,7 +82,7 @@ export default function Page() {
               </div>
               <div className="h-serif" style={{ fontSize: 52, lineHeight: 1.12, marginBottom: 22 }}>Stop paying your agents to think twice.</div>
               <div style={{ fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.65, maxWidth: 520, marginBottom: 36 }}>
-                Optimizer sits alongside every agent execution, watches which tool calls and reasoning steps never change, and replaces them with cache — no code changes, no new framework.
+                Effigent sits alongside every agent execution, watches which tool calls and reasoning steps never change, and replaces them with cache — no code changes, no new framework.
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
                 <Link href="/developers" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Install in 2 minutes</Link>
@@ -93,7 +93,7 @@ export default function Page() {
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'oklch(0.65 0.17 25)' }} />
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'oklch(0.78 0.15 85)' }} />
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'oklch(0.68 0.16 150)' }} />
-                  <div style={{ margin: '0 auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'oklch(0.55 0.012 260)', transform: 'translateX(-18px)' }}>zsh — optimizer install</div>
+                  <div style={{ margin: '0 auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'oklch(0.55 0.012 260)', transform: 'translateX(-18px)' }}>zsh — effigent install</div>
                 </div>
                 <div style={{ padding: '14px 16px', fontFamily: 'var(--mono)', fontSize: 13, lineHeight: 1.9 }}>
                   <div style={{ color: 'oklch(0.85 0.01 150)' }}><span style={{ color: 'oklch(0.55 0.14 150)' }}>&#10142;</span> effigent agent add billing-agent</div>
@@ -249,7 +249,7 @@ export default function Page() {
 
           <div style={{ marginTop: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 10, padding: '16px 22px', background: 'linear-gradient(100deg, oklch(0.95 0.03 290) 0%, oklch(0.93 0.035 270) 25%, oklch(0.95 0.03 290) 50%, oklch(0.93 0.035 270) 75%, oklch(0.95 0.03 290) 100%)', backgroundSize: '200% 100%', animation: 'shimmerMove 6s linear infinite' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 700, color: 'oklch(0.4 0.13 290)' }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'oklch(0.55 0.16 290)' }} />Optimizer Impact
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'oklch(0.55 0.16 290)' }} />Effigent Impact
             </div>
             <div style={{ fontSize: 13, color: 'var(--green)', fontWeight: 500 }}>81% fewer steps &nbsp;·&nbsp; 76% faster &nbsp;·&nbsp; 76% cheaper</div>
           </div>

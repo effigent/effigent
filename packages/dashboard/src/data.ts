@@ -219,7 +219,7 @@ export const kgCoverage = {
   foot: 'Last updated: 2 min ago',
 };
 
-/** Install guide — how to put Optimizer on any autonomous agent. Grounded in the
+/** Install guide — how to put Effigent on any autonomous agent. Grounded in the
  *  real collector: register a scoped key, then pick the capture method.
  *
  *  Endpoints are computed at RUNTIME from a distribution we control:
@@ -293,10 +293,10 @@ traceloop.initialize({
   },
   {
     key: 'proxy', name: 'Proxy / Sidecar', icon: 'route', tint: 'var(--cyan)', tag: 'Fallback · roadmap',
-    blurb: 'For closed harnesses you can neither instrument nor read: route the provider base URL through Optimizer. (Fallback path — on the roadmap.)',
-    steps: [{ label: 'Point the provider base URL at Optimizer', code: `export ANTHROPIC_BASE_URL=${COLLECTOR}/proxy
+    blurb: 'For closed harnesses you can neither instrument nor read: route the provider base URL through Effigent. (Fallback path — on the roadmap.)',
+    steps: [{ label: 'Point the provider base URL at Effigent', code: `export ANTHROPIC_BASE_URL=${COLLECTOR}/proxy
 export OPENAI_BASE_URL=${COLLECTOR}/proxy/v1
-export OPTIMIZER_KEY=<scoped-key>` }],
+export EFFIGENT_KEY=<scoped-key>` }],
   },
   ];
 }

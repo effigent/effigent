@@ -3,7 +3,7 @@ import { ClerkProvider } from '@clerk/nextjs';
 import '../theme.css';
 
 export const metadata: Metadata = {
-  title: 'Optimizer — Dashboard',
+  title: 'Effigent — Dashboard',
   description: 'Agent optimization dashboard.',
 };
 

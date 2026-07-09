@@ -20,7 +20,7 @@ export function KnowledgeGraph({ agent }: { agent: string }) {
           Knowledge Graph coverage {scoped ? <span className="kg-scope">· {agent}</span> : <span className="kg-scope">· all agents</span>}
         </div>
         <div className="panel-sub" style={{ marginBottom: 18 }}>
-          Entities Optimizer indexed from {scoped ? `${agent}'s` : 'your agents’'} runs, retrieved deterministically in place of LLM lookups.
+          Entities Effigent indexed from {scoped ? `${agent}'s` : 'your agents’'} runs, retrieved deterministically in place of LLM lookups.
         </div>
         <div className="kg-layout">
           <div className="kg-donut">

@@ -3,7 +3,7 @@ import { Nav, Footer, CodeBlock, PageHero, DocSection, StepBadge } from '../ui';
 import { COLLECTOR_URL, TRACES_URL } from '../config';
 
 export const metadata: Metadata = {
-  title: 'Developer guide — add Optimizer to any AI agent',
+  title: 'Developer guide — add Effigent to any AI agent',
   description:
     'Register an agent, wire capture for Claude Code, OpenAI Codex, LangGraph, CrewAI, AutoGen or any OTel-capable agent, and watch every run land in the dashboard — no code changes to your agent.',
 };
@@ -94,8 +94,8 @@ export default function DevelopersPage() {
       <Nav />
       <PageHero
         eyebrow="Developer guide"
-        title="Add Optimizer to any agent in two steps."
-        sub="Optimizer observes your agents from the outside — it never asks you to change agent code. Register the agent to mint a scoped capture key, wire capture for your harness, and every run appears in the dashboard as an execution graph."
+        title="Add Effigent to any agent in two steps."
+        sub="Effigent observes your agents from the outside — it never asks you to change agent code. Register the agent to mint a scoped capture key, wire capture for your harness, and every run appears in the dashboard as an execution graph."
       />
 
       {/* How capture works */}

@@ -29,11 +29,11 @@ export function OverviewLive({
         </div>
         <h2 style={{ margin: '0 0 8px', fontSize: 20 }}>Connect your first agent</h2>
         <p style={{ color: 'var(--txt-2)', maxWidth: '46ch', margin: '0 auto 22px', lineHeight: 1.6 }}>
-          Install Optimizer on an agent and every run will land here as an execution graph —
+          Install Effigent on an agent and every run will land here as an execution graph —
           cost, models, and optimization opportunities included.
         </p>
         <button className="btn-primary" onClick={onInstall} style={{ height: 42, padding: '0 22px' }}>
-          <Ic n="spark" style={{ width: 15, height: 15 }} /> Install Optimizer
+          <Ic n="spark" style={{ width: 15, height: 15 }} /> Install Effigent
         </button>
       </section>
     );

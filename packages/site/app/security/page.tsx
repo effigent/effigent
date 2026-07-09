@@ -2,9 +2,9 @@ import type { Metadata } from 'next';
 import { Nav, Footer, CodeBlock, PageHero, DocSection } from '../ui';
 
 export const metadata: Metadata = {
-  title: 'Security & privacy — Optimizer',
+  title: 'Security & privacy — Effigent',
   description:
-    'How Optimizer protects agent data: sensitive-data redaction before storage, scoped per-agent keys stored hashed, strict tenant isolation, and passive capture that never sits in your request path.',
+    'How Effigent protects agent data: sensitive-data redaction before storage, scoped per-agent keys stored hashed, strict tenant isolation, and passive capture that never sits in your request path.',
 };
 
 const PILLARS = [
@@ -16,7 +16,7 @@ const PILLARS = [
   {
     hue: '250',
     title: 'Scoped, least-privilege capture keys',
-    body: 'Each agent gets its own capture key that can do exactly one thing: upload runs for that agent. Keys are stored as SHA-256 hashes — we cannot read them back. On developer machines the key lives in ~/.ccopt, never inside your agent’s configuration or repository. Revoke or re-mint a key per agent at any time without touching the others.',
+    body: 'Each agent gets its own capture key that can do exactly one thing: upload runs for that agent. Keys are stored as SHA-256 hashes — we cannot read them back. On developer machines the key lives in ~/.effigent, never inside your agent’s configuration or repository. Revoke or re-mint a key per agent at any time without touching the others.',
   },
   {
     hue: '290',
@@ -26,7 +26,7 @@ const PILLARS = [
   {
     hue: '85',
     title: 'Passive capture — never in your request path',
-    body: 'Optimizer observes completed executions. It does not proxy your LLM traffic, hold your provider keys, or add latency to a single request. If capture is down, your agents are completely unaffected.',
+    body: 'Effigent observes completed executions. It does not proxy your LLM traffic, hold your provider keys, or add latency to a single request. If capture is down, your agents are completely unaffected.',
   },
   {
     hue: '20',
@@ -42,7 +42,7 @@ export default function SecurityPage() {
       <PageHero
         eyebrow="Security & privacy"
         title="Your agents’ data, treated like production data."
-        sub="Optimizer sees how your agents work — so the pipeline is built to never keep what it doesn’t need: redaction before storage, least-privilege keys, and hard tenant isolation."
+        sub="Effigent sees how your agents work — so the pipeline is built to never keep what it doesn’t need: redaction before storage, least-privilege keys, and hard tenant isolation."
       />
 
       <DocSection>
@@ -77,7 +77,7 @@ contact: [REDACTED:EMAIL]   token: [REDACTED:BEARER]`}</CodeBlock>
       <DocSection>
         <h2 className="h-serif" style={{ fontSize: 26, margin: '0 0 14px' }}>Questions we get asked</h2>
         {[
-          ['Do you store our provider API keys?', 'No. Capture is passive — your agents talk to OpenAI/Anthropic directly. The only credential Optimizer holds is its own scoped capture key, stored hashed.'],
+          ['Do you store our provider API keys?', 'No. Capture is passive — your agents talk to OpenAI/Anthropic directly. The only credential Effigent holds is its own scoped capture key, stored hashed.'],
           ['Can one agent’s key read another agent’s data?', 'No. Capture keys are write-only and bound to a single agent. Dashboard access is a separate, user-level authentication through your identity provider.'],
           ['What happens if the collector is down?', 'Nothing, for your agents — capture is out of the request path. Hook-based uploads retry on the next session; OTel exporters buffer and flush.'],
         ].map(([q, a]) => (

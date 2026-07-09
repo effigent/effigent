@@ -1,6 +1,6 @@
-# Optimizer (`ccopt`) — engineering guide
+# Effigent — engineering guide
 
-> A self-optimizing runtime for AI agents. Observe agent executions → normalize them
+> **Effigent** (product; npm CLI: `effigent`) — a self-optimizing runtime for AI agents. Observe agent executions → normalize them
 > into a universal execution **DAG** (intermediate representation) → progressively
 > convert repetitive LLM reasoning into **deterministic** execution (synthesized tools,
 > grep/AST, knowledge-graph retrieval, model routing, caching) → **validate** each

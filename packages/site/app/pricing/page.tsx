@@ -3,7 +3,7 @@ import { Nav, Footer, PageHero, DocSection } from '../ui';
 import { PricingTable } from './table';
 
 export const metadata: Metadata = {
-  title: 'Pricing — Optimizer',
+  title: 'Pricing — Effigent',
   description:
     'Start free with 2 agents. Starter at $15/month (5 agents, 20 GB), Pro at $80/month (20 agents, 100 GB), Enterprise with custom scale, SSO and self-hosted collector.',
 };
@@ -15,7 +15,7 @@ export default function PricingPage() {
       <PageHero
         eyebrow="Pricing"
         title="Pays for itself, by design."
-        sub="Optimizer's job is to cut your agents' token bill — most teams save more in the first month than the subscription costs. Start free, upgrade when your fleet grows."
+        sub="Effigent's job is to cut your agents' token bill — most teams save more in the first month than the subscription costs. Start free, upgrade when your fleet grows."
       />
       <div style={{ maxWidth: 1160, margin: '0 auto', padding: '10px 32px 70px' }}>
         <PricingTable />

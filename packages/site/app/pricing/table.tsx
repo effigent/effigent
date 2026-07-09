@@ -60,7 +60,7 @@ const TIERS: Tier[] = [
     storage: 'Custom storage & retention',
     features: ['Everything in Pro', 'SSO / SAML', 'Self-hosted collector option', 'Custom DPA & SLA', 'Dedicated support'],
     cta: 'Talk to us',
-    href: `mailto:${CONTACT_EMAIL}?subject=Optimizer%20Enterprise`,
+    href: `mailto:${CONTACT_EMAIL}?subject=Effigent%20Enterprise`,
   },
 ];
 

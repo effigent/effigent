@@ -128,7 +128,7 @@ export function Sessions({
                     <td>
                       <span className="agent-cell">
                         {r.agent_id}
-                        {opt && <span className="opt-badge" title="Optimizer has run on this agent"><Ic n="spark" style={{ width: 10, height: 10 }} /> Optimized</span>}
+                        {opt && <span className="opt-badge" title="Effigent has run on this agent"><Ic n="spark" style={{ width: 10, height: 10 }} /> Optimized</span>}
                       </span>
                     </td>
                     <td className="muted">{fmtDate(r.started_at)}</td>
@@ -147,7 +147,7 @@ export function Sessions({
                 <tr>
                   <td colSpan={7} className="tbl-empty">
                     {rows.length === 0
-                      ? 'No sessions yet for this workspace. Install Optimizer on an agent (or run the seed) and its runs show up here.'
+                      ? 'No sessions yet for this workspace. Install Effigent on an agent (or run the seed) and its runs show up here.'
                       : `No sessions match “${q}”.`}
                   </td>
                 </tr>

@@ -5,7 +5,7 @@ function tint(c: string) {
   return { background: `color-mix(in srgb, ${c} 16%, transparent)`, color: c };
 }
 
-/** Tools Optimizer synthesized for the agents — deterministic replacements for
+/** Tools Effigent synthesized for the agents — deterministic replacements for
  *  repeated LLM reasoning. (Demo-backed until the synthesis engine lands.) */
 export function ToolSynthesis() {
   return (
@@ -13,7 +13,7 @@ export function ToolSynthesis() {
       <section className="panel panel-pad">
         <div className="panel-title" style={{ marginBottom: 4 }}>Synthesized tools</div>
         <div className="panel-sub" style={{ marginBottom: 16 }}>
-          Deterministic functions Optimizer generated to replace repeated LLM steps across your agents.
+          Deterministic functions Effigent generated to replace repeated LLM steps across your agents.
         </div>
         <div className="tool-grid">
           {recentTools.map((t) => (

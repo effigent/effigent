@@ -107,7 +107,7 @@ export function Install({ onClose }: { onClose: () => void }) {
       <header className="head">
         <div>
           <div className="install-back" onClick={onClose}><Ic n="arrowRight" style={{ width: 15, height: 15, transform: 'rotate(180deg)' }} /> Back to dashboard</div>
-          <h1>Install Optimizer on any agent</h1>
+          <h1>Install Effigent on any agent</h1>
           <div className="sub">One scoped key per agent, then pick how it&apos;s captured. The graph/cost engine is the same for every harness.</div>
         </div>
       </header>

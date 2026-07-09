@@ -1,7 +1,7 @@
-# effigent — the Optimizer CLI
+# effigent — the Effigent CLI
 
 Capture your AI agents' runs — Claude Code, OpenAI Codex, LangGraph/CrewAI/AutoGen, or any
-OTel-capable agent — and send them to your [Optimizer](https://github.com/SpectorHacked/ccopt)
+OTel-capable agent — and send them to your [Effigent](https://github.com/SpectorHacked/ccopt)
 workspace, where every run becomes an execution graph with cost, models, and
 optimization insights (replace / memoize / template / route).
 

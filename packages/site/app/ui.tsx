@@ -8,7 +8,7 @@ export function Nav({ cta = true }: { cta?: boolean }) {
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 56px', borderBottom: '1px solid var(--line)', position: 'sticky', top: 0, background: 'oklch(0.985 0.004 90 / 0.92)', backdropFilter: 'blur(8px)', zIndex: 10 }}>
       <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <div style={{ width: 20, height: 20, background: 'var(--ink)', position: 'relative' }}><div style={{ position: 'absolute', inset: 5, background: 'var(--cream)' }} /></div>
-        <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em' }}>Optimizer</div>
+        <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em' }}>Effigent</div>
       </Link>
       <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 36, fontSize: 14, color: 'var(--ink-2)', fontWeight: 500 }}>
         <Link href="/#how">How it works</Link>
@@ -33,7 +33,7 @@ export function Nav({ cta = true }: { cta?: boolean }) {
 export function Footer() {
   return (
     <div style={{ borderTop: '1px solid var(--line)', padding: '28px 56px', display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--ink-4)' }}>
-      <div>© 2026 Optimizer — the compiler for AI agents</div>
+      <div>© 2026 Effigent — the compiler for AI agents</div>
       <div style={{ display: 'flex', gap: 24 }}>
         <Link href="/developers">Developer guide</Link>
         <Link href="/pricing">Pricing</Link>
