@@ -105,19 +105,26 @@ async function persistParsedRun(
      values ($1,$2,$3,$4,$5,$6,'parsed') returning id`,
     [auth.tenantId, sessionId, run.agentId, blobPath, bytes, source],
   );
+  // Persist the execution DAG (the optimizer's IR) as a gzipped blob. It's
+  // regenerable from the Run, but storing it gives the brain a stable graph to
+  // read/diff without recomputing, and is only decompressed on demand.
+  const graphPath = `${auth.tenantId}/graphs/${encodeURIComponent(sessionId)}.json.gz`;
+  await blobs.put(graphPath, gzipSync(Buffer.from(JSON.stringify(buildRunGraph(run)))));
+
   const trimmed: Run = sanitizeForJsonb({
     ...run,
     steps: run.steps.map((s) => ({ ...s, payload: s.payload.slice(0, 8000) })),
   });
   await db.query(
     `insert into runs (tenant_id, session_id, agent_id, started_at, ended_at,
-                       cost_usd, models, n_steps, blob_path, parsed)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                       cost_usd, models, n_steps, blob_path, parsed, graph_blob_path)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      on conflict (tenant_id, session_id) do update
        set agent_id = excluded.agent_id, started_at = excluded.started_at,
            ended_at = excluded.ended_at, cost_usd = excluded.cost_usd,
            models = excluded.models, n_steps = excluded.n_steps,
-           blob_path = excluded.blob_path, parsed = excluded.parsed`,
+           blob_path = excluded.blob_path, parsed = excluded.parsed,
+           graph_blob_path = excluded.graph_blob_path`,
     [
       auth.tenantId,
       sessionId,
@@ -129,6 +136,7 @@ async function persistParsedRun(
       run.steps.length,
       blobPath,
       JSON.stringify(trimmed),
+      graphPath,
     ],
   );
   return upload.rows[0].id;
@@ -480,6 +488,29 @@ app.get('/api/v1/agents', async (req, reply) => {
     [auth.tenantId],
   );
   return { agents: rows };
+});
+
+/** The stored execution DAG (IR) for one run — gzipped in the blob store,
+ *  decompressed on demand. Rebuilds on the fly for runs ingested before the
+ *  graph was persisted. This is what the optimization engine reads. */
+app.get('/api/v1/runs/:sessionId/graph', async (req, reply) => {
+  const auth = await authenticate(req.headers.authorization);
+  if (!auth) return reply.code(401).send({ error: 'invalid API key' });
+  const { sessionId } = req.params as { sessionId: string };
+  const { rows } = await db.query<{ graph_blob_path: string | null; parsed: Run }>(
+    `select graph_blob_path, parsed from runs where tenant_id = $1 and session_id = $2`,
+    [auth.tenantId, sessionId],
+  );
+  if (rows.length === 0) return reply.code(404).send({ error: 'run not found' });
+  if (rows[0].graph_blob_path) {
+    try {
+      const g = gunzipSync(await blobs.get(rows[0].graph_blob_path)).toString('utf8');
+      return reply.type('application/json').send(g);
+    } catch {
+      /* blob missing/corrupt — fall through to rebuild */
+    }
+  }
+  return buildRunGraph(rows[0].parsed);
 });
 
 /** Admin: fleet overview across ALL tenants — every agent our service is set up on. */
