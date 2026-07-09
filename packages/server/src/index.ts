@@ -25,6 +25,7 @@ import { sanitizeForJsonb } from './jsonb.js';
 import { redactDeep, redactSecrets } from './redact.js';
 import { buildInsightsPacket, buildRunDigest, generateInsights } from './insights.js';
 import { createLlmProvider } from './llm.js';
+import { hashPassword, verifyPassword, signSession, verifySession } from './session.js';
 
 const config = loadConfig();
 const db: Db = createPool(config.databaseUrl);
@@ -61,29 +62,40 @@ interface TenantAuth {
 }
 
 async function authenticate(authorization?: string): Promise<TenantAuth | null> {
-  const m = authorization?.match(/^Bearer (cck_[A-Za-z0-9]+)$/);
+  const m = authorization?.match(/^Bearer (\S+)$/);
   if (!m) return null;
-  const { rows } = await db.query<{
-    id: string;
-    tenant_id: string;
-    role: string;
-    agent_id: string | null;
-    agent_name: string | null;
-  }>(
-    `select k.id, k.tenant_id, k.role, k.agent_id, a.name as agent_name
-       from api_keys k
-       left join agents a on a.id = k.agent_id
-      where k.key_hash = $1`,
-    [hashKey(m[1])],
-  );
-  if (rows.length === 0) return null;
-  await db.query(`update api_keys set last_used_at = now() where id = $1`, [rows[0].id]);
-  return {
-    tenantId: rows[0].tenant_id,
-    role: rows[0].role === 'owner' ? 'owner' : 'member',
-    agentId: rows[0].agent_id ?? undefined,
-    agentName: rows[0].agent_name ?? undefined,
-  };
+  const token = m[1];
+
+  // Machine/agent credential: cck_ api key.
+  if (token.startsWith('cck_')) {
+    const { rows } = await db.query<{
+      id: string;
+      tenant_id: string;
+      role: string;
+      agent_id: string | null;
+      agent_name: string | null;
+    }>(
+      `select k.id, k.tenant_id, k.role, k.agent_id, a.name as agent_name
+         from api_keys k
+         left join agents a on a.id = k.agent_id
+        where k.key_hash = $1`,
+      [hashKey(token)],
+    );
+    if (rows.length === 0) return null;
+    await db.query(`update api_keys set last_used_at = now() where id = $1`, [rows[0].id]);
+    return {
+      tenantId: rows[0].tenant_id,
+      role: rows[0].role === 'owner' ? 'owner' : 'member',
+      agentId: rows[0].agent_id ?? undefined,
+      agentName: rows[0].agent_name ?? undefined,
+    };
+  }
+
+  // Human/dashboard credential: a signed session token (issued by /auth/*,
+  // relayed by NextAuth). Session users see their whole tenant → owner.
+  const sess = verifySession(token);
+  if (sess) return { tenantId: sess.tid, role: 'owner' };
+  return null;
 }
 
 /**
@@ -180,6 +192,90 @@ app.post('/api/v1/tenants/:tenantId/keys', async (req, reply) => {
     [tenantId, hashKey(apiKey), body.label ?? role, role],
   );
   return { tenantId, role, apiKey };
+});
+
+// ---- Dashboard user auth (called by NextAuth; also usable directly) ----
+// Session token carries the tenant; the dashboard sends it as Bearer to the
+// data API. Fastify remains the identity source of truth.
+
+/** Self-serve signup: creates a tenant + owner user + a default agent api key. */
+app.post('/api/v1/auth/signup', async (req, reply) => {
+  const { email, password } = (req.body ?? {}) as { email?: string; password?: string };
+  if (!email || !password || password.length < 8) {
+    return reply.code(400).send({ error: 'email and a password of at least 8 characters are required' });
+  }
+  const dup = await db.query(`select 1 from users where email = $1`, [email.toLowerCase()]);
+  if (dup.rows.length) return reply.code(409).send({ error: 'that email is already registered' });
+
+  const tenant = await db.query<{ id: string }>(
+    `insert into tenants (name, email) values ($1, $2) returning id`,
+    [email.toLowerCase(), email.toLowerCase()],
+  );
+  const tid = tenant.rows[0].id;
+  const apiKey = `cck_${randomBytes(24).toString('hex')}`;
+  await db.query(`insert into api_keys (tenant_id, key_hash, label, role) values ($1,$2,'dashboard','owner')`, [tid, hashKey(apiKey)]);
+  const user = await db.query<{ id: string }>(
+    `insert into users (tenant_id, email, password_hash, provider) values ($1,$2,$3,'password') returning id`,
+    [tid, email.toLowerCase(), hashPassword(password)],
+  );
+  const token = signSession({ tid, uid: user.rows[0].id });
+  return { token, tenantId: tid, email: email.toLowerCase(), apiKey };
+});
+
+/** Email/password login → session token. */
+app.post('/api/v1/auth/login', async (req, reply) => {
+  const { email, password } = (req.body ?? {}) as { email?: string; password?: string };
+  if (!email || !password) return reply.code(400).send({ error: 'email and password required' });
+  const { rows } = await db.query<{ id: string; tenant_id: string; password_hash: string | null }>(
+    `select id, tenant_id, password_hash from users where email = $1`,
+    [email.toLowerCase()],
+  );
+  if (rows.length === 0 || !rows[0].password_hash || !verifyPassword(password, rows[0].password_hash)) {
+    return reply.code(401).send({ error: 'invalid email or password' });
+  }
+  const token = signSession({ tid: rows[0].tenant_id, uid: rows[0].id });
+  return { token, tenantId: rows[0].tenant_id, email: email.toLowerCase() };
+});
+
+/**
+ * OAuth bridge — NextAuth (server-side) calls this after a successful Google
+ * sign-in to upsert the user + tenant and get a session token. Gated by a
+ * shared secret so only our NextAuth server can mint OAuth logins.
+ */
+app.post('/api/v1/auth/oauth', async (req, reply) => {
+  const bridge = process.env.CCOPT_AUTH_BRIDGE_SECRET;
+  if (!bridge || req.headers['x-auth-bridge-secret'] !== bridge) {
+    return reply.code(401).send({ error: 'unauthorized bridge' });
+  }
+  const { email, provider } = (req.body ?? {}) as { email?: string; provider?: string };
+  if (!email) return reply.code(400).send({ error: 'email required' });
+  const lc = email.toLowerCase();
+  let user = await db.query<{ id: string; tenant_id: string }>(`select id, tenant_id from users where email = $1`, [lc]);
+  if (user.rows.length === 0) {
+    const tenant = await db.query<{ id: string }>(`insert into tenants (name, email) values ($1,$2) returning id`, [lc, lc]);
+    const tid = tenant.rows[0].id;
+    const apiKey = `cck_${randomBytes(24).toString('hex')}`;
+    await db.query(`insert into api_keys (tenant_id, key_hash, label, role) values ($1,$2,'dashboard','owner')`, [tid, hashKey(apiKey)]);
+    user = await db.query(
+      `insert into users (tenant_id, email, provider) values ($1,$2,$3) returning id, tenant_id`,
+      [tid, lc, provider ?? 'oauth'],
+    );
+  }
+  const token = signSession({ tid: user.rows[0].tenant_id, uid: user.rows[0].id });
+  return { token, tenantId: user.rows[0].tenant_id, email: lc };
+});
+
+/** Current user for a session token. */
+app.get('/api/v1/auth/me', async (req, reply) => {
+  const m = String(req.headers.authorization ?? '').match(/^Bearer (\S+)$/);
+  const sess = m ? verifySession(m[1]) : null;
+  if (!sess) return reply.code(401).send({ error: 'not authenticated' });
+  const { rows } = await db.query<{ email: string; tenant_id: string; tenant: string }>(
+    `select u.email, t.id as tenant_id, t.name as tenant from users u join tenants t on t.id = u.tenant_id where u.id = $1`,
+    [sess.uid],
+  );
+  if (rows.length === 0) return reply.code(401).send({ error: 'not authenticated' });
+  return { email: rows[0].email, tenantId: rows[0].tenant_id, tenantName: rows[0].tenant };
 });
 
 /** Ingest one gzipped session transcript. */
