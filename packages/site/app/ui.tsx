@@ -8,7 +8,7 @@ export function Nav({ cta = true }: { cta?: boolean }) {
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 56px', borderBottom: '1px solid var(--line)', position: 'sticky', top: 0, background: 'oklch(0.985 0.004 90 / 0.92)', backdropFilter: 'blur(8px)', zIndex: 10 }}>
       <Link href="/" style={{ display: 'flex', alignItems: 'center' }}>
         {/* eslint-disable-next-line @next/next/no-img-element -- static export, no optimizer */}
-        <img src="/logo_effigent.png" alt="Effigent" style={{ height: 30, width: 'auto', display: 'block' }} />
+        <img src="/logo_effigent.webp" alt="Effigent" style={{ height: 30, width: 'auto', display: 'block' }} />
       </Link>
       <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 36, fontSize: 14, color: 'var(--ink-2)', fontWeight: 500 }}>
         <Link href="/#how">How it works</Link>

@@ -22,11 +22,19 @@ const RULES: Array<{ name: string; re: RegExp }> = [
   // connection strings with inline credentials
   { name: 'DB_URL', re: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/[^\s:@/]+:[^\s@/]+@[^\s"']+/g },
   // PII
+  { name: 'PHONE', re: /(?<![\w.])\+\d{1,3}[-. ]?\(?\d{1,4}\)?[-. ]?\d{2,4}[-. ]?\d{3,7}\b/g }, // E.164 / intl
+  { name: 'PHONE', re: /\(\d{3}\)\s?\d{3}[-.]\d{4}\b/g },
+  { name: 'PHONE', re: /\b\d{3}[-.]\d{3}[-.]\d{4}\b/g },
+  { name: 'SSN', re: /\b\d{3}-\d{2}-\d{4}\b/g },
+  // key=value credentials — password: x, token=y, api_key: z (values die, keys stay)
+  { name: 'CREDENTIAL', re: /\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)["']?\s*[:=]\s*["']?[^\s"',;]{4,}/gi },
   { name: 'EMAIL', re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   { name: 'CARD', re: /\b(?:\d[ -]?){13,16}\b/g },
 ];
 
-/** Replace sensitive values with `[REDACTED:<TYPE>]` placeholders. */
+/** Replace sensitive values with `[REDACTED:<TYPE>]` placeholders.
+ *  Person names are deliberately NOT redacted — they are routine agent context
+ *  (ticket assignees, commit authors) and removing them would gut analysis. */
 export function redactSensitive(text: string): string {
   if (!text) return text;
   let out = text;

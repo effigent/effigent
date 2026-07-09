@@ -11,7 +11,7 @@ const PILLARS = [
   {
     hue: '150',
     title: 'Sensitive data is redacted before storage',
-    body: 'Every captured payload passes through a redaction layer at the single ingest choke point — before it is stored, indexed, or analyzed. API keys (OpenAI, Anthropic, GitHub, Slack, Google), AWS credentials, JWTs and bearer tokens, database connection strings, private-key blocks, email addresses and card-like numbers are replaced with typed placeholders. The same secret always maps to the same placeholder, so execution graphs stay comparable without the value ever being kept.',
+    body: 'Every captured payload passes through a redaction layer at the single ingest choke point — before it is stored, indexed, or analyzed. API keys (OpenAI, Anthropic, GitHub, Slack, Google), AWS credentials, JWTs and bearer tokens, database connection strings, private-key blocks, password/token key-value pairs, email addresses, phone numbers, and card-like numbers are replaced with typed placeholders. The same secret always maps to the same placeholder, so execution graphs stay comparable without the value ever being kept.',
   },
   {
     hue: '250',

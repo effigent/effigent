@@ -63,7 +63,8 @@ a:hover { color: oklch(0.4 0.14 250); }
 .eyebrow { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px;
   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 14px; }
 .eyebrow .d { width: 6px; height: 6px; border-radius: 50%; }
-.h-serif { font-family: var(--serif); font-weight: 600; letter-spacing: -0.01em; }
+.h-serif { font-family: var(--sans); font-weight: 340; letter-spacing: -0.02em; }
+.h-serif b, .h-serif strong { font-weight: 820; }
 .btn { font-family: var(--sans); border: none; cursor: pointer; font-weight: 600; border-radius: 7px; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
 .btn-primary { background: var(--accent); color: var(--cream); }
 .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 24px -8px rgba(26,29,36,.4); }

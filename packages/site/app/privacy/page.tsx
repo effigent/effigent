@@ -24,7 +24,7 @@ const SECTIONS: Array<[string, string | string[]]> = [
   ],
   [
     'Personal data is removed before storage',
-    'Every captured payload passes through an automated redaction layer at the single point of ingestion — before it is stored, indexed, or analyzed. Removed and replaced with typed placeholders: API keys and platform credentials, cloud access keys, bearer tokens and JWTs, database connection strings, private-key material, email addresses, and card-like numbers. We designed the pipeline so that personal data inside agent payloads is not retained.',
+    'Every captured payload passes through an automated redaction layer at the single point of ingestion — before it is stored, indexed, or analyzed. Removed and replaced with typed placeholders: API keys and platform credentials, cloud access keys, bearer tokens and JWTs, database connection strings, private-key material, password/token key-value pairs, email addresses, phone numbers, government-ID-like numbers, and card-like numbers. Person names are preserved — they are routine agent context (ticket assignees, commit authors) and essential to the analysis. We designed the pipeline so that contactable and credential data inside agent payloads is not retained.',
   ],
   [
     'What we use it for — and nothing else',

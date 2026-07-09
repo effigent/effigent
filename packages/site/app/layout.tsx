@@ -1,8 +1,7 @@
 import type { Metadata } from 'next';
-import { Source_Serif_4, Roboto_Flex, IBM_Plex_Mono } from 'next/font/google';
+import { Roboto_Flex, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 
-const serif = Source_Serif_4({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--font-serif', display: 'swap' });
 // Roboto Flex is a variable font — the full weight axis (100–1000) ships in one
 // file, so light body text and very heavy headings contrast sharply.
 const sans = Roboto_Flex({ subsets: ['latin'], variable: '--font-sans', display: 'swap' });
@@ -30,7 +29,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${serif.variable} ${sans.variable} ${mono.variable}`}>
+    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
       <body>{children}</body>
     </html>
   );

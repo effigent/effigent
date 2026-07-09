@@ -80,7 +80,7 @@ export default function Page() {
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 12.5, color: 'oklch(0.45 0.012 260)', border: '1px solid oklch(0.87 0.005 90)', borderRadius: 20, padding: '6px 14px', marginBottom: 26 }}>
                 <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green-dot)' }} />Runtime layer for production AI agents
               </div>
-              <div className="h-serif" style={{ fontSize: 52, lineHeight: 1.12, marginBottom: 22 }}>Stop paying your agents to think twice.</div>
+              <div className="h-serif" style={{ fontSize: 52, lineHeight: 1.12, marginBottom: 22 }}>Stop paying your agents to <b>think twice</b>.</div>
               <div style={{ fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.65, maxWidth: 520, marginBottom: 36 }}>
                 Effigent sits alongside every agent execution, watches which tool calls and reasoning steps never change, and replaces them with cache — no code changes, no new framework.
               </div>
@@ -181,7 +181,7 @@ export default function Page() {
         <div className="grid-2" style={{ display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 60, alignItems: 'start' }}>
           <div>
             <Eyebrow hue="20">The problem</Eyebrow>
-            <div className="h-serif" style={{ fontSize: 32, lineHeight: 1.25, marginBottom: 16 }}>Every execution starts almost from scratch.</div>
+            <div className="h-serif" style={{ fontSize: 32, lineHeight: 1.25, marginBottom: 16 }}>Every execution starts <b>almost from scratch</b>.</div>
             <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 380 }}>Agents re-derive the same answers run after run — burning tokens, time, and budget on work they&apos;ve already done.</div>
           </div>
           <div className="problems-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -200,7 +200,7 @@ export default function Page() {
       <Section id="how">
         <Reveal>
         <Eyebrow hue="290">How it works</Eyebrow>
-        <div className="h-serif" style={{ fontSize: 32, marginBottom: 44, maxWidth: 640 }}>Every execution becomes a graph. Every graph gets compiled down.</div>
+        <div className="h-serif" style={{ fontSize: 32, marginBottom: 44, maxWidth: 640 }}>Every execution becomes a graph. Every graph gets <b>compiled down</b>.</div>
 
         <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '32px 28px 24px', background: 'oklch(0.995 0.002 90)' }}>
           <div className="arch-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 56px 1fr', gap: 8, alignItems: 'start' }}>
@@ -272,7 +272,7 @@ export default function Page() {
         <div className="grid-2" style={{ display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 60, alignItems: 'center' }}>
           <div>
             <Eyebrow hue="85">Determinism engine</Eyebrow>
-            <div className="h-serif" style={{ fontSize: 30, lineHeight: 1.25, marginBottom: 16 }}>Every node gets a determinism score, 0 to 100.</div>
+            <div className="h-serif" style={{ fontSize: 30, lineHeight: 1.25, marginBottom: 16 }}>Every node gets a determinism score, <b>0 to 100</b>.</div>
             <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6 }}>Scored on input/output stability, semantic similarity, historical variance, and repeat frequency — then routed automatically.</div>
           </div>
           <div>
@@ -298,7 +298,7 @@ export default function Page() {
       <Section>
         <Reveal>
           <Eyebrow hue="150">The product</Eyebrow>
-          <div className="h-serif" style={{ fontSize: 32, marginBottom: 8, maxWidth: 620 }}>See every run. Then watch it get cheaper.</div>
+          <div className="h-serif" style={{ fontSize: 32, marginBottom: 8, maxWidth: 620 }}>See every run. Then watch it get <b>cheaper</b>.</div>
           <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 36, maxWidth: 620 }}>
             Every session lands as a navigable execution graph with per-model cost — and once an agent has history, the determinism engine turns it into concrete optimization actions.
           </div>
@@ -362,7 +362,7 @@ export default function Page() {
       <Section id="install">
         <Reveal>
           <Eyebrow hue="250">Universal installation</Eyebrow>
-          <div className="h-serif" style={{ fontSize: 32, marginBottom: 8 }}>Install once. Change nothing.</div>
+          <div className="h-serif" style={{ fontSize: 32, marginBottom: 8 }}>Install once. <b>Change nothing.</b></div>
           <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 36, maxWidth: 600 }}>
             One scoped key per agent, then pick the capture method for your harness — the engine is identical for every one of them.
           </div>
@@ -386,7 +386,7 @@ export default function Page() {
         <div style={{ position: 'absolute', top: '50%', left: '50%', width: 520, height: 340, transform: 'translate(-50%,-50%)', background: 'radial-gradient(ellipse, oklch(0.5 0.15 280 / 0.35), transparent 70%)', animation: 'glowPulse 4s ease-in-out infinite', pointerEvents: 'none' }} />
         <div style={{ position: 'relative', maxWidth: 780, margin: '0 auto', textAlign: 'center' }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'oklch(0.6 0.01 260)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 24 }}>Positioning</div>
-          <div className="h-serif" style={{ fontSize: 36, lineHeight: 1.35, color: 'oklch(0.98 0.004 90)' }}>Treat an AI agent as a program, not a sequence of prompts. Parse every execution into a universal graph, run compiler-like optimization passes, validate against history, and execute the optimized result.</div>
+          <div className="h-serif" style={{ fontSize: 36, lineHeight: 1.35, color: 'oklch(0.98 0.004 90)' }}>Treat an AI agent as <b>a program</b>, not a sequence of prompts. Parse every execution into a universal graph, run compiler-like optimization passes, validate against history, and execute the optimized result.</div>
           <div style={{ fontSize: 15, color: 'oklch(0.68 0.01 260)', marginTop: 28 }}>The compiler for AI agents.</div>
         </div>
       </div>
@@ -396,7 +396,7 @@ export default function Page() {
         <Reveal>
           <div style={{ textAlign: 'center', marginBottom: 36 }}>
             <div style={{ display: 'flex', justifyContent: 'center' }}><Eyebrow hue="150">Pricing</Eyebrow></div>
-            <div className="h-serif" style={{ fontSize: 32, marginBottom: 10 }}>Start free. Scale when your fleet does.</div>
+            <div className="h-serif" style={{ fontSize: 32, marginBottom: 10 }}>Start free. <b>Scale when your fleet does.</b></div>
             <div style={{ fontSize: 15, color: 'var(--ink-2)' }}>Flat plans — never a percentage of your model spend.</div>
           </div>
           <div className="tier-mini-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
@@ -422,7 +422,7 @@ export default function Page() {
       {/* FOOTER CTA */}
       <div style={{ borderTop: '1px solid var(--line)', padding: '90px 32px', textAlign: 'center' }}>
         <Reveal>
-          <div className="h-serif" style={{ fontSize: 34, marginBottom: 26 }}>Stop paying your agents to think twice.</div>
+          <div className="h-serif" style={{ fontSize: 34, marginBottom: 26 }}>Stop paying your agents to <b>think twice</b>.</div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
             <Link href="/developers" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Install in 2 minutes</Link>
             <Link href="/security" className="btn btn-ghost" style={{ padding: '13px 22px', fontSize: 14.5, display: 'inline-block' }}>Security &amp; privacy</Link>
