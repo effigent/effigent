@@ -22,14 +22,17 @@ export const ALL_AGENTS = '__all__';
 /** Demo agents shown in the filter when not signed in (live mode pulls the real list). */
 export const demoAgents = ['billing-assistant', 'repo-explorer', 'support-triage', 'ci-fixer', 'docs-writer'];
 
-// Trimmed for now — only the shipped surfaces. Re-add groups as engines land.
+// [label, icon, routeKey]. Empty routeKey = placeholder (not yet wired).
 export const nav = [
-  { item: 'Home', icon: 'home', active: true },
+  { group: 'Observability', items: [
+    ['Home', 'home', 'overview'],
+    ['Sessions', 'list', 'sessions'],
+  ] },
   { group: 'Optimization', items: [
-    ['Tool Synthesis', 'wrench'],
+    ['Tool Synthesis', 'wrench', ''],
   ] },
   { group: 'Knowledge', items: [
-    ['Knowledge Graph', 'graph'], ['Repository Map', 'map'],
+    ['Knowledge Graph', 'graph', ''], ['Repository Map', 'map', ''],
   ] },
 ] as const;
 
