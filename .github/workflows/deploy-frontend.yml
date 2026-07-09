@@ -47,10 +47,11 @@ jobs:
           # Next.js static export outputs to out/. Assets (_next/*) are hashed →
           # cache forever; HTML is entry-point → never cache.
           aws s3 sync packages/site/out "s3://${{ vars.SITE_BUCKET }}" \
-            --delete --exclude "*.html" \
+            --delete --exclude "*.html" --exclude "icon.png" --exclude "logo_*.png" \
             --cache-control "public,max-age=31536000,immutable"
+          # entry-point files with stable URLs (html, favicon, logos) — never cache hard
           aws s3 sync packages/site/out "s3://${{ vars.SITE_BUCKET }}" \
-            --exclude "*" --include "*.html" \
+            --exclude "*" --include "*.html" --include "icon.png" --include "logo_*.png" \
             --cache-control "no-cache"
       - name: Publish extensionless routes
         run: |
