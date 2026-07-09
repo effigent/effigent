@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { ALL_AGENTS } from '../data.ts';
 import { Ic } from '../icons.tsx';
 
@@ -27,29 +27,45 @@ export function Sessions({
   onOpen: (sessionId: string, optimized: boolean) => void;
   onSelectAgent: (agent: string) => void;
 }) {
+  const PAGE = 50;
   const [rows, setRows] = useState<SessionRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
+  const [qDebounced, setQDebounced] = useState('');
+
+  // Debounce the search box; search runs server-side so it spans every page.
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+  // New filter → back to page 1.
+  useEffect(() => { setPage(0); }, [agent, qDebounced]);
 
   useEffect(() => {
     setLoading(true);
-    const query = agent && agent !== ALL_AGENTS ? `?agent=${encodeURIComponent(agent)}` : '';
-    fetch(`/api/v1/sessions${query}`)
-      .then((r) => (r.ok ? r.json() : { sessions: [] }))
-      .then((d: { sessions?: SessionRow[] }) => setRows(d.sessions ?? []))
-      .catch(() => setRows([]))
+    const params = new URLSearchParams();
+    if (agent && agent !== ALL_AGENTS) params.set('agent', agent);
+    if (qDebounced) params.set('q', qDebounced);
+    params.set('limit', String(PAGE));
+    params.set('offset', String(page * PAGE));
+    fetch(`/api/v1/sessions?${params}`)
+      .then((r) => (r.ok ? r.json() : { sessions: [], total: 0 }))
+      .then((d: { sessions?: SessionRow[]; total?: number }) => {
+        setRows(d.sessions ?? []);
+        setTotal(d.total ?? 0);
+      })
+      .catch(() => { setRows([]); setTotal(0); })
       .finally(() => setLoading(false));
-  }, [agent]);
+  }, [agent, qDebounced, page]);
+  const pages = Math.max(1, Math.ceil(total / PAGE));
 
   // Totals from the server-aggregated agent list (accurate across all runs).
   const scopedAgents = agent === ALL_AGENTS ? agents : agents.filter((a) => a.agent_id === agent);
   const totalSessions = scopedAgents.reduce((s, a) => s + (a.n_runs ?? 0), 0);
   const totalCost = scopedAgents.reduce((s, a) => s + Number(a.total_cost_usd ?? 0), 0);
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return needle ? rows.filter((r) => r.session_id.toLowerCase().includes(needle)) : rows;
-  }, [rows, q]);
 
   const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '—');
   const fmtCost = (c: string | number) => `$${Number(c).toFixed(2)}`;
@@ -102,7 +118,7 @@ export function Sessions({
           spellCheck={false}
         />
         {q && <button className="sess-search-clear" onClick={() => setQ('')} aria-label="clear">×</button>}
-        <span className="sess-search-count">{filtered.length} shown</span>
+        <span className="sess-search-count tnum">{total.toLocaleString()} match{total === 1 ? '' : 'es'}</span>
       </div>
 
       <section className="panel tbl-panel">
@@ -120,7 +136,7 @@ export function Sessions({
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r) => {
+              {rows.map((r) => {
                 const opt = optimizedAgents.has(r.agent_id);
                 return (
                   <tr key={r.session_id} className="row-click" onClick={() => onOpen(r.session_id, opt)}>
@@ -143,12 +159,12 @@ export function Sessions({
                   </tr>
                 );
               })}
-              {!loading && filtered.length === 0 && (
+              {!loading && rows.length === 0 && (
                 <tr>
                   <td colSpan={7} className="tbl-empty">
-                    {rows.length === 0
-                      ? 'No sessions yet for this workspace. Install Effigent on an agent (or run the seed) and its runs show up here.'
-                      : `No sessions match “${q}”.`}
+                    {qDebounced
+                      ? `No sessions match “${qDebounced}”.`
+                      : 'No sessions yet for this workspace. Install Effigent on an agent and its runs show up here.'}
                   </td>
                 </tr>
               )}
@@ -156,6 +172,19 @@ export function Sessions({
             </tbody>
           </table>
         </div>
+        {pages > 1 && (
+          <div className="pager">
+            <button className="btn-ghost pager-btn" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+              ← Prev
+            </button>
+            <span className="pager-info tnum">
+              {page * PAGE + 1}–{Math.min(total, (page + 1) * PAGE)} of {total.toLocaleString()}
+            </span>
+            <button className="btn-ghost pager-btn" disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)}>
+              Next →
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

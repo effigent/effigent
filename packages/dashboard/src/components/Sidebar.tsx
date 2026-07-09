@@ -6,8 +6,7 @@ export function Sidebar({ active, onSelect }: { active: string; onSelect: (key: 
     <aside className="sidebar">
       <div className="brand">
         {/* eslint-disable-next-line @next/next/no-img-element -- tiny static asset */}
-        <img src="/icon_effigent.png" alt="" className="brand-logo" />
-        <span className="brand-name">Effigent</span>
+        <img src="/logo_effigent.png" alt="Effigent" className="brand-wordmark" />
       </div>
 
       {nav.map((block) => (

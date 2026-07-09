@@ -579,3 +579,13 @@ body {
 }
 .theme-toggle:hover { color: var(--txt); border-color: var(--accent-line); }
 .theme-toggle svg { width: 16px; height: 16px; }
+
+/* sidebar wordmark: white in dark theme (navy text vanishes otherwise), full color in light */
+.brand-wordmark { height: 30px; width: auto; display: block; filter: brightness(0) invert(1); }
+:root[data-theme='light'] .brand-wordmark { filter: none; }
+
+/* ---------- sessions pager ---------- */
+.pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px 16px; border-top: 1px solid var(--border-soft); }
+.pager-btn { padding: 6px 14px !important; font-size: 12.5px !important; }
+.pager-btn:disabled { opacity: 0.35; cursor: default; }
+.pager-info { color: var(--txt-3); font-size: 12.5px; }
