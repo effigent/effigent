@@ -94,7 +94,10 @@ jobs:
           aws s3 cp "$dist/index.html" "s3://${{ matrix.bucket }}/index.html" \
             --cache-control "no-cache"
 
+      # Skipped until a CloudFront distribution id is configured — S3 upload
+      # still succeeds without it.
       - name: Invalidate CloudFront
+        if: matrix.distribution != ''
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ matrix.distribution }}" \
