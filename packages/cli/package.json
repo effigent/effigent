@@ -23,7 +23,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SpectorHacked/ccopt.git",
+    "url": "git+https://github.com/effigent/effigent.git",
     "directory": "packages/cli"
   },
   "scripts": {

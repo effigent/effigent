@@ -38,7 +38,7 @@ export function Footer() {
         <Link href="/developers">Developer guide</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security</Link>
-        <a href="https://github.com/SpectorHacked/ccopt" target="_blank" rel="noreferrer">GitHub</a>
+        <a href="https://github.com/effigent/effigent" target="_blank" rel="noreferrer">GitHub</a>
       </div>
     </div>
   );

@@ -124,7 +124,7 @@ program
     const encoded = Buffer.from(JSON.stringify(token)).toString('base64url');
     console.log('Send this ONE command to the developer (contains the workspace API key — share privately):\n');
     console.log(
-      `  curl -fsSL https://raw.githubusercontent.com/SpectorHacked/ccopt/main/install.sh | sh -s -- --join ${encoded}\n`,
+      `  curl -fsSL https://raw.githubusercontent.com/effigent/effigent/main/install.sh | sh -s -- --join ${encoded}\n`,
     );
     console.log('It installs effigent, joins this workspace, schedules a 15-minute sync, and uploads their history.');
   });
