@@ -34,10 +34,12 @@ export function Footer() {
   return (
     <div style={{ borderTop: '1px solid var(--line)', padding: '28px 56px', display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--ink-4)' }}>
       <div>© 2026 Effigent — the compiler for AI agents</div>
-      <div style={{ display: 'flex', gap: 24 }}>
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
         <Link href="/developers">Developer guide</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security</Link>
+        <Link href="/terms">Terms</Link>
+        <Link href="/privacy">Privacy</Link>
         <a href="https://github.com/effigent/effigent" target="_blank" rel="noreferrer">GitHub</a>
       </div>
     </div>

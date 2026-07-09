@@ -14,6 +14,7 @@ import { ToolSynthesis } from '@/components/ToolSynthesis.tsx';
 import { KnowledgeGraph } from '@/components/KnowledgeGraph.tsx';
 import { Insights } from '@/components/Insights.tsx';
 import { OverviewLive } from '@/components/OverviewLive.tsx';
+import { ThemeToggle } from '@/components/ThemeToggle.tsx';
 import { Ic } from '@/icons.tsx';
 import { ALL_AGENTS } from '@/data.ts';
 
@@ -92,6 +93,7 @@ export function Dashboard() {
                   <div className="sub">{head.sub}</div>
                 </div>
                 <div className="head-actions">
+                  <ThemeToggle />
                   <OrganizationSwitcher appearance={clerkAppearance} afterCreateOrganizationUrl="/" afterSelectOrganizationUrl="/" hidePersonal={false} />
                   <UserButton appearance={clerkAppearance} afterSignOutUrl="/sign-in" />
                 </div>

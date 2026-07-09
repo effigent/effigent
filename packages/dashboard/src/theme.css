@@ -40,9 +40,11 @@
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
   --radius: 14px;
   --radius-sm: 10px;
+  --hover: rgba(255, 255, 255, 0.03);
 }
 
 * { box-sizing: border-box; }
+button { color: inherit; font-family: inherit; }
 html, body, #root { height: 100%; }
 body {
   margin: 0;
@@ -81,7 +83,7 @@ body {
   font-size: 13.5px; font-weight: 500;
 }
 .nav-item svg { width: 16px; height: 16px; opacity: 0.85; flex: none; }
-.nav-item:hover { background: rgba(255, 255, 255, 0.03); color: var(--txt); }
+.nav-item:hover { background: var(--hover); color: var(--txt); }
 .nav-item.active { background: var(--accent-bg); color: #fff; }
 .nav-item.active svg { color: var(--accent-2); opacity: 1; }
 .nav-group { margin: 16px 0 6px; padding: 0 10px; font-family: var(--mono);
@@ -305,7 +307,7 @@ body {
 .tbl tbody td { padding: 12px 16px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; white-space: nowrap; }
 .tbl tbody tr:last-child td { border-bottom: none; }
 .tbl tr.row-click { cursor: pointer; transition: background 0.12s; }
-.tbl tr.row-click:hover td { background: rgba(255, 255, 255, 0.025); }
+.tbl tr.row-click:hover td { background: var(--hover); }
 .tbl td.muted { color: var(--txt-2); }
 .tbl td.go { text-align: right; color: var(--txt-4); width: 40px; }
 .tbl tr.row-click:hover td.go { color: var(--accent-2); }
@@ -430,7 +432,7 @@ body {
 .dag-node:last-child { border-left-color: transparent; }
 .dag-node.paired { margin-left: 33px; }
 .dag-node.expandable { cursor: pointer; }
-.dag-node.expandable:hover { background: rgba(255, 255, 255, 0.02); }
+.dag-node.expandable:hover { background: var(--hover); }
 .dag-node-idx { position: absolute; left: -13px; top: 12px; width: 24px; height: 24px; border-radius: 50%;
   display: grid; place-items: center; font-size: 10.5px; font-weight: 700;
   background: var(--panel-2); border: 2px solid var(--border); color: var(--txt-3); }
@@ -520,3 +522,60 @@ body {
 .ins-score b { color: var(--txt); font-size: 15px; }
 .ins-usd { color: var(--green); font-weight: 650; font-size: 13px; min-width: 60px; text-align: right; }
 .ins-runs { color: var(--txt-4); font-size: 12px; }
+
+/* ================= light theme =================
+   Toggled via data-theme on <html>; tokens only, components untouched. */
+:root[data-theme='light'] {
+  --bg: #f3f4f9;
+  --sidebar: #fafafd;
+  --panel: #ffffff;
+  --panel-2: #f5f6fa;
+  --inset: #f0f1f7;
+  --border: #e2e4ee;
+  --border-soft: #eceef5;
+  --txt: #171821;
+  --txt-2: #4c4f5f;
+  --txt-3: #7d8094;
+  --txt-4: #a4a7b8;
+
+  --accent: #6b48f5;
+  --accent-2: #5b38e8;
+  --accent-bg: rgba(107, 72, 245, 0.10);
+  --accent-line: rgba(107, 72, 245, 0.45);
+
+  --green: #0c9f6e;
+  --blue: #2e6cdd;
+  --gold: #ad7a0d;
+  --cyan: #0b90a5;
+  --purple: #7a52f4;
+  --red: #d13a4b;
+
+  --node-neutral: #f1f2f8;
+  --node-neutral-br: #d8dae6;
+  --node-llm-bg: #fdeef0;
+  --node-llm-br: #f0b6be;
+  --node-llm-tx: #b23f4e;
+  --node-tool-bg: #e8f7f0;
+  --node-tool-br: #9cd6bb;
+  --node-tool-tx: #0b7a51;
+  --node-kg-bg: #f0ebff;
+  --node-kg-br: #c8b7f4;
+  --node-kg-tx: #5a3ad4;
+
+  --hover: rgba(20, 20, 40, 0.04);
+}
+/* spots where dark hardcodes fight the light ground */
+:root[data-theme='light'] .nav-item.active { color: var(--accent-2); }
+:root[data-theme='light'] .dot { box-shadow: none; }
+:root[data-theme='light'] .kpi, :root[data-theme='light'] .panel {
+  box-shadow: 0 1px 2px rgba(23, 24, 33, 0.04);
+}
+
+/* ---------- theme toggle button ---------- */
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 10px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--txt-2);
+}
+.theme-toggle:hover { color: var(--txt); border-color: var(--accent-line); }
+.theme-toggle svg { width: 16px; height: 16px; }

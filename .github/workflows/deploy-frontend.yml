@@ -52,9 +52,20 @@ jobs:
           aws s3 sync packages/site/out "s3://${{ vars.SITE_BUCKET }}" \
             --exclude "*" --include "*.html" \
             --cache-control "no-cache"
+      - name: Publish extensionless routes
+        run: |
+          # CloudFront only resolves the ROOT default object — /pricing does not
+          # map to pricing/index.html and 403s. Publish each subpage's HTML at
+          # the bare key too, so /pricing, /developers, … serve directly.
+          for f in packages/site/out/*/index.html; do
+            d=$(basename "$(dirname "$f")")
+            case "$d" in _next|404) continue;; esac
+            aws s3 cp "$f" "s3://${{ vars.SITE_BUCKET }}/$d" \
+              --content-type "text/html" --cache-control "no-cache"
+          done
       - name: Invalidate CloudFront
         if: ${{ vars.SITE_DISTRIBUTION_ID != '' }}
         continue-on-error: true
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id "${{ vars.SITE_DISTRIBUTION_ID }}" --paths "/index.html" "/"
+            --distribution-id "${{ vars.SITE_DISTRIBUTION_ID }}" --paths "/*"
