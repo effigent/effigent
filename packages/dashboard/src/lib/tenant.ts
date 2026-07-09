@@ -14,7 +14,7 @@ export async function resolveTenant({ userId, orgId }: { userId: string; orgId: 
 
   const t = await pool.query<{ id: string }>(
     `insert into tenants (name, clerk_ref) values ($1,$2)
-     on conflict (clerk_ref) do update set name = tenants.name returning id`,
+     on conflict (clerk_ref) where clerk_ref is not null do update set name = tenants.name returning id`,
     [orgId ?? userId, ref],
   );
   const tid = t.rows[0].id;
