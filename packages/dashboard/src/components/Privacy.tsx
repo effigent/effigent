@@ -90,35 +90,38 @@ export function Privacy() {
         </div>
 
         {rules.map((r, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <div key={i} className="rule-row">
             <input
+              className="rule-input"
               value={r.name}
               disabled={disabled}
               placeholder="NAME (e.g. TICKET_ID)"
               onChange={(e) => update(i, { name: e.target.value.toUpperCase() })}
-              style={{ width: 180 }}
+              style={{ width: 190 }}
             />
             <input
+              className="rule-input mono"
               value={r.pattern}
               disabled={disabled}
               placeholder={'pattern (e.g. JIRA-\\d+)'}
               onChange={(e) => update(i, { pattern: e.target.value })}
-              style={{ flex: 1, fontFamily: 'var(--mono, monospace)' }}
+              style={{ flex: 1 }}
             />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+            <label className="tgl" title={r.enabled ? 'Rule active — click to disable' : 'Rule disabled — click to enable'}>
               <input
                 type="checkbox"
                 checked={r.enabled}
                 disabled={disabled}
                 onChange={(e) => update(i, { enabled: e.target.checked })}
               />
-              on
+              <span className="tgl-track" />
+              <span className="tgl-knob" />
             </label>
             <button
-              className="btn-ghost"
+              className="rule-x"
               disabled={disabled}
               onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}
-              title="remove rule"
+              title="Remove rule"
             >
               ✕
             </button>

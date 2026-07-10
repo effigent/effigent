@@ -82,20 +82,37 @@ try {
   check('transcript ingest (POST /api/v1/ingest, gzip)', ing.ok && ingBody.parsed === true, `HTTP ${ing.status} ${JSON.stringify(ingBody).slice(0, 80)}`);
   check('scoped key beats spoofed agent header', ingBody.agentId === AGENT, `agentId=${ingBody.agentId}`);
 
-  // 4. OTLP ingest
+  // 4. OTLP ingest — a realistic OpenLLMetry-shaped trace: two LLM spans with
+  //    per-span usage + a TOOL span carrying traceloop.entity.input/output
+  //    (args + SUCCESS result), plus a redaction canary on the tool output.
+  const OTEL_CONV = `smoke-otel-${Date.now()}`;
+  const t0 = Date.now();
+  const nano = (ms) => `${ms}000000`;
+  const attr = (key, v) => ({ key, value: typeof v === 'number' ? { intValue: v } : { stringValue: v } });
+  const convAttr = attr('gen_ai.conversation.id', OTEL_CONV);
   const otlp = await fetch(`${BASE}/v1/traces`, {
     method: 'POST',
     headers: { authorization: `Bearer ${scopedKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ resourceSpans: [{ resource: { attributes: [] }, scopeSpans: [{ spans: [{
-      traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), name: 'chat claude-sonnet-4',
-      startTimeUnixNano: `${Date.now()}000000`, endTimeUnixNano: `${Date.now() + 900}000000`,
-      attributes: [
-        { key: 'gen_ai.operation.name', value: { stringValue: 'chat' } },
-        { key: 'gen_ai.response.model', value: { stringValue: 'claude-sonnet-4' } },
-        { key: 'gen_ai.usage.input_tokens', value: { intValue: 700 } },
-        { key: 'gen_ai.usage.output_tokens', value: { intValue: 90 } },
-      ],
-    }] }] }] }),
+    body: JSON.stringify({ resourceSpans: [{ resource: { attributes: [attr('service.name', 'smoke-py-agent')] }, scopeSpans: [{ spans: [
+      { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), name: 'chat gpt-4o',
+        startTimeUnixNano: nano(t0), endTimeUnixNano: nano(t0 + 800),
+        attributes: [convAttr,
+          attr('gen_ai.operation.name', 'chat'), attr('gen_ai.response.model', 'gpt-4o'),
+          attr('gen_ai.usage.input_tokens', 700), attr('gen_ai.usage.output_tokens', 90),
+          attr('gen_ai.completion', 'Let me check the knowledge base for the refund policy.')] },
+      { traceId: 'a'.repeat(32), spanId: 'c'.repeat(16), name: 'search_kb.tool',
+        startTimeUnixNano: nano(t0 + 900), endTimeUnixNano: nano(t0 + 1300),
+        attributes: [convAttr,
+          attr('gen_ai.tool.name', 'search_kb'),
+          attr('traceloop.entity.input', '{"query":"enterprise refund policy"}'),
+          attr('traceloop.entity.output', 'Refunds within 30 days. Escalations: billing-oncall@acme.com')] },
+      { traceId: 'a'.repeat(32), spanId: 'd'.repeat(16), name: 'chat gpt-4o',
+        startTimeUnixNano: nano(t0 + 1400), endTimeUnixNano: nano(t0 + 2100),
+        attributes: [convAttr,
+          attr('gen_ai.operation.name', 'chat'), attr('gen_ai.response.model', 'gpt-4o'),
+          attr('gen_ai.usage.input_tokens', 1100), attr('gen_ai.usage.output_tokens', 140),
+          attr('gen_ai.completion', 'Enterprise customers get refunds within 30 days.')] },
+    ] }] }] }),
   });
   const otlpBody = await otlp.json().catch(() => ({}));
   check('OTLP ingest (POST /v1/traces)', otlp.status === 200 || otlp.status === 202, `HTTP ${otlp.status} ${JSON.stringify(otlpBody).slice(0, 60)}`);
@@ -110,8 +127,31 @@ try {
     check('redaction: sk- key gone', !p.includes('sk-ant-abc123'));
     check('cost computed', Number(row.rows[0].cost_usd) > 0);
   }
-  const otelRow = await db.query(`select count(*)::int n from runs where tenant_id=$1 and agent_id=$2 and session_id like 'otel:%'`, [TENANT, AGENT]);
-  check('OTLP run persisted', otelRow.rows[0].n >= 1, `${otelRow.rows[0].n} run(s)`);
+  const otelRow = await db.query(
+    `select cost_usd, parsed from runs where tenant_id=$1 and session_id=$2`,
+    [TENANT, `otel:${OTEL_CONV}`],
+  );
+  check('OTLP run persisted', otelRow.rows.length === 1, `session=otel:${OTEL_CONV}`);
+  if (otelRow.rows.length) {
+    const steps = otelRow.rows[0].parsed?.steps ?? [];
+    const kinds = steps.map((s) => s.kind).join(',');
+    check('OTLP step sequence (llm → tool_use → tool_result → llm)',
+      kinds === 'model_turn,tool_use,tool_result,model_turn', kinds);
+    const use = steps.find((s) => s.kind === 'tool_use');
+    const res = steps.find((s) => s.kind === 'tool_result');
+    const llm = steps.find((s) => s.kind === 'model_turn');
+    check('OTLP tool args captured (traceloop.entity.input)',
+      use?.name === 'search_kb' && (use?.payload ?? '').includes('enterprise refund policy'));
+    check('OTLP SUCCESS tool result captured (traceloop.entity.output)',
+      !!res && res.isError !== true && (res.payload ?? '').includes('Refunds within 30 days'));
+    check('OTLP redaction on tool output (email gone)',
+      !(res?.payload ?? '').includes('billing-oncall@acme.com') && (res?.payload ?? '').includes('[REDACTED:EMAIL]'));
+    check('OTLP per-step model + tokens + duration',
+      llm?.model === 'gpt-4o' && llm?.tokens?.input === 700 && llm?.tokens?.output === 90 && (llm?.durationMs ?? 0) > 0,
+      `model=${llm?.model} in=${llm?.tokens?.input} out=${llm?.tokens?.output} ms=${llm?.durationMs}`);
+    check('OTLP cost computed (gpt-4o tier)', Number(otelRow.rows[0].cost_usd) > 0,
+      `$${Number(otelRow.rows[0].cost_usd).toFixed(4)}`);
+  }
 } finally {
   // 6. cleanup — remove everything this test created
   await db.query(`delete from runs where tenant_id=$1 and (session_id=$2 or (agent_id=$3 and session_id like 'otel:%'))`, [TENANT, SESSION, AGENT]);
