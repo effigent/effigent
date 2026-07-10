@@ -34,34 +34,64 @@ and OTLP spans) produce the **same `Run`**, and everything downstream is unchang
 The data contract everything else depends on.
 
 - **`types.ts`** — `RawStep` (`kind`: `model_turn | tool_use | tool_result | thinking`,
-  `name`, `payload`, `isError?`, `toolUseId?`), `TokenUsage` (Anthropic-style:
-  input / output / cacheCreation / cacheRead), `Run`, `GraphNode`, `RunGraph`.
+  `name`, `payload`, `isError?`, `toolUseId?`, **`model?`/`tokens?`/`durationMs?`** —
+  per-step usage), `TokenUsage` (Anthropic-style: input / output / cacheCreation /
+  cacheRead), `Run`, `GraphNode` (incl. **`structLabel`** — content-blind schema label,
+  **`valueHash`** — full-value hash of the raw payload, `costUsd` — measured per step),
+  `RunGraph`.
 - **`transcript.ts`** — `parseTranscript()`: Claude Code JSONL → `Run` (returns null if no
-  assistant turn / tool use).
-- **`otel.ts`** — `otelToRuns()` + `normalizeGenAiUsage()`: OTLP GenAI spans → `Run[]`.
-  Anthropic usage maps 1:1; OpenAI (`prompt_tokens` includes cached) is normalized to the
-  uncached remainder.
+  assistant turn / tool use). Per-request usage is deduped by requestId AND attributed to
+  the first step each request emits, so per-step costs sum to the run cost.
+- **`otel.ts`** — `otelToRuns()` + `normalizeGenAiUsage()`: OTLP GenAI spans → `Run[]`
+  with per-step model/tokens/duration. Anthropic usage maps 1:1; OpenAI
+  (`prompt_tokens` includes cached) is normalized to the uncached remainder.
 - **`graph.ts`** — `buildRunGraph()`: `Run` → `RunGraph` with fingerprints
   **L0** (structure + labels + canonical I/O), **L1** (structure + labels = *shape*),
-  and a canonical `labelSequence`. Clustering groups runs by these.
+  a canonical `labelSequence`, per-node `structLabel`/`valueHash`/`costUsd`, and
+  heuristic dataflow edges.
 - **`cost.ts`** — `usageCostUsd(model, usage)`: regex-priced per model tier (unknown model
   falls back to the sonnet tier — never zero, so a mis-guess only mildly mis-estimates).
 - **`taxonomy.ts`** — classifies tool names (unknown tools degrade to `side_effect`).
 - **`redact.ts`** — sensitive-data redaction, applied in the server's `persistParsedRun`
   (the single choke point both capture paths flow through) BEFORE storage/analysis:
   provider/platform API keys, AWS creds, JWTs/bearer tokens, DB connection strings, PEM
-  blocks, emails, card-like numbers → typed `[REDACTED:<TYPE>]` placeholders. The
-  dashboard's `NEXT_PUBLIC_COLLECTOR_URL` env var drives install-snippet endpoints
-  (same rule as the site: no hardcoded domains).
-- **`determinism.ts`** — **the brain.** v1: `scoreDeterminism(graphs)` groups runs by L1
-  (shape) and scores per-node value agreement (≥90 replace / 70–89 cache / keep).
-  v2: `analyzeDeterminism(graphs)` adds three pattern detectors on top of exact
-  agreement — **memoize** (tool output is a pure function of its input: same input ⇒
-  same output, even when outputs differ across runs), **template** (value is structurally
-  fixed with volatile data slots ⇒ synthesize a parameterized tool; slots marked `⟨·⟩`),
-  and **route** (moderately stable LLM step ⇒ smaller model) — and weighs every score by
-  a **Wilson lower bound** so 2 agreeing runs never outrank 30. Analyzes every shape
-  cluster with support, not just the dominant one.
+  blocks, emails, card-like numbers → typed `[REDACTED:<TYPE>]` placeholders. Plus
+  **org-defined custom rules** (migration 010, `tenants.redaction_rules` jsonb):
+  `compileRedactionRules` (strict validation — ≤20 rules, ≤200-char patterns, safe
+  names; invalid entries reported, never thrown) + `applyRedactionRules`, applied AFTER
+  the built-ins; managed via `GET/PUT /api/v1/redaction` (org-admin gated) and the
+  dashboard's **Privacy** view. The dashboard's `NEXT_PUBLIC_COLLECTOR_URL` env var
+  drives install-snippet endpoints (same rule as the site: no hardcoded domains).
+- **`determinism.ts` + `align.ts` + `provenance.ts`** — **the brain (v3;
+  docs/determinism-v3.md).** `align.ts`: pairwise run similarity = 0.7·sequence edit
+  similarity over structLabels + 0.3·dataflow-topology Jaccard (the DAG's answer to
+  "are these runs pretty much the same?"), complete-link clustering, and
+  Needleman-Wunsch alignment of every run to the cluster medoid → COLUMNS.
+  `analyzeDeterminism(graphs)` scores each column on full-value hashes of RAW payloads
+  (canonicalization would erase the variance being measured) and lands it on the
+  lattice: **D0** constant → replace/compile · **D1** derivable (template + every slot
+  provenance-traced by `provenance.ts` to an upstream output / the prompt) → compile ·
+  **D2** pure (memoize evidence or mechanical taxonomy) · **D3** parameterized template ·
+  **D4** routable/cacheable · **D5** keep. Confidence = Wilson lower bound at the
+  winning detector's HONEST sample size; every action is confidence-gated. v1
+  `scoreDeterminism` (exact-L1, canonical values) is kept for compatibility.
+- **`embed.ts` + `drift.ts`** — **run embeddings + agent-change detection.**
+  `embedRunGraph` hashes the DAG into a 256-dim vector (SEQ block: structLabel
+  n-grams · FLOW block: dataflow edge pairs; blocks weighted √0.7/√0.3 so cosine
+  mirrors align.ts's similarity weighting). Deterministic, local, no embedding
+  API. `detectDrift` splits a window into baseline + newest-k probe, measures
+  probe distance to the baseline centroid in z-scores → `changed` +
+  `changedAt` (the "agent was modified" signal; on drift, validated tools
+  should be re-shadowed). Surfaced as `drift` per agent in `/api/v1/insights`
+  and a "⚠ behavior changed" badge in the Insights view.
+- **`synthesize.ts` + `replay.ts`** — **tool synthesis (the former "W4").**
+  `synthesizeTools(analyses)` slices maximal compilable column spans (clean/moderate
+  dataflow boundaries; side-effect steps flagged `guarded`) and emits deterministic
+  **ToolSpecs**: typed params (prompt/caller), body of recorded calls with `${param}` /
+  `${derive(cN.method)}` substitutions, output expectations, and measured savings
+  including the context-carriage tax. `replayToolSpec` validates a spec offline against
+  the recorded runs (recompute derivations → must reproduce recorded args) →
+  `ready` (≥95% pass over ≥10 runs) or `shadow`.
 
 ---
 
@@ -79,7 +109,11 @@ tracking table** — every statement must be idempotent (`if not exists`, `on co
 | `reports`, `clusters`, `cluster_runs`, `findings` | Analysis output. | |
 
 Migrations of note: `003` agents + scoped keys, `004` run-graph pointer, `006` Clerk
-tenant ref, **`007` `agents.optimized_at`** (the Optimized indicator).
+tenant ref, **`007` `agents.optimized_at`** (the Optimized indicator), `008` tenant
+limits, **`009` ownership** (`created_by`/`created_by_label` on `api_keys` + `agents` —
+who added/controls an agent; CLI registrations inherit from the registering key; all
+reads/writes column-guarded), **`010` `tenants.redaction_rules`** (org custom filters).
+Prod ALTERs for 009+010: `scripts/apply-ownership-redaction.mjs` (owner-run).
 
 `runs.agent_id` stores the agent **name** (keeps the engine/queries stable); `agents.id`
 binds credentials only.
@@ -107,15 +141,18 @@ Reads Neon directly via a pooled `pg` client (`lib/db.ts`).
 
 **API routes** (all Clerk-auth'd, `resolveTenant`, `force-dynamic`):
 - `GET /api/v1/agents` — per-agent rollup from `runs`: `n_runs`, `total_cost_usd`,
-  `models`, `optimized` (guarded if `optimized_at` column absent).
+  `models`, `optimized`, `added_by` (both guarded if their columns are absent).
+- `GET/PUT /api/v1/redaction` — workspace redaction rules (PUT is org-admin-only;
+  validated by `engine/redact.ts`; ingest caches compiled rules 60s per tenant).
 - `GET /api/v1/sessions[?agent=]` — the tenant's runs, newest first.
 - `GET /api/v1/sessions/[id]` — one run (with `parsed`) for the DAG deep-dive.
-- `GET /api/v1/insights[?agent=]` — **the determinism brain (v2)**: analyzes each
-  agent's **last 40 sessions** (SQL window function; fetches only `parsed->'steps'`,
-  so the scan stays bounded), clusters by execution shape, and emits per-node action
-  items — replace / **memoize** / **template** / **route** / cache — with Wilson-bound
-  confidence and estimated removable cost. Lean mirror of `core/determinism.ts`
-  `analyzeDeterminism` (no `core` dep on Vercel) — keep the two in sync.
+- `GET /api/v1/insights[?agent=&window=]` — **the determinism brain (v3)**: a thin
+  adapter over the REAL engine (vendored in `lib/engine/` — no hand-mirroring anymore).
+  Per agent, over the last `window` (default 40, 5–100) sessions: alignment clustering →
+  lattice scoring → merged opportunities with **stable ids** (hash of
+  agent+action+structLabel+template, so accept/dismiss can attach across windows) →
+  synthesized ToolSpecs with replay validation (`tools[]` in the response:
+  params, arg previews, savings incl. context-carriage, `replay.status` ready/shadow).
 
 **Views** (`Dashboard.tsx` drives `view` state; sidebar in `data.ts` `nav`):
 - **Overview** — KPI tiles, per-agent **Execution Graph** (original vs optimized), and
@@ -162,7 +199,10 @@ auth inside the handlers):
 - `POST /api/v1/agents` — CLI registration: tenant key → upsert agent + mint scoped key.
 - `GET /api/v1/reports` — key validation (`ccopt login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
-(types/cost/transcript/otel/redact/jsonb — copies of core; keep in sync).
+(types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
+synthesize/replay/embed/drift/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+re-vendor after core changes:
+`for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb
 sanitizing at the single write choke point; `blob_path='inline'`, no blob store).
 The CLI is published to npm as **`effigent`** (bin: `effigent`; config `~/.effigent`; keys minted `eff_`, legacy `cck_` accepted) (single-file esbuild CJS bundle, core
@@ -198,16 +238,19 @@ by `--ref`.
 
 The "brain" turns observed runs into activated optimizations. Sequenced:
 
-1. **Determinism analysis (MVP)** — ✅ **shipped** as `GET /api/v1/insights` + the
-   **Insights** view. Groups a tenant's runs per agent by execution shape, scores per-node
-   value agreement over `runs.parsed`, and emits replace/cache action items with estimated
-   removable cost. (Lean reimpl of `core/determinism.ts` so Vercel needs no workspace dep;
-   fold back into `core` if/when the API moves off Vercel.)
-2. **AI analyst** — an LLM pass over ~30 runs + the determinism signal → prioritized,
+1. **Determinism analysis** — ✅ **shipped, v3** (alignment clustering + D0–D5 lattice +
+   provenance; `core/determinism.ts` + `align.ts` + `provenance.ts`, vendored into the
+   dashboard's `GET /api/v1/insights` + the **Insights** view).
+2. **Tool synthesis + replay validation** — ✅ **shipped at the engine level**
+   (`core/synthesize.ts` + `core/replay.ts`; surfaced as `tools[]` in the insights
+   response). NOT yet shipped: the delivery vehicle — emitting an actual skill/MCP tool
+   file + PR, persistence of specs, accept/dismiss state on stable ids.
+3. **AI analyst** — an LLM pass over ~30 runs + the determinism signal → prioritized,
    human-readable action items with estimated savings.
-3. **DAG diff** — compare a run's graph across versions to measure how much a graph changed
-   after an optimization (the real "original vs optimized" for the Execution Graph).
-4. **The gateway** — the injection vehicle (proxy `base_url` / sidecar / Lambda) that
+4. **DAG diff** — compare runs before vs after `optimized_at` to prove the compiled
+   columns disappeared and $/run dropped (the real "original vs optimized" for the
+   Execution Graph; also closes the loop on replay-validated tools).
+5. **The gateway** — the injection vehicle (proxy `base_url` / sidecar / Lambda) that
    actually *enforces* an optimization at the LLM/tool boundary.
 
 ---

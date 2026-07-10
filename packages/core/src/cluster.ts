@@ -10,6 +10,8 @@
 import type { Cluster, ClusterMetrics, RunGraph, VolatileSlot } from './types.js';
 import { cacheReadRatio } from './cost.js';
 import { clusterFamilies } from './l2.js';
+import { normalizeWs } from './canonicalize.js';
+import { columnTemplate } from './determinism.js';
 
 function percentile(sortedAsc: number[], p: number): number {
   if (sortedAsc.length === 0) return 0;
@@ -72,20 +74,44 @@ function volatileSlots(runs: RunGraph[]): VolatileSlot[] {
   const slots: VolatileSlot[] = [];
   for (let i = 0; i < len; i++) {
     if (runs[0].nodes[i].kind !== 'tool_use' && runs[0].nodes[i].kind !== 'model_turn') continue;
-    const values = new Set<string>();
-    const examples: string[] = [];
-    for (const r of runs) {
-      const raw = r.nodes[i]?.raw ?? '';
-      if (!values.has(raw)) {
-        values.add(raw);
-        if (examples.length < 3) examples.push(raw.slice(0, 120));
+    const values = runs.map((r) => (r.nodes[i] ? normalizeWs(r.nodes[i].raw) : null));
+    // Token-level: report only the tokens that actually vary (a timestamp in
+    // an otherwise-constant payload is one slot, not a whole-value mismatch).
+    const t = columnTemplate(values);
+    if (t && t.slots > 0) {
+      const tuples = new Set<string>();
+      const examples: string[] = [];
+      for (const sv of t.slotValues) {
+        if (!sv) continue;
+        const tuple = sv.join(' · ');
+        if (!tuples.has(tuple)) {
+          tuples.add(tuple);
+          if (examples.length < 3) examples.push(tuple.slice(0, 120));
+        }
       }
+      if (tuples.size > 1) {
+        slots.push({
+          nodeIndex: i,
+          label: runs[0].nodes[i].label.slice(0, 120),
+          distinctValues: tuples.size,
+          examples,
+        });
+      }
+      continue;
     }
-    if (values.size > 1) {
+    // Structure itself varies — fall back to whole-value counting.
+    const distinct = new Set<string>();
+    const examples: string[] = [];
+    for (const v of values) {
+      if (v === null || distinct.has(v)) continue;
+      distinct.add(v);
+      if (examples.length < 3) examples.push(v.slice(0, 120));
+    }
+    if (distinct.size > 1) {
       slots.push({
         nodeIndex: i,
         label: runs[0].nodes[i].label.slice(0, 120),
-        distinctValues: values.size,
+        distinctValues: distinct.size,
         examples,
       });
     }
@@ -129,7 +155,10 @@ function computeMetrics(runs: RunGraph[], modalPathFraction: number): ClusterMet
     costP95Usd: percentile(costs, 95),
     firstSeen: dates[0],
     lastSeen: dates[dates.length - 1],
-    determinismScore: Math.max(0, Math.min(1, modalPathFraction * outputConsistency(runs))),
+    // Procedure stability only. Task-mix concentration is pathShare — mixing
+    // the two punished agents that legitimately run several procedures.
+    determinismScore: Math.max(0, Math.min(1, outputConsistency(runs))),
+    pathShare: Math.max(0, Math.min(1, modalPathFraction)),
     failureRate: runs.length === 0 ? 0 : failures / runs.length,
     retrySubchains: retries,
     modelMix,

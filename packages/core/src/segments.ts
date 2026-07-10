@@ -100,7 +100,9 @@ export function mineSegments(graphs: RunGraph[], maxSegments = MAX_SEGMENTS): Mi
 
   // Maximality: drop a segment if a strictly longer candidate with the SAME
   // support contains it (the longer one is the better compile unit).
-  const key = (labels: string[]) => labels.join('␞');
+  // Containment is checked on SEPARATOR-PADDED joins: a bare `.includes` can
+  // match mid-label ("foo bar␞baz" would falsely contain "bar␞baz").
+  const key = (labels: string[]) => `␞${labels.join('␞')}␞`;
   const byJoined = new Map(candidates.map((c) => [key(c.labels), c]));
   candidates = candidates.filter((c) => {
     for (const other of byJoined.values()) {

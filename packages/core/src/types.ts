@@ -4,6 +4,14 @@
 
 export type StepKind = 'model_turn' | 'tool_use' | 'tool_result' | 'thinking';
 
+/** Per-step token usage, when the capture path provides it. */
+export interface StepTokens {
+  input: number;
+  output: number;
+  cacheCreation?: number;
+  cacheRead?: number;
+}
+
 /** One step of a run, before canonicalization. */
 export interface RawStep {
   kind: StepKind;
@@ -16,6 +24,15 @@ export interface RawStep {
   /** IDs linking tool_use ↔ tool_result. */
   toolUseId?: string;
   timestamp?: string;
+  /** Model that produced this step (assistant messages / LLM spans). */
+  model?: string;
+  /**
+   * Measured tokens for this step. Transcripts: attributed to the FIRST step
+   * emitted per API request (dedup by requestId), so per-step costs sum to the
+   * run cost. OTLP: per LLM span.
+   */
+  tokens?: StepTokens;
+  durationMs?: number;
 }
 
 export interface TokenUsage {
@@ -50,11 +67,30 @@ export interface GraphNode {
   kind: StepKind;
   /** Canonical label: tool name + canonicalized input shape, or role + template. */
   label: string;
+  /**
+   * Content-blind structural label (tool identity + input SCHEMA only) — what
+   * alignment/clustering compare. Two runs doing the same procedure on
+   * different data share structLabels even when `label` differs.
+   */
+  structLabel: string;
   /** Canonicalized full I/O value (participates in L0 only). */
   canonicalValue: string;
+  /**
+   * sha256 of the whitespace-normalized FULL stored payload — value equality
+   * without canonicalization (numbers kept) and without display truncation.
+   * Determinism is SCORED on this; canonical values are for grouping/display.
+   */
+  valueHash: string;
   isError: boolean;
   /** Raw payload retained for volatile-slot extraction & synthesis. */
   raw: string;
+  /** Links tool_use ↔ tool_result for memoize pairing. */
+  toolUseId?: string;
+  model?: string;
+  /** Measured USD for this step when per-step tokens exist; else 0. */
+  costUsd: number;
+  tokensIn?: number;
+  tokensOut?: number;
 }
 
 export interface GraphEdge {
@@ -92,7 +128,14 @@ export interface ClusterMetrics {
   costP95Usd: number;
   firstSeen?: string;
   lastSeen?: string;
+  /**
+   * Within-cluster procedure stability (output consistency). Task-mix
+   * concentration lives in `pathShare` — the two are deliberately separate:
+   * an agent with three legitimate procedures is not "non-deterministic".
+   */
   determinismScore: number;
+  /** Share of the L2 family's runs on the modal L1 path (task-mix concentration). */
+  pathShare: number;
   failureRate: number;
   retrySubchains: number;
   modelMix: Record<string, number>;

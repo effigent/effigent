@@ -6,6 +6,8 @@
  * must be replaced before generic ones (hex ids, numbers) can eat their pieces.
  */
 
+import type { StepKind } from './types.js';
+
 const RE_URL = /https?:\/\/([^\s/"'<>)\]]+)[^\s"'<>)\]]*/g;
 const RE_UUID = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
 const RE_EMAIL = /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g;
@@ -49,6 +51,60 @@ export function stripControlChars(input: string): string {
     .replace(RE_CONTROL, '')
     .replace(RE_LONE_HI_SURROGATE, '')
     .replace(RE_LONE_LO_SURROGATE, '');
+}
+
+/**
+ * Whitespace-normalize WITHOUT any literal replacement: collapse runs, trim.
+ * This is the value determinism is scored on — numbers/ids are kept, because
+ * numeric variation is real non-determinism (canonicalizeText would erase it).
+ */
+export function normalizeWs(input: string): string {
+  return stripControlChars(input).replace(/\s+/g, ' ').trim();
+}
+
+function jsonTypeChar(v: unknown): string {
+  if (v === null || v === undefined) return 'z';
+  if (typeof v === 'string') return 's';
+  if (typeof v === 'number') return 'n';
+  if (typeof v === 'boolean') return 'b';
+  return Array.isArray(v) ? 'a' : 'o';
+}
+
+/**
+ * Content-blind structural label: tool identity + input SCHEMA (sorted keys +
+ * primitive types), never values. Alignment/clustering compare THESE, so
+ * "same procedure, different data" aligns even when free-text inputs differ —
+ * the fine-grained `label` (which embeds value templates) cannot promise that.
+ */
+export function structLabelOf(
+  kind: StepKind,
+  name: string,
+  payload: string,
+  isError?: boolean,
+): string {
+  switch (kind) {
+    case 'tool_use': {
+      try {
+        const input: unknown = JSON.parse(payload);
+        if (input && typeof input === 'object' && !Array.isArray(input)) {
+          const schema = Object.keys(input as Record<string, unknown>)
+            .sort()
+            .map((k) => `${k}:${jsonTypeChar((input as Record<string, unknown>)[k])}`)
+            .join(',');
+          return `tool:${name}(${schema})`;
+        }
+        return `tool:${name}(${jsonTypeChar(input)})`;
+      } catch {
+        return `tool:${name}(raw)`;
+      }
+    }
+    case 'tool_result':
+      return `result:${name}:${isError ? 'err' : 'ok'}`;
+    case 'thinking':
+      return 'think';
+    default:
+      return `llm:${name}`;
+  }
 }
 
 /** Replace volatile literals in a string. Preserves case and spacing. */

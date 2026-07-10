@@ -5,7 +5,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { RawStep, Run, TokenUsage } from './types.js';
+import type { RawStep, Run, StepTokens, TokenUsage } from './types.js';
 import { addUsage, emptyUsage, usageCostUsd } from './cost.js';
 
 interface TranscriptLine {
@@ -155,30 +155,42 @@ export function parseTranscript(
       // assistant
       if (typeof obj.costUSD === 'number') legacyCostUsd += obj.costUSD;
       if (msg.model) models.add(msg.model);
+      // Usage repeats across lines of the same API request — dedupe, and
+      // attribute the request's tokens to the FIRST step it emits so per-step
+      // costs sum to the run cost (a tool call's cost lands on the tool_use
+      // that the model turn issued — exactly where the optimizer charges it).
+      let tokensToAttach: StepTokens | undefined;
       if (msg.usage && msg.model) {
-        // Usage repeats across lines that belong to the same API request — dedupe.
         const key = obj.requestId ?? obj.uuid ?? `${obj.timestamp}`;
         if (!seenUsageKeys.has(key)) {
           seenUsageKeys.add(key);
           hasUsage = true;
-          usageByModel[msg.model] = addUsage(
-            usageByModel[msg.model] ?? emptyUsage(),
-            toUsage(msg.usage),
-          );
+          const u = toUsage(msg.usage);
+          usageByModel[msg.model] = addUsage(usageByModel[msg.model] ?? emptyUsage(), u);
+          tokensToAttach = {
+            input: u.inputTokens,
+            output: u.outputTokens,
+            cacheCreation: u.cacheCreationInputTokens,
+            cacheRead: u.cacheReadInputTokens,
+          };
         }
       }
+      const pushAssistantStep = (step: RawStep) => {
+        steps.push({ ...step, model: msg.model, tokens: tokensToAttach });
+        tokensToAttach = undefined;
+      };
       const content = msg.content;
       if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as { type?: string; text?: string; name?: string; id?: string; input?: unknown };
           if (b.type === 'text' && b.text?.trim()) {
             finalOutput = b.text;
-            steps.push({ kind: 'model_turn', name: 'assistant', payload: b.text, timestamp: obj.timestamp });
+            pushAssistantStep({ kind: 'model_turn', name: 'assistant', payload: b.text, timestamp: obj.timestamp });
           } else if (b.type === 'thinking') {
-            steps.push({ kind: 'thinking', name: 'assistant', payload: '', timestamp: obj.timestamp });
+            pushAssistantStep({ kind: 'thinking', name: 'assistant', payload: '', timestamp: obj.timestamp });
           } else if (b.type === 'tool_use' && b.name) {
             if (b.id) toolNameById.set(b.id, b.name);
-            steps.push({
+            pushAssistantStep({
               kind: 'tool_use',
               name: b.name,
               payload: JSON.stringify(b.input ?? {}),

@@ -15,6 +15,8 @@ const PRICING_TABLE: Array<{ match: RegExp; pricing: Pricing }> = [
   { match: /opus/i, pricing: { inputPerM: 15, outputPerM: 75 } },
   { match: /sonnet/i, pricing: { inputPerM: 3, outputPerM: 15 } },
   { match: /haiku/i, pricing: { inputPerM: 0.8, outputPerM: 4 } },
+  { match: /gpt-4o-mini/i, pricing: { inputPerM: 0.15, outputPerM: 0.6 } },
+  { match: /gpt-4o/i, pricing: { inputPerM: 2.5, outputPerM: 10 } },
 ];
 
 const FALLBACK: Pricing = { inputPerM: 3, outputPerM: 15 };
