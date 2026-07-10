@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ALL_AGENTS } from '../data.ts';
 import { Ic } from '../icons.tsx';
+import { AgentTools } from './AgentTools.tsx';
 
 interface SessionRow {
   session_id: string;
@@ -87,6 +88,9 @@ export function Sessions({
           <span className="v tnum">{usd(totalCost)}</span>
         </div>
       </div>
+
+      {/* injected-tool registry for the selected agent (per-tool disable) */}
+      {agent !== ALL_AGENTS && <AgentTools agent={agent} />}
 
       {/* per-agent totals (only in the all-agents view) */}
       {agent === ALL_AGENTS && agents.length > 0 && (

@@ -8,7 +8,7 @@
  */
 
 import { Command } from 'commander';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
@@ -641,25 +641,69 @@ installCmd
       }
     }
     // Absolute node + cli paths: hooks run without nvm/homebrew PATH. The scoped
-    // key is NOT written here — claude-hook reads it from ~/.effigent/config.json.
-    const command = `${process.execPath} ${resolve(process.argv[1])} claude-hook --agent ${opts.agent}`;
+    // key is NOT written here — the hook commands read it from ~/.effigent/config.json.
+    const bin = `${process.execPath} ${resolve(process.argv[1])}`;
     const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
-    const sessionEnd = (Array.isArray(hooks.SessionEnd) ? hooks.SessionEnd : []) as Array<{
-      hooks?: Array<{ type?: string; command?: string }>;
-    }>;
-    const already = sessionEnd.some((g) =>
-      (g.hooks ?? []).some((h) => typeof h.command === 'string' && h.command.includes(`claude-hook --agent ${opts.agent}`)),
-    );
-    if (already) {
-      console.log(`✓ hook for '${opts.agent}' already present in ${settingsPath}`);
+    type HookGroup = { hooks?: Array<{ type?: string; command?: string }> };
+    const addHook = (event: string, command: string, marker: string): boolean => {
+      const groups = (Array.isArray(hooks[event]) ? hooks[event] : []) as HookGroup[];
+      const already = groups.some((g) => (g.hooks ?? []).some((h) => typeof h.command === 'string' && h.command.includes(marker)));
+      if (!already) {
+        groups.push({ hooks: [{ type: 'command', command }] });
+        hooks[event] = groups;
+      }
+      return !already;
+    };
+    const addedEnd = addHook('SessionEnd', `${bin} claude-hook --agent ${opts.agent}`, `claude-hook --agent ${opts.agent}`);
+    // Auto-injection: every session start refreshes the optimization bundle +
+    // skill (throttled + fail-open inside claude-refresh — never blocks work).
+    const addedStart = addHook('SessionStart', `${bin} claude-refresh --agent ${opts.agent}`, `claude-refresh --agent ${opts.agent}`);
+    if (!addedEnd && !addedStart) {
+      console.log(`✓ hooks for '${opts.agent}' already present in ${settingsPath}`);
       return;
     }
-    sessionEnd.push({ hooks: [{ type: 'command', command }] });
-    hooks.SessionEnd = sessionEnd;
     mkdirSync(dirname(settingsPath), { recursive: true });
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    console.log(`✓ installed SessionEnd hook for '${opts.agent}' in ${settingsPath}`);
-    console.log('Each finished Claude Code session now uploads automatically — no polling; key stays in ~/.effigent/config.json.');
+    console.log(`✓ installed hooks for '${opts.agent}' in ${settingsPath}`);
+    console.log('  SessionEnd → uploads each finished session · SessionStart → keeps the optimization bundle fresh (auto-injection).');
+  });
+
+program
+  .command('claude-refresh')
+  .description('(internal) Claude Code SessionStart hook — refreshes the optimization bundle + skill; throttled and fail-open')
+  .requiredOption('--agent <name>', 'registered agent name')
+  .action(async (opts) => {
+    try {
+      const bundleDir = join(CCOPT_HOME, 'bundles', slugify(opts.agent));
+      const bundlePath = join(bundleDir, 'bundle.json');
+      // Throttle: at most one refresh per 15 minutes.
+      if (existsSync(bundlePath) && Date.now() - statSync(bundlePath).mtimeMs < 15 * 60_000) return;
+      const config = loadConfig();
+      const server: string | undefined = (process.env.EFFIGENT_SERVER ?? process.env.CCOPT_SERVER) ?? config.server;
+      const apiKey: string | undefined = config.agents?.[opts.agent]?.key ?? config.apiKey;
+      if (!server || !apiKey) return;
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 5000);
+      const res = await fetch(
+        `${server.replace(/\/$/, '')}/api/v1/optimize?agent=${encodeURIComponent(opts.agent)}&mark=1`,
+        { headers: { authorization: `Bearer ${apiKey}` }, signal: ctl.signal },
+      );
+      clearTimeout(timer);
+      if (!res.ok) return;
+      const bundle = (await res.json()) as Bundle;
+      mkdirSync(bundleDir, { recursive: true });
+      writeFileSync(bundlePath, JSON.stringify(bundle, null, 2));
+      const ready = bundle.tools.filter((t) => t.replay?.status === 'ready');
+      if (ready.length > 0 || (bundle.knowledge?.worthIt ?? false)) {
+        const executables = new Set(ready.filter(isExecutable).map((t) => t.id));
+        const skillDir = join(homedir(), '.claude', 'skills', `effigent-${slugify(opts.agent)}`);
+        mkdirSync(skillDir, { recursive: true });
+        writeFileSync(join(skillDir, 'SKILL.md'), renderSkill(bundle, executables));
+        console.error(`[effigent] bundle refreshed: ${ready.length} tool(s), ${bundle.knowledge?.entries.length ?? 0} fact(s)`);
+      }
+    } catch {
+      /* fail-open — a refresh problem must never block a session */
+    }
   });
 
 program
@@ -716,9 +760,13 @@ interface BundleKnowledgeEntry {
 interface BundleKnowledge {
   entries: BundleKnowledgeEntry[]; coverage: number; estUsdPerRun: number; worthIt: boolean;
 }
+interface BundleSubstitution {
+  slot: number; kind: 'param' | 'derive'; param?: string; sourceColumn?: number; method?: string;
+}
 interface BundleToolStep {
+  column: number; resultColumn?: number;
   tool: string; argTemplate: string; expectedOutputTemplate?: string;
-  class: string; guarded: boolean; substitutions: unknown[];
+  class: string; guarded: boolean; substitutions: BundleSubstitution[];
 }
 interface BundleTool {
   id: string; name: string; params: Array<{ name: string; type: string; source: string; examples: string[] }>;
@@ -735,111 +783,103 @@ interface Bundle {
 
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
 
-function renderSkill(bundle: Bundle, scripts: Map<string, string>): string {
+/* --- deterministic executability ------------------------------------------
+ * A tool is EXECUTABLE when code can run every step without an LLM: read-only
+ * step classes, tools the executor implements, and only constructive
+ * derivations (json:/line: reconstruct values; `substr` can merely verify).
+ * Executable tools appear in the skill as ONE command — the LLM's entire job
+ * is deciding to run it and reading the final answer.
+ * -------------------------------------------------------------------------- */
+const EXEC_TOOLS = new Set(['bash', 'read', 'glob', 'grep', 'ls', 'webfetch', 'web_fetch']);
+
+function isExecutable(t: BundleTool): boolean {
+  return (
+    t.body.length > 0 &&
+    t.body.every(
+      (s) =>
+        !s.guarded &&
+        (s.class === 'mechanical' || s.class === 'cacheable') &&
+        EXEC_TOOLS.has(s.tool.toLowerCase()) &&
+        s.substitutions.every(
+          (sub) =>
+            sub.kind === 'param' ||
+            (sub.kind === 'derive' && !!sub.method && (sub.method.startsWith('json:') || sub.method.startsWith('line:'))),
+        ),
+    )
+  );
+}
+
+function paramUsage(t: BundleTool): string {
+  return t.params.map((p) => `<${p.name}:${p.type}>`).join(' ');
+}
+
+function renderSkill(bundle: Bundle, executables: Set<string>): string {
   const lines: string[] = [];
   lines.push('---');
   lines.push(`name: effigent-${slugify(bundle.agentId)}`);
   lines.push(
-    `description: Auto-generated by Effigent for agent "${bundle.agentId}" — known facts and compiled procedures mined from its last ${bundle.runCount} runs. Consult BEFORE exploring the repo or re-running lookups.`,
+    `description: Auto-generated by Effigent for agent "${bundle.agentId}" — known facts and compiled tools from its last ${bundle.runCount} runs. Consult BEFORE exploring the repo; run compiled tools INSTEAD of performing their steps.`,
   );
   lines.push('---', '');
-  lines.push(`# Effigent optimization bundle — ${bundle.agentId}`);
+  lines.push(`# Effigent — ${bundle.agentId}`);
   lines.push('');
   lines.push(
     `Generated ${bundle.generatedAt ?? 'now'} from the last ${bundle.runCount} runs. ` +
-      'Do not edit by hand — regenerate with `effigent optimize`.',
+      'Do not edit — regenerate with `effigent optimize`.',
   );
 
-  const facts = bundle.knowledge?.entries ?? [];
-  if (facts.length > 0) {
-    lines.push('', '## Known facts (knowledge graph)', '');
+  const ready = bundle.tools.filter((t) => t.replay?.status === 'ready');
+  const exec = ready.filter((t) => executables.has(t.id));
+  const recipes = ready.filter((t) => !executables.has(t.id));
+
+  if (exec.length > 0) {
+    lines.push('', '## Compiled tools — run these INSTEAD of performing the steps', '');
     lines.push(
-      'Answers this agent keeps re-discovering. **Use these instead of re-running the lookups**; ' +
-        're-verify only if something contradicts them.',
+      'Each command executes the whole recorded procedure deterministically in code — ' +
+        'no reasoning, no intermediate results in context. It prints only the final answer.',
     );
-    for (const f of facts) {
-      lines.push('', `### ${f.kind} · ${f.tool} — \`${f.key.replace(/`/g, "'")}\``);
-      lines.push('```', f.value, '```');
-      lines.push(`_(stable across ${f.support} runs, confidence ±${f.confidence})_`);
+    for (const t of exec) {
+      lines.push('', `### ${t.name}`);
+      lines.push('```', `effigent tool ${bundle.agentId} ${t.name}${t.params.length ? ` ${paramUsage(t)}` : ''}`.trim(), '```');
+      for (const p of t.params) {
+        lines.push(`- \`${p.name}\` (${p.type}, from ${p.source}) — e.g. \`${p.examples[0] ?? ''}\``);
+      }
+      if (t.postcondition) lines.push(`Returns: \`${t.postcondition.slice(0, 120).replace(/`/g, "'")}\``);
+      lines.push(
+        `_(${t.body.length} steps · validated ${t.replay!.runsChecked} replays at ${Math.round((t.replay!.passRate) * 100)}% · saves ~$${t.savings.perRunUsd}/run)_`,
+      );
     }
   }
 
-  const tools = bundle.tools.filter((t) => t.replay?.status === 'ready');
-  const shadow = bundle.tools.filter((t) => t.replay?.status !== 'ready');
-  if (tools.length > 0) {
-    lines.push('', '## Compiled procedures (replay-validated)', '');
-    lines.push(
-      'Recurring step chains whose arguments are constant or derivable. Follow the recipe ' +
-        '(or run the script) instead of re-deriving each step with reasoning.',
-    );
-    for (const t of tools) {
-      lines.push('', `### ${t.name}`);
-      lines.push(
-        `Seen in ${Math.round(t.evidence.support * 100)}% of ${t.evidence.runs} runs · ` +
-          `validated ${t.replay!.runsChecked} replays at ${Math.round(t.replay!.passRate * 100)}% · ` +
-          `saves ~$${t.savings.perRunUsd}/run`,
-      );
-      if (t.params.length > 0) {
-        lines.push('', 'Parameters:');
-        for (const p of t.params) {
-          lines.push(`- \`${p.name}\` (${p.type}, from ${p.source}) — e.g. \`${p.examples[0] ?? ''}\``);
-        }
-      }
-      const script = scripts.get(t.id);
-      if (script) {
-        lines.push('', `Fully deterministic — run \`scripts/${script}\` instead of performing the steps.`);
-      }
-      lines.push('', 'Steps:');
+  if (recipes.length > 0) {
+    lines.push('', '## Validated recipes (not yet executable as code)', '');
+    lines.push('Follow exactly — the arguments are known in advance, so do not re-derive them.');
+    for (const t of recipes) {
+      lines.push('', `### ${t.name} — ${t.body.length} steps, saves ~$${t.savings.perRunUsd}/run`);
       t.body.forEach((s, i) => {
-        lines.push(`${i + 1}. **${s.tool}**${s.guarded ? ' ⚠ side-effect — verify before running' : ''} — \`${s.argTemplate.replace(/`/g, "'")}\``);
-        if (s.expectedOutputTemplate) {
-          lines.push(`   - expect: \`${s.expectedOutputTemplate.slice(0, 160).replace(/`/g, "'")}\``);
-        }
+        lines.push(`${i + 1}. **${s.tool}**${s.guarded ? ' ⚠ side-effect — verify first' : ''} — \`${s.argTemplate.slice(0, 160).replace(/`/g, "'")}\``);
       });
     }
   }
-  if (shadow.length > 0) {
-    lines.push('', `_${shadow.length} more candidate procedure(s) are still in shadow validation — not installed._`);
-  }
-  lines.push('');
-  return lines.join('\n');
-}
 
-/** Fully-constant, side-effect-free Bash procedures become runnable scripts. */
-function emitScripts(bundle: Bundle, dir: string): Map<string, string> {
-  const emitted = new Map<string, string>();
-  for (const t of bundle.tools) {
-    if (t.replay?.status !== 'ready') continue;
-    const allSafe =
-      t.body.length > 0 &&
-      t.body.every(
-        (s) =>
-          s.tool.toLowerCase() === 'bash' &&
-          s.substitutions.length === 0 &&
-          !s.guarded &&
-          (s.class === 'mechanical' || s.class === 'cacheable'),
-      );
-    if (!allSafe) continue;
-    const commands: string[] = [];
-    for (const s of t.body) {
-      try {
-        const cmd = (JSON.parse(s.argTemplate) as { command?: string }).command;
-        if (typeof cmd === 'string' && cmd.length > 0) commands.push(cmd);
-      } catch {
-        /* templated/non-JSON args — skip script emission for this tool */
+  const facts = bundle.knowledge?.entries ?? [];
+  if (facts.length > 0) {
+    lines.push('', '## Known facts — read these, do NOT re-run the lookups', '');
+    for (const f of facts) {
+      const key = f.key.replace(/`/g, "'").slice(0, 160);
+      if (f.value.length <= 80 && !f.value.includes('\n')) {
+        lines.push(`- ${f.kind} \`${key}\` → \`${f.value.replace(/`/g, "'")}\` _(${f.support}×)_`);
+      } else {
+        lines.push('', `### ${f.kind} · \`${key}\` _(${f.support}× stable)_`);
+        lines.push('```', f.value, '```');
       }
     }
-    if (commands.length !== t.body.length) continue;
-    const file = `${slugify(t.name)}.sh`;
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, file),
-      `#!/bin/sh\n# generated by effigent optimize — ${t.name} (replay-validated recorded procedure)\nset -e\n${commands.join('\n')}\n`,
-      { mode: 0o755 },
-    );
-    emitted.set(t.id, file);
   }
-  return emitted;
+
+  const shadow = bundle.tools.length - ready.length;
+  if (shadow > 0) lines.push('', `_${shadow} candidate procedure(s) still in shadow validation — not installed._`);
+  lines.push('');
+  return lines.join('\n');
 }
 
 program
@@ -901,15 +941,189 @@ program
         console.log('  nothing activatable yet — skill not installed (bundle.json kept for inspection)');
         return;
       }
+      const executables = new Set(
+        bundle.tools.filter((t) => t.replay?.status === 'ready' && isExecutable(t)).map((t) => t.id),
+      );
       const skillDir = join(homedir(), '.claude', 'skills', `effigent-${slugify(agentName)}`);
       mkdirSync(skillDir, { recursive: true });
-      const scripts = emitScripts(bundle, join(skillDir, 'scripts'));
-      writeFileSync(join(skillDir, 'SKILL.md'), renderSkill(bundle, scripts));
+      writeFileSync(join(skillDir, 'SKILL.md'), renderSkill(bundle, executables));
       console.log(`✓ Claude Code skill installed: ${skillDir}`);
-      if (scripts.size > 0) console.log(`  ${scripts.size} runnable script(s) in ${join(skillDir, 'scripts')}`);
-      console.log('  The agent now reads facts instead of re-exploring, and follows validated recipes for recurring procedures.');
+      console.log(
+        `  ${executables.size} tool(s) run as CODE via \`effigent tool\` — zero LLM tokens inside; ` +
+          `${ready - executables.size} stay as recipes; facts replace re-exploration.`,
+      );
       console.log('  SDK/OTel agents: load bundle.json programmatically (facts → system context, tools → functions).');
     }
+  });
+
+/* ----------------------------------------------------------------------------
+ * effigent tool — the deterministic executor. Runs a compiled ToolSpec's body
+ * entirely in code: read-only bash, file reads, globs, greps, fetches, with
+ * derive() extractions computed from intermediate outputs that NEVER enter the
+ * LLM's context. The agent's whole job: one decision + one final answer.
+ * -------------------------------------------------------------------------- */
+
+function extractDerived(raw: string, method: string): string {
+  if (method.startsWith('json:')) {
+    const path = method.slice(5);
+    let v: unknown = JSON.parse(raw);
+    if (path !== '') {
+      for (const part of path.split('.')) {
+        if (v === null || typeof v !== 'object') throw new Error(`json path ${path} not found`);
+        v = (v as Record<string, unknown>)[part];
+      }
+    }
+    if (v === null || v === undefined || typeof v === 'object') throw new Error(`json path ${path} not a scalar`);
+    return String(v);
+  }
+  if (method.startsWith('line:')) {
+    const k = Number(method.slice(5));
+    const line = raw.split('\n')[k];
+    if (line === undefined) throw new Error(`line ${k} out of range`);
+    return line.trim();
+  }
+  throw new Error(`non-constructive derivation '${method}'`);
+}
+
+const jsonEscape = (v: string) => JSON.stringify(v).slice(1, -1);
+
+function globToRegex(pattern: string): RegExp {
+  const esc = pattern.replace(/[.+^$()|[\]\\]/g, '\\$&')
+    .replace(/\*\*\//g, '§§SLASH§§').replace(/\*\*/g, '§§ALL§§')
+    .replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')
+    .replace(/§§SLASH§§/g, '(?:.*/)?').replace(/§§ALL§§/g, '.*');
+  return new RegExp(`^${esc}$`);
+}
+
+function* walkFiles(dir: string, depth = 0): Generator<string> {
+  if (depth > 12) return;
+  const entries = (() => { try { return readdirSync(dir, { withFileTypes: true }); } catch { return []; } })();
+  for (const e of entries) {
+    if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist' || e.name === '.next') continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) yield* walkFiles(p, depth + 1);
+    else if (e.isFile()) yield p;
+  }
+}
+
+async function execStep(tool: string, args: Record<string, unknown>): Promise<string> {
+  const t = tool.toLowerCase();
+  if (t === 'bash') {
+    const cmd = String(args.command ?? '');
+    const r = spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8', timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
+    if (r.status !== 0) throw new Error(`command failed (${r.status}): ${(r.stderr || r.stdout || '').slice(0, 300)}`);
+    return (r.stdout ?? '').slice(0, 100_000);
+  }
+  if (t === 'read') {
+    return readFileSync(String(args.file_path ?? args.path ?? ''), 'utf8').slice(0, 100_000);
+  }
+  if (t === 'glob') {
+    const pattern = String(args.pattern ?? '');
+    const re = globToRegex(pattern);
+    const out: string[] = [];
+    for (const f of walkFiles(process.cwd())) {
+      const rel = f.slice(process.cwd().length + 1);
+      if (re.test(rel)) { out.push(rel); if (out.length >= 2000) break; }
+    }
+    return out.sort().join('\n');
+  }
+  if (t === 'grep' || t === 'ls') {
+    if (t === 'ls') {
+      const dir = String(args.path ?? '.');
+      return readdirSync(resolve(dir)).sort().join('\n');
+    }
+    const pattern = String(args.pattern ?? '');
+    let re: RegExp;
+    try { re = new RegExp(pattern); } catch { re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
+    const root = resolve(String(args.path ?? '.'));
+    const matches: string[] = [];
+    for (const f of walkFiles(root)) {
+      let text: string;
+      try { text = readFileSync(f, 'utf8'); } catch { continue; }
+      if (text.length > 1_000_000 || text.includes('\u0000')) continue;
+      const rel = f.slice(process.cwd().length + 1) || f;
+      text.split('\n').forEach((line, i) => {
+        if (matches.length < 200 && re.test(line)) matches.push(`${rel}:${i + 1}:${line.slice(0, 200)}`);
+      });
+      if (matches.length >= 200) break;
+    }
+    return matches.join('\n');
+  }
+  if (t === 'webfetch' || t === 'web_fetch') {
+    const res = await fetch(String(args.url ?? ''));
+    if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`);
+    return (await res.text()).slice(0, 100_000);
+  }
+  throw new Error(`executor does not implement tool '${tool}'`);
+}
+
+program
+  .command('tool')
+  .description('Execute a compiled ToolSpec deterministically — code instead of LLM (prints only the final answer)')
+  .argument('<agent>', 'agent name (bundle from `effigent optimize`)')
+  .argument('<name>', 'tool name from the bundle')
+  .argument('[params...]', 'parameter values, in the order listed by the skill')
+  .option('-v, --verbose', 'print per-step trace to stderr')
+  .action(async (agentName: string, toolName: string, params: string[], opts) => {
+    const bundlePath = join(CCOPT_HOME, 'bundles', slugify(agentName), 'bundle.json');
+    if (!existsSync(bundlePath)) {
+      console.error(`No bundle for '${agentName}' — run \`effigent optimize ${agentName}\` first.`);
+      process.exitCode = 2;
+      return;
+    }
+    const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as Bundle;
+    const tool = bundle.tools.find((t) => t.name === toolName || t.id === toolName);
+    if (!tool) {
+      console.error(`Tool '${toolName}' not in the bundle. Available: ${bundle.tools.map((t) => t.name).join(', ') || '(none)'}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (!isExecutable(tool)) {
+      console.error(`'${toolName}' is not executable as code (side-effect or non-constructive derivation) — follow its recipe in the skill instead.`);
+      process.exitCode = 2;
+      return;
+    }
+    if (params.length < tool.params.length) {
+      console.error(`Missing parameters. Usage: effigent tool ${agentName} ${tool.name} ${paramUsage(tool)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const paramValues = new Map(tool.params.map((p, i) => [p.name, params[i]]));
+
+    const outputs = new Map<number, string>();
+    let final = '';
+    for (const step of tool.body) {
+      // Resolve ${pN} and ${derive(cN.method)} markers, JSON-escaped (the
+      // template is a canonicalized JSON payload).
+      const argJson = step.argTemplate.replace(/\$\{([^}]+)\}/g, (_m, token: string) => {
+        const d = token.match(/^derive\(c(\d+)\.(.+)\)$/);
+        if (d) {
+          const src = outputs.get(Number(d[1]));
+          if (src === undefined) throw new Error(`step ${step.column}: derivation source c${d[1]} not yet executed`);
+          return jsonEscape(extractDerived(src, d[2]));
+        }
+        const v = paramValues.get(token);
+        if (v === undefined) throw new Error(`step ${step.column}: unbound parameter ${token}`);
+        return jsonEscape(v);
+      });
+      let args: Record<string, unknown>;
+      try {
+        args = JSON.parse(argJson) as Record<string, unknown>;
+      } catch {
+        throw new Error(`step ${step.column}: resolved arguments are not valid JSON: ${argJson.slice(0, 200)}`);
+      }
+      if (opts.verbose) console.error(`→ ${step.tool} ${JSON.stringify(args).slice(0, 200)}`);
+      const out = await execStep(step.tool, args);
+      outputs.set(step.resultColumn ?? step.column + 1, out);
+      final = out;
+      if (step.expectedOutputTemplate && !step.expectedOutputTemplate.includes('⟨·⟩')) {
+        const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+        if (norm(out) !== norm(step.expectedOutputTemplate)) {
+          console.error(`⚠ step ${step.column}: output differs from the validated expectation — repo/world state may have changed; consider re-running \`effigent optimize\`.`);
+        }
+      }
+    }
+    process.stdout.write(final.endsWith('\n') ? final : `${final}\n`);
   });
 
 program.parseAsync().catch((err) => {

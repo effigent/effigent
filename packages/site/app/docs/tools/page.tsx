@@ -64,18 +64,20 @@ export default function ToolsDocs() {
 # ✓ Claude Code skill installed: ~/.claude/skills/effigent-billing-agent`}</CodeBlock>
         <div style={{ fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.75, marginTop: 12 }}>
           <p style={{ margin: '0 0 10px' }}>
-            <strong>Claude Code:</strong> a generated skill — known facts as a &quot;consult before exploring&quot; section,
-            ready tools as step-by-step recipes, and fully-constant read-only procedures as runnable scripts. No agent code
-            changes; the skill is configuration, removable by deleting a folder.
+            <strong>Code, not LLM:</strong> executable tools run as ONE command — <code>effigent tool &lt;agent&gt; &lt;name&gt;</code>{' '}
+            executes the whole recorded procedure deterministically (reads, globs, greps, read-only bash, fetches), computes
+            every <code>derive()</code> in code, and prints only the final answer. The LLM&apos;s entire involvement: one
+            decision and one result — intermediate outputs never enter its context.
           </p>
           <p style={{ margin: '0 0 10px' }}>
-            <strong>SDK / OTel agents:</strong> consume <code>bundle.json</code> programmatically — facts into system context,
-            ready ToolSpecs as functions.
+            <strong>Automatic:</strong> <code>effigent install claude</code> wires a SessionStart hook that refreshes the
+            bundle and skill before each session (throttled, fail-open — a refresh problem never blocks work). SDK / OTel
+            agents consume <code>bundle.json</code> programmatically.
           </p>
           <p style={{ margin: 0 }}>
-            The command stamps the agent <strong>Optimized</strong> in the dashboard, and the drift detector watches the
-            newest runs — if the agent&apos;s behavior shifts, re-run <code>effigent optimize</code> to regenerate against the
-            new window.
+            <strong>Your switch:</strong> clicking an agent in the dashboard shows every injected tool — status, pass rate,
+            measured savings — with a per-tool toggle. Disabled tools drop out of the bundle at the next refresh. Drift in the
+            agent&apos;s behavior flags the bundle for regeneration.
           </p>
         </div>
       </DocSection>

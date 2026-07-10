@@ -35,6 +35,20 @@ console.log('✓ 009 agent/key ownership columns applied');
 await c.query("alter table tenants add column if not exists redaction_rules jsonb not null default '[]'::jsonb");
 console.log('✓ 010 tenants.redaction_rules applied');
 
+// 011 — injected-tool registry with per-tool enable/disable
+await c.query(`create table if not exists agent_tools (
+  tenant_id  uuid not null references tenants(id) on delete cascade,
+  agent_id   text not null,
+  tool_id    text not null,
+  name       text not null,
+  status     text not null default 'shadow',
+  enabled    boolean not null default true,
+  spec       jsonb not null,
+  updated_at timestamptz not null default now(),
+  primary key (tenant_id, agent_id, tool_id)
+)`);
+console.log('✓ 011 agent_tools applied');
+
 if (agent && user) {
   const r = await c.query('update agents set created_by_label = $2 where name = $1 returning name', [agent, user]);
   console.log(r.rowCount ? `✓ ${agent} → added by ${user}` : `! no agents row named ${agent}`);
