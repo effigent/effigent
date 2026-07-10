@@ -11,6 +11,7 @@ import { Command } from 'commander';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { analyzeRuns, renderReportHtml } from '@ccopt/core';
@@ -573,13 +574,21 @@ const OTEL_HARNESSES: Record<string, { title: string; render: (base: string, key
   },
   python: {
     title: 'Python agents — LangGraph / CrewAI / AutoGen / OpenAI Agents (OpenLLMetry)',
+    // baseUrl/api_endpoint is the BASE — the SDK appends /v1/traces itself
+    // (passing the full path double-appends → 404).
     render: (base, key) =>
-      `pip install traceloop-sdk\n\n# once at startup — auto-instruments openai/anthropic + the frameworks:\nfrom traceloop.sdk import Traceloop\nTraceloop.init(\n    api_endpoint="${base}/v1/traces",\n    headers={"Authorization": "Bearer ${key}"},\n)`,
+      `pip install traceloop-sdk\n\n# once at startup — auto-instruments openai/anthropic + the frameworks:\nfrom traceloop.sdk import Traceloop\nTraceloop.init(\n    api_endpoint="${base}",\n    headers={"Authorization": "Bearer ${key}"},\n)`,
   },
   node: {
     title: 'Node / TS agents (OpenLLMetry)',
+    // baseUrl is the BASE — @traceloop/node-server-sdk appends /v1/traces.
     render: (base, key) =>
-      `npm i @traceloop/node-server-sdk\n\n// before your agent runs — auto-instruments the openai/anthropic clients:\nimport * as traceloop from "@traceloop/node-server-sdk";\ntraceloop.initialize({\n  baseUrl: "${base}/v1/traces",\n  headers: { Authorization: "Bearer ${key}" },\n});`,
+      `npm i @traceloop/node-server-sdk\n\n// before your agent runs — auto-instruments the openai/anthropic clients:\nimport * as traceloop from "@traceloop/node-server-sdk";\ntraceloop.initialize({\n  baseUrl: "${base}",\n  headers: { Authorization: "Bearer ${key}" },\n  disableBatch: true,\n});`,
+  },
+  proxy: {
+    title: 'Proxy fallback — any OpenAI-compatible agent you cannot instrument',
+    render: (base, key) =>
+      `# Start the local capturing gateway (forwards to OpenAI, mirrors each call to Effigent):\neffigent proxy --agent <name>\n\n# Point your agent's OpenAI client at it — no SDK, no code changes:\nexport OPENAI_BASE_URL=http://localhost:4319/v1\n# (your existing OPENAI_API_KEY still authenticates upstream; the proxy never stores it)\n\n# Reports to: ${base}/v1/traces  ·  Bearer ${key}`,
   },
   generic: {
     title: 'Any OTel-capable agent',
@@ -610,7 +619,7 @@ installCmd
   .option('--harness <name>', `one of: ${Object.keys(OTEL_HARNESSES).join(', ')}`, 'generic')
   .action((opts) => printOtelInstall(opts.harness, opts.agent));
 
-for (const harness of ['codex', 'python', 'node'] as const) {
+for (const harness of ['codex', 'python', 'node', 'proxy'] as const) {
   installCmd
     .command(harness)
     .description(`Print the ${OTEL_HARNESSES[harness].title} setup for a registered agent`)
@@ -1154,6 +1163,134 @@ program
       }
     }
     process.stdout.write(final.endsWith('\n') ? final : `${final}\n`);
+  });
+
+/* ----------------------------------------------------------------------------
+ * effigent proxy — the capture FALLBACK for agents you cannot instrument.
+ * A local OpenAI-compatible gateway: point the agent's OPENAI_BASE_URL at it,
+ * it forwards every call to the real upstream (the client's own key travels
+ * through untouched — never stored) and mirrors each chat completion to the
+ * collector as an OTLP GenAI span. No SDK, no code changes.
+ * Limitation: only what flows through the LLM endpoint is seen — tool
+ * executions happen in the agent, not the proxy (same as OTel without tool
+ * instrumentation). Streaming calls are forwarded transparently; usage is
+ * captured only when the stream includes it.
+ * -------------------------------------------------------------------------- */
+function hex(bytes: number): string {
+  return createHash('sha256').update(`${randomUUID()}:${bytes}`).digest('hex').slice(0, bytes * 2);
+}
+
+program
+  .command('proxy')
+  .description('Run a local OpenAI-compatible capturing gateway (capture fallback for un-instrumentable agents)')
+  .requiredOption('--agent <name>', 'registered agent name (attribution)')
+  .option('--port <n>', 'local port to listen on', '4319')
+  .option('--upstream <url>', 'upstream OpenAI-compatible base', 'https://api.openai.com')
+  .option('--server <url>', 'effigent collector (default: login config)')
+  .option('--key <apiKey>', 'capture key (default: the agent’s scoped key, then tenant key)')
+  .action(async (opts) => {
+    const { createServer } = await import('node:http');
+    const { Readable } = await import('node:stream');
+    const config = loadConfig();
+    const server: string | undefined = opts.server ?? (process.env.EFFIGENT_SERVER ?? process.env.CCOPT_SERVER) ?? config.server;
+    const apiKey: string | undefined = opts.key ?? config.agents?.[opts.agent]?.key ?? config.apiKey;
+    if (!server || !apiKey) {
+      console.error('No server/key: run `effigent login` / `effigent agent add` first, or pass --server/--key.');
+      process.exitCode = 2;
+      return;
+    }
+    const collector = `${server.replace(/\/$/, '')}/v1/traces`;
+    const upstream = opts.upstream.replace(/\/$/, '');
+    const port = Number(opts.port);
+    const sessionId = `proxy-${randomUUID()}`; // one run per proxy lifetime
+    const traceId = hex(16);
+
+    // Fire-and-forget OTLP emission — capture must never slow the agent.
+    const emit = (model: string, startMs: number, endMs: number, promptText: string, completion: string, usage?: { input: number; output: number; cached?: number }, isError?: boolean) => {
+      const attributes: Array<{ key: string; value: Record<string, unknown> }> = [
+        { key: 'gen_ai.conversation.id', value: { stringValue: sessionId } },
+        { key: 'gen_ai.operation.name', value: { stringValue: 'chat' } },
+        { key: 'gen_ai.provider.name', value: { stringValue: 'openai' } },
+        { key: 'gen_ai.request.model', value: { stringValue: model } },
+        { key: 'gen_ai.response.model', value: { stringValue: model } },
+        { key: 'gen_ai.prompt', value: { stringValue: promptText.slice(0, 8000) } },
+        { key: 'gen_ai.completion', value: { stringValue: completion.slice(0, 8000) } },
+      ];
+      if (usage) {
+        attributes.push({ key: 'gen_ai.usage.input_tokens', value: { intValue: usage.input } });
+        attributes.push({ key: 'gen_ai.usage.output_tokens', value: { intValue: usage.output } });
+        if (usage.cached) attributes.push({ key: 'gen_ai.usage.cached_tokens', value: { intValue: usage.cached } });
+      }
+      const body = { resourceSpans: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: opts.agent } }] }, scopeSpans: [{ spans: [{
+        traceId, spanId: hex(8), name: `chat ${model}`,
+        startTimeUnixNano: `${startMs}000000`, endTimeUnixNano: `${endMs}000000`,
+        status: isError ? { code: 2 } : undefined,
+        attributes,
+      }] }] }] };
+      fetch(collector, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+        .catch(() => {/* fail-open */});
+    };
+
+    const promptOf = (reqJson: { messages?: Array<{ role?: string; content?: unknown }> }) => {
+      const msgs = reqJson.messages ?? [];
+      const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
+      return typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content ?? '');
+    };
+
+    const srv = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c as Buffer));
+      req.on('end', async () => {
+        const bodyBuf = Buffer.concat(chunks);
+        const isChat = (req.url ?? '').includes('/chat/completions') && req.method === 'POST';
+        const startMs = Date.now();
+        const headers: Record<string, string> = {};
+        if (req.headers['authorization']) headers['authorization'] = req.headers['authorization'] as string;
+        if (req.headers['content-type']) headers['content-type'] = req.headers['content-type'] as string;
+        let up: Response;
+        try {
+          up = await fetch(`${upstream}${req.url}`, { method: req.method, headers, body: bodyBuf.length ? bodyBuf : undefined });
+        } catch (err) {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: `proxy upstream unreachable: ${err instanceof Error ? err.message : err}` }));
+          return;
+        }
+        res.writeHead(up.status, { 'content-type': up.headers.get('content-type') ?? 'application/json' });
+
+        let reqJson: Record<string, unknown> = {};
+        try { reqJson = JSON.parse(bodyBuf.toString('utf8')); } catch { /* non-JSON passthrough */ }
+        const streaming = reqJson.stream === true;
+
+        if (isChat && !streaming) {
+          const text = await up.text();
+          res.end(text);
+          try {
+            const j = JSON.parse(text) as {
+              model?: string;
+              choices?: Array<{ message?: { content?: string; tool_calls?: unknown } }>;
+              usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+            };
+            const model = j.model ?? String(reqJson.model ?? 'unknown');
+            const content = j.choices?.[0]?.message?.content ?? (j.choices?.[0]?.message?.tool_calls ? '[tool_calls]' : '');
+            const u = j.usage
+              ? { input: j.usage.prompt_tokens ?? 0, output: j.usage.completion_tokens ?? 0, cached: j.usage.prompt_tokens_details?.cached_tokens }
+              : undefined;
+            emit(model, startMs, Date.now(), promptOf(reqJson), content, u, up.status >= 400);
+          } catch { /* couldn't parse — still forwarded to the client */ }
+        } else if (up.body) {
+          // Streaming or non-chat: forward transparently.
+          Readable.fromWeb(up.body as WebReadableStream).pipe(res);
+          if (isChat) emit(String(reqJson.model ?? 'unknown'), startMs, Date.now(), promptOf(reqJson), '[streamed]', undefined, up.status >= 400);
+        } else {
+          res.end();
+        }
+      });
+    });
+    srv.listen(port, () => {
+      console.error(`[effigent] proxy listening on http://localhost:${port}  →  ${upstream}`);
+      console.error(`[effigent] point your agent at it:  export OPENAI_BASE_URL=http://localhost:${port}/v1`);
+      console.error(`[effigent] capturing as agent '${opts.agent}' (session ${sessionId.slice(0, 20)}…). Ctrl-C to stop.`);
+    });
   });
 
 program.parseAsync().catch((err) => {

@@ -50,7 +50,7 @@ codex "fix the failing checkout test"`,
 from traceloop.sdk import Traceloop
 
 Traceloop.init(
-    api_endpoint="${TRACES_URL}",
+    api_endpoint="${COLLECTOR_URL}",
     headers={"Authorization": "Bearer <scoped-key>"},
 )`,
     title: 'python — langgraph / crewai / autogen',
@@ -60,17 +60,34 @@ Traceloop.init(
     name: 'Node / TypeScript agents',
     tag: 'OpenLLMetry',
     blurb:
-      'Same one-time initialization for Node. The SDK instruments the openai and anthropic clients automatically; every LLM and tool call is captured as spans.',
+      'Same one-time initialization for Node. The SDK instruments the openai and anthropic clients automatically; every LLM and tool call is captured as spans. Pass the base URL — the SDK appends /v1/traces itself.',
     code: `npm i @traceloop/node-server-sdk
 
 // before your agent runs:
 import * as traceloop from "@traceloop/node-server-sdk";
 
 traceloop.initialize({
-  baseUrl: "${TRACES_URL}",
+  baseUrl: "${COLLECTOR_URL}",
   headers: { Authorization: "Bearer <scoped-key>" },
+  disableBatch: true,
 });`,
     title: 'node — openai agents / custom',
+  },
+  {
+    id: 'proxy',
+    name: 'Proxy fallback',
+    tag: 'Any OpenAI-compatible agent · no instrumentation',
+    blurb:
+      'Can’t add an SDK or OTel? Run the local capturing gateway and point your agent’s OpenAI client at it. It forwards every call to the real upstream — your existing key travels through untouched, never stored — and mirrors each completion to Effigent.',
+    code: `effigent proxy --agent billing-agent
+# → listening on http://localhost:4319  →  https://api.openai.com
+
+# point the agent at it — no code changes:
+export OPENAI_BASE_URL=http://localhost:4319/v1
+
+# only what flows through the LLM endpoint is captured;
+# tool executions in the agent aren't visible via the proxy.`,
+    title: 'proxy — un-instrumentable agents',
   },
   {
     id: 'anywhere',
