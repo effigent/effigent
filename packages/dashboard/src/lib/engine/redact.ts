@@ -49,3 +49,76 @@ export function containsSensitive(text: string): boolean {
     return re.test(text);
   });
 }
+
+/** Built-in redaction types (for the Privacy UI — these are always on). */
+export const BUILTIN_REDACTION_TYPES: string[] = [...new Set(RULES.map((r) => r.name))];
+
+/* ------------------------------------------------------------------------- *
+ * Org-defined custom rules — applied at ingest AFTER the built-ins. Admins
+ * add tenant-specific patterns (internal ids, hostnames, extra PII formats).
+ * Validation is strict (count/length caps, safe names) because patterns are
+ * admin-supplied input that runs inside the ingest hot path.
+ * ------------------------------------------------------------------------- */
+
+export interface CustomRedactionRule {
+  name: string;
+  pattern: string;
+  enabled?: boolean;
+}
+
+export interface CompiledCustomRule {
+  name: string;
+  re: RegExp;
+}
+
+export const MAX_CUSTOM_RULES = 20;
+export const MAX_PATTERN_LENGTH = 200;
+const RULE_NAME_RE = /^[A-Z0-9_]{2,32}$/;
+
+/**
+ * Validate + compile org-defined rules. Invalid entries are reported, never
+ * thrown — ingest must degrade to the built-ins, and the PUT endpoint needs
+ * the error list for the admin.
+ */
+export function compileRedactionRules(input: unknown): {
+  compiled: CompiledCustomRule[];
+  errors: string[];
+} {
+  const compiled: CompiledCustomRule[] = [];
+  const errors: string[] = [];
+  if (input === null || input === undefined) return { compiled, errors };
+  if (!Array.isArray(input)) return { compiled, errors: ['rules must be an array'] };
+  if (input.length > MAX_CUSTOM_RULES) errors.push(`too many rules (max ${MAX_CUSTOM_RULES})`);
+
+  for (const [i, raw] of input.slice(0, MAX_CUSTOM_RULES).entries()) {
+    const rule = raw as CustomRedactionRule;
+    if (rule?.enabled === false) continue;
+    const name = String(rule?.name ?? '').toUpperCase();
+    if (!RULE_NAME_RE.test(name)) {
+      errors.push(`rule ${i + 1}: name must be 2–32 chars of A–Z, 0–9, _`);
+      continue;
+    }
+    const pattern = String(rule?.pattern ?? '');
+    if (pattern.length === 0 || pattern.length > MAX_PATTERN_LENGTH) {
+      errors.push(`rule ${name}: pattern must be 1–${MAX_PATTERN_LENGTH} chars`);
+      continue;
+    }
+    try {
+      compiled.push({ name, re: new RegExp(pattern, 'g') });
+    } catch (e) {
+      errors.push(`rule ${name}: invalid regex (${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
+  return { compiled, errors };
+}
+
+/** Apply compiled org rules — same placeholder contract as the built-ins. */
+export function applyRedactionRules(text: string, compiled: CompiledCustomRule[]): string {
+  if (!text || compiled.length === 0) return text;
+  let out = text;
+  for (const { name, re } of compiled) {
+    re.lastIndex = 0;
+    out = out.replace(re, `[REDACTED:${name}]`);
+  }
+  return out;
+}

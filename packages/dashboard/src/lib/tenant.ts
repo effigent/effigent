@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { pool } from './db.ts';
+import { hasOwnershipColumns } from './agent-auth.ts';
 
 const hashKey = (k: string) => createHash('sha256').update(k).digest('hex');
 
@@ -18,10 +19,18 @@ export async function resolveTenant({ userId, orgId }: { userId: string; orgId: 
     [orgId ?? userId, ref],
   );
   const tid = t.rows[0].id;
-  // A default owner api key so agents can ingest under this tenant.
+  // A default owner api key so agents can ingest under this tenant. Stamped
+  // with the creating user (migration 009) so agents registered with it
+  // inherit ownership; degrades to the unstamped insert pre-migration.
   const apiKey = `eff_${randomBytes(24).toString('hex')}`;
+  const withOwner = await hasOwnershipColumns().catch(() => false);
   await pool
-    .query("insert into api_keys (tenant_id, key_hash, label, role) values ($1,$2,'dashboard','owner')", [tid, hashKey(apiKey)])
+    .query(
+      withOwner
+        ? "insert into api_keys (tenant_id, key_hash, label, role, created_by) values ($1,$2,'dashboard','owner',$3)"
+        : "insert into api_keys (tenant_id, key_hash, label, role) values ($1,$2,'dashboard','owner')",
+      withOwner ? [tid, hashKey(apiKey), userId] : [tid, hashKey(apiKey)],
+    )
     .catch(() => {});
   return tid;
 }

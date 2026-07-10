@@ -204,16 +204,29 @@ export function otelToRuns(payload: OtlpTracesPayload, opts: OtelToRunOptions = 
       const op = str(attrs, 'gen_ai.operation.name');
       const ts = nanoToIso(span.startTimeUnixNano);
       const toolName = str(attrs, 'gen_ai.tool.name');
+      const durationMs =
+        start > 0 && end > 0 ? Math.max(0, Math.round((end - start) / 1e6)) : undefined;
 
       if (toolName || op === 'execute_tool') {
         const name = toolName ?? 'tool';
-        const args = str(attrs, 'gen_ai.tool.call.arguments', 'gen_ai.tool.arguments') ?? '{}';
+        // Argument attrs vary by instrumentation: OTel GenAI semconv, then
+        // OpenLLMetry (traceloop.entity.input), then OpenInference (input.value).
+        const args =
+          str(
+            attrs,
+            'gen_ai.tool.call.arguments',
+            'gen_ai.tool.arguments',
+            'traceloop.entity.input',
+            'input.value',
+          ) ?? '{}';
+        const toolUseId = str(attrs, 'gen_ai.tool.call.id');
         steps.push({
           kind: 'tool_use',
           name,
           payload: args,
-          toolUseId: str(attrs, 'gen_ai.tool.call.id'),
+          toolUseId,
           timestamp: ts,
+          durationMs,
         });
         if (span.status?.code === 2) {
           steps.push({
@@ -221,8 +234,27 @@ export function otelToRuns(payload: OtlpTracesPayload, opts: OtelToRunOptions = 
             name,
             payload: span.status.message ?? '',
             isError: true,
+            toolUseId,
             timestamp: nanoToIso(span.endTimeUnixNano),
           });
+        } else {
+          // Successful tool OUTPUT, when the instrumentation captures it —
+          // this is what memoize/provenance/replay feed on downstream.
+          const output = str(
+            attrs,
+            'gen_ai.tool.call.result',
+            'traceloop.entity.output',
+            'output.value',
+          );
+          if (output !== undefined) {
+            steps.push({
+              kind: 'tool_result',
+              name,
+              payload: output,
+              toolUseId,
+              timestamp: nanoToIso(span.endTimeUnixNano),
+            });
+          }
         }
       } else if (isLlmSpan(op, attrs)) {
         const provider = str(attrs, 'gen_ai.provider.name', 'gen_ai.system');
@@ -235,7 +267,20 @@ export function otelToRuns(payload: OtlpTracesPayload, opts: OtelToRunOptions = 
         const completion = str(attrs, 'gen_ai.completion', 'gen_ai.completion.0.content', 'gen_ai.output.messages');
         firstPrompt ??= prompt;
         if (completion) finalOutput = completion;
-        steps.push({ kind: 'model_turn', name: 'assistant', payload: completion ?? '', timestamp: ts });
+        steps.push({
+          kind: 'model_turn',
+          name: 'assistant',
+          payload: completion ?? '',
+          timestamp: ts,
+          model,
+          durationMs,
+          tokens: {
+            input: usage.inputTokens,
+            output: usage.outputTokens,
+            cacheCreation: usage.cacheCreationInputTokens,
+            cacheRead: usage.cacheReadInputTokens,
+          },
+        });
       }
       // Spans that are neither tool nor LLM (workflow/task wrappers) contribute
       // timing/identity only — no step.

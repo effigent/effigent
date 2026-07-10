@@ -35,6 +35,9 @@ export const nav = [
   { group: 'Knowledge', items: [
     ['Knowledge Graph', 'graph', 'kg'],
   ] },
+  { group: 'Workspace', items: [
+    ['Privacy', 'shield', 'privacy'],
+  ] },
 ] as const;
 
 export const kpis: Kpi[] = [

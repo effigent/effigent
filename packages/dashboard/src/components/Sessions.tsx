@@ -10,7 +10,7 @@ interface SessionRow {
   n_steps: number;
   models: string[];
 }
-interface AgentInfo { agent_id: string; optimized: boolean; n_runs: number; total_cost_usd: string | number }
+interface AgentInfo { agent_id: string; optimized: boolean; n_runs: number; total_cost_usd: string | number; added_by?: string | null }
 
 const usd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -102,6 +102,7 @@ export function Sessions({
               <div className="agent-card-stats">
                 <span><b className="tnum">{a.n_runs}</b> sessions</span>
                 <span><b className="tnum">{fmtCost(a.total_cost_usd)}</b> spent</span>
+                {a.added_by && <span title="who registered this agent">added by <b>{a.added_by}</b></span>}
               </div>
             </button>
           ))}

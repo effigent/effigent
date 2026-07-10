@@ -10,7 +10,7 @@ interface Opportunity {
   template?: string;
   score: number;
   confidence: number;
-  action: 'replace' | 'memoize' | 'template' | 'route' | 'cache';
+  action: 'replace' | 'compile' | 'memoize' | 'template' | 'route' | 'cache';
   runs: number;
   estTokens: number;
   estUsd: number;
@@ -25,12 +25,19 @@ interface AgentInsight {
   meanScore: number;
   totalEstUsd: number;
   opportunities: Opportunity[];
+  drift?: {
+    changed: boolean;
+    changedAt?: string;
+    z: number;
+    probeMeanDist: number;
+  } | null;
 }
 
 const usd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const ACTION: Record<string, { label: string; cls: string; hint: string }> = {
   replace: { label: 'Replace with tool', cls: 'act-replace', hint: 'Identical output in every run — compile it away.' },
+  compile: { label: 'Compile to code', cls: 'act-replace', hint: 'Every argument is constant or provenance-derived from earlier outputs — code can issue this call without the LLM.' },
   memoize: { label: 'Memoize by input', cls: 'act-memoize', hint: 'Same input always produced the same output — cache keyed by input.' },
   template: { label: 'Synthesize template', cls: 'act-template', hint: 'Fixed structure with volatile data slots — generate a parameterized tool.' },
   route: { label: 'Route to smaller model', cls: 'act-route', hint: 'Moderately stable LLM step — a cheaper model can handle it.' },
@@ -79,6 +86,14 @@ export function Insights({ agent }: { agent: string }) {
               <div className="mono-name" style={{ fontSize: 14 }}>{a.agentId}</div>
               <div className="panel-sub">
                 last {a.runCount} runs · {a.clusters} pattern{a.clusters === 1 ? '' : 's'} covering {a.coverage}% · determinism {a.meanScore}/100
+                {a.drift?.changed && (
+                  <span
+                    style={{ color: 'var(--warn, #eb6834)', marginLeft: 8 }}
+                    title={`Recent runs moved away from this agent's baseline behavior (z=${a.drift.z}). Synthesized tools validated on the old behavior should be re-shadowed.`}
+                  >
+                    ⚠ behavior changed{a.drift.changedAt ? ` ~${new Date(a.drift.changedAt).toLocaleDateString()}` : ''}
+                  </span>
+                )}
               </div>
             </div>
             <div className="ins-save">

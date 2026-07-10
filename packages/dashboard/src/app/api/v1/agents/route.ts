@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
 import { pool } from '@/lib/db.ts';
 import { resolveTenant } from '@/lib/tenant.ts';
-import { authenticateKey, hashKey } from '@/lib/agent-auth.ts';
+import { authenticateKey, hashKey, hasOwnershipColumns } from '@/lib/agent-auth.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,16 +45,33 @@ export async function POST(req: Request) {
     );
   }
 
-  const agent = await pool.query<{ id: string }>(
-    `insert into agents (tenant_id, name, harness) values ($1,$2,$3)
-     on conflict (tenant_id, name) do update set harness = coalesce(excluded.harness, agents.harness)
-     returning id`,
-    [keyAuth.tenantId, body.name, body.harness ?? null],
-  );
+  // Ownership: the agent inherits whoever minted the key that registered it
+  // ("who added this agent"). First adder wins; re-registration never steals.
+  const withOwner = await hasOwnershipColumns();
+  const agent = withOwner
+    ? await pool.query<{ id: string }>(
+        `insert into agents (tenant_id, name, harness, created_by, created_by_label) values ($1,$2,$3,$4,$5)
+         on conflict (tenant_id, name) do update
+           set harness = coalesce(excluded.harness, agents.harness),
+               created_by = coalesce(agents.created_by, excluded.created_by),
+               created_by_label = coalesce(agents.created_by_label, excluded.created_by_label)
+         returning id`,
+        [keyAuth.tenantId, body.name, body.harness ?? null, keyAuth.createdBy ?? null, keyAuth.createdByLabel ?? null],
+      )
+    : await pool.query<{ id: string }>(
+        `insert into agents (tenant_id, name, harness) values ($1,$2,$3)
+         on conflict (tenant_id, name) do update set harness = coalesce(excluded.harness, agents.harness)
+         returning id`,
+        [keyAuth.tenantId, body.name, body.harness ?? null],
+      );
   const apiKey = `eff_${randomBytes(24).toString('hex')}`;
   await pool.query(
-    `insert into api_keys (tenant_id, key_hash, label, role, agent_id) values ($1,$2,$3,'member',$4)`,
-    [keyAuth.tenantId, hashKey(apiKey), body.name, agent.rows[0].id],
+    withOwner
+      ? `insert into api_keys (tenant_id, key_hash, label, role, agent_id, created_by, created_by_label) values ($1,$2,$3,'member',$4,$5,$6)`
+      : `insert into api_keys (tenant_id, key_hash, label, role, agent_id) values ($1,$2,$3,'member',$4)`,
+    withOwner
+      ? [keyAuth.tenantId, hashKey(apiKey), body.name, agent.rows[0].id, keyAuth.createdBy ?? null, keyAuth.createdByLabel ?? null]
+      : [keyAuth.tenantId, hashKey(apiKey), body.name, agent.rows[0].id],
   );
   return Response.json({ agentId: agent.rows[0].id, name: body.name, apiKey });
 }
@@ -80,12 +97,23 @@ export async function GET() {
     ? `(select a.optimized_at is not null from agents a
           where a.tenant_id = runs.tenant_id and a.name = runs.agent_id)`
     : `false`;
+  const hasOwnerCol =
+    (
+      await pool.query(
+        `select 1 from information_schema.columns where table_name = 'agents' and column_name = 'created_by'`,
+      )
+    ).rowCount ?? 0;
+  const addedByExpr = hasOwnerCol
+    ? `(select coalesce(a.created_by_label, a.created_by) from agents a
+          where a.tenant_id = runs.tenant_id and a.name = runs.agent_id)`
+    : `null`;
 
   const { rows } = await pool.query(
     `select agent_id,
             count(*)::int           as n_runs,
             round(sum(cost_usd), 2) as total_cost_usd,
             max(started_at)         as last_seen,
+            ${addedByExpr}          as added_by,
             coalesce(${optimizedExpr}, false) as optimized,
             (select coalesce(jsonb_agg(distinct m), '[]'::jsonb)
                from runs r2, jsonb_array_elements_text(r2.models) m
