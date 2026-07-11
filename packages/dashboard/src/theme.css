@@ -234,6 +234,20 @@ body {
   color: var(--txt-2); border-radius: 7px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; }
 .code-copy:hover { color: var(--txt); border-color: var(--accent-line); }
 
+/* install: the two ways to turn it on — recommended (prompt) vs collapsed manual */
+.install-option.recommended { margin-top: 18px; border: 1px solid var(--accent-line);
+  background: var(--accent-bg); border-radius: 12px; padding: 15px 16px 14px; }
+.install-option-head { display: flex; align-items: center; gap: 8px; font-weight: 680; font-size: 14.5px; margin-bottom: 6px; }
+.opt-tag { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--accent-2); background: var(--panel); border: 1px solid var(--accent-line); border-radius: 6px; padding: 2px 7px; }
+details.install-manual { margin-top: 18px; border-top: 1px solid var(--border-soft); padding-top: 14px; }
+details.install-manual > summary { cursor: pointer; font-weight: 620; font-size: 13.5px; color: var(--txt-2);
+  list-style: none; display: inline-flex; align-items: center; gap: 7px; }
+details.install-manual > summary::-webkit-details-marker { display: none; }
+details.install-manual > summary::before { content: '▸'; color: var(--txt-3); transition: transform 0.15s ease; }
+details.install-manual[open] > summary::before { transform: rotate(90deg); }
+details.install-manual > summary:hover { color: var(--txt); }
+
 /* ---------- login ---------- */
 .login-screen { min-height: 100vh; display: grid; place-items: center; background:
   radial-gradient(900px 500px at 50% -10%, rgba(124,92,255,0.12), transparent 60%), var(--bg); padding: 24px; }

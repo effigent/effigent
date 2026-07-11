@@ -20,8 +20,8 @@ function CodeBlock({ code, wrap }: { code: string; wrap?: boolean }) {
 
 interface KeyRow { id: string; label: string | null; role: string; created_at: string; agent: string | null }
 
-/** Workspace credentials — where the tenant gets its id and mints its API key.
- *  The plaintext key is shown exactly once (only hashes are stored). */
+/** Step 1 — get the workspace key. Plainly framed: it links the agent to this
+ *  workspace and auto-fills the rest. The plaintext key is shown exactly once. */
 function Credentials({ onKey }: { onKey: (k: string) => void }) {
   const [tenantId, setTenantId] = useState('');
   const [keys, setKeys] = useState<KeyRow[]>([]);
@@ -53,17 +53,11 @@ function Credentials({ onKey }: { onKey: (k: string) => void }) {
 
   return (
     <section className="panel panel-pad" style={{ marginBottom: 16 }}>
-      <div className="step-num">0</div>
+      <div className="step-num">1</div>
       <div className="step-body">
-        <div className="panel-title">Your workspace credentials</div>
+        <div className="panel-title">Get your key</div>
         <div className="panel-sub" style={{ marginBottom: 14 }}>
-          The workspace key is what <span className="mono-name" style={{ fontSize: 12 }}>effigent login</span> takes. Keys are stored hashed — the value is shown once, right here.
-        </div>
-
-        <div className="cred-row">
-          <span className="cred-k">Tenant ID</span>
-          <span className="mono-name cred-v">{tenantId || '…'}</span>
-          {tenantId && <button className="btn-ghost cred-btn" onClick={() => copy('id', tenantId)}>{copied === 'id' ? 'Copied' : 'Copy'}</button>}
+          This one key links your agent to this workspace. Click <b>Generate</b> — it&apos;s shown only once and fills itself into the steps below automatically.
         </div>
 
         <div className="cred-row">
@@ -76,16 +70,23 @@ function Credentials({ onKey }: { onKey: (k: string) => void }) {
           ) : (
             <>
               <span className="cred-v" style={{ color: 'var(--txt-3)' }}>
-                {keys.length ? `${keys.length} key${keys.length === 1 ? '' : 's'} exist — values are not retrievable` : 'no keys yet'}
+                {keys.length ? `${keys.length} key${keys.length === 1 ? '' : 's'} already exist — for security, their values can't be shown again, so generate a new one` : 'no key yet'}
               </span>
               <button className="btn-primary cred-btn" onClick={mint} disabled={minting}>
-                {minting ? 'Generating…' : 'Generate key'}
+                {minting ? 'Generating…' : 'Generate'}
               </button>
             </>
           )}
         </div>
         {fresh && (
-          <div className="cred-warn">Save it now — this key can&apos;t be shown again. It&apos;s already filled into step 1 below.</div>
+          <div className="cred-warn">Copy it somewhere safe now — it can&apos;t be shown again. (It&apos;s already filled into the steps below.)</div>
+        )}
+        {tenantId && (
+          <div className="foot-note" style={{ marginTop: 10 }}>
+            Workspace ID: <span className="mono-name" style={{ fontSize: 11.5 }}>{tenantId}</span>{' '}
+            <button className="link" style={{ background: 'none', border: 'none', padding: 0 }} onClick={() => copy('id', tenantId)}>{copied === 'id' ? 'copied' : 'copy'}</button>
+            {' '}— only needed for advanced setups.
+          </div>
         )}
       </div>
     </section>
@@ -108,21 +109,13 @@ export function Install({ onClose }: { onClose: () => void }) {
         <div>
           <div className="install-back" onClick={onClose}><Ic n="arrowRight" style={{ width: 15, height: 15, transform: 'rotate(180deg)' }} /> Back to dashboard</div>
           <h1>Install Effigent on any agent</h1>
-          <div className="sub">One scoped key per agent, then pick how it&apos;s captured. The graph/cost engine is the same for every harness.</div>
+          <div className="sub">About two minutes. Get your key, pick the tool your agent runs in, then let your agent install it for you — or run a few commands yourself.</div>
         </div>
       </header>
 
       <Credentials onKey={setTenantKey} />
 
-      <section className="panel panel-pad" style={{ marginBottom: 16 }}>
-        <div className="step-num">1</div>
-        <div className="step-body">
-          <div className="panel-title">{step1.label}</div>
-          <CodeBlock code={step1.code} />
-        </div>
-      </section>
-
-      <div className="step-num2">2 · Choose the capture method for your agent</div>
+      <div className="step-num2">2 · Which tool runs your agent?</div>
       <div className="install-grid">
         <div className="method-list">
           {methods.map((m) => (
@@ -149,34 +142,45 @@ export function Install({ onClose }: { onClose: () => void }) {
             </div>
           </div>
           <p style={{ color: 'var(--txt-2)', maxWidth: '62ch' }}>{method.blurb}</p>
-          {method.steps.map((s, i) => (
-            <div key={i} style={{ marginTop: 14 }}>
-              <div className="step-label">{s.label}</div>
-              <CodeBlock code={s.code} />
-            </div>
-          ))}
 
-          {/* Hands-off path: paste this into the agent and it installs itself. */}
-          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border-soft)' }}>
-            <div className="step-label" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Ic n="spark" style={{ width: 14, height: 14, color: 'var(--accent-2)' }} />
-              Or — let the agent install itself
+          {/* Recommended, no-terminal path — front and center. */}
+          <div className="install-option recommended">
+            <div className="install-option-head">
+              <span className="opt-tag">Easiest</span>
+              <Ic n="spark" style={{ width: 15, height: 15, color: 'var(--accent-2)' }} />
+              Let your agent install it for you
             </div>
-            <div className="panel-sub" style={{ marginBottom: 8, maxWidth: '62ch' }}>
-              Paste this prompt into the agent ({method.name}). It runs the whole setup on its own machine — no manual commands.
+            <div className="panel-sub" style={{ marginBottom: 10, maxWidth: '62ch' }}>
+              No terminal needed. Copy this, paste it to your agent ({method.name}), and it sets everything up on its own — then confirms it worked.
             </div>
             <CodeBlock code={agentInstallPrompt(method.key, base, tenantKey)} wrap />
             <div className="foot-note" style={{ marginTop: 8 }}>
               {tenantKey
-                ? 'Contains your workspace key — paste only into an agent you trust.'
-                : 'Generate a workspace key in step 0 to pre-fill it here, or the prompt ships with a <workspace-key> placeholder.'}
+                ? 'This includes your workspace key — only paste it into an agent you trust.'
+                : 'Generate your key in step 1 above and it fills in here automatically.'}
             </div>
           </div>
+
+          {/* Manual path — collapsed so it doesn't scare anyone off. */}
+          <details className="install-manual">
+            <summary>Prefer to run the commands yourself?</summary>
+            <div className="panel-sub" style={{ margin: '10px 0' }}>
+              Paste these into a terminal, in order. You&apos;ll need <b>Node.js</b> installed first (nodejs.org).
+            </div>
+            <div className="step-label">1 · Install Effigent and connect it to your workspace</div>
+            <CodeBlock code={step1.code} />
+            {method.steps.map((s, i) => (
+              <div key={i} style={{ marginTop: 14 }}>
+                <div className="step-label">{i + 2} · {s.label}</div>
+                <CodeBlock code={s.code} />
+              </div>
+            ))}
+          </details>
         </section>
       </div>
 
       <div className="foot-note" style={{ marginTop: 18 }}>
-        Every method normalizes into the same execution graph — so cost, determinism, and optimizations look identical no matter which harness the agent runs on.
+        However you install it, every run shows up here the same way — same graphs, same cost, same optimizations, whatever tool your agent runs on.
       </div>
     </div>
   );
