@@ -11,7 +11,7 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "dev:server": "npm run dev -w @effigent/server",
-    "bundle": "npm run build -w @effigent/core -w @effigent/cli && esbuild packages/cli/src/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/effigent.cjs"
+    "bundle": "npm run build -w @effigent/core -w effigent && esbuild packages/cli/src/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/effigent.cjs"
   },
   "engines": {
     "node": ">=20"

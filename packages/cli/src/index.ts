@@ -34,9 +34,11 @@ import { uploadSessionFile } from './upload.js';
 const program = new Command();
 program.name('effigent').description('Effigent — the Optimizer CLI: capture agent runs, compile away the waste').version('0.5.0');
 
-/** Hosted collector. The default so nobody has to type (or typo) --server; still
- *  overridable with --server / EFFIGENT_SERVER for self-hosting or local dev. */
-const DEFAULT_SERVER = 'https://app.effigent.ai';
+/** Hosted collector — a dedicated subdomain so the ingestion backend can move to
+ *  its own infra later by repointing DNS, with zero client reconfiguration. The
+ *  default so nobody has to type (or typo) --server; still overridable with
+ *  --server / EFFIGENT_SERVER for self-hosting or local dev. */
+const DEFAULT_SERVER = 'https://collector.effigent.ai';
 
 program
   .command('analyze')

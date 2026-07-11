@@ -4733,7 +4733,7 @@ async function uploadSessionFile(target, filePath, sessionId, agentId) {
 // packages/cli/src/index.ts
 var program2 = new Command();
 program2.name("effigent").description("Effigent \u2014 the Optimizer CLI: capture agent runs, compile away the waste").version("0.5.0");
-var DEFAULT_SERVER = "https://app.effigent.ai";
+var DEFAULT_SERVER = "https://collector.effigent.ai";
 program2.command("analyze").description("Analyze local Claude Code transcripts and render the Waste Report").option("--source <dir...>", "transcript directories", defaultSources()).option("--days <n>", "analysis window in days", "30").option("--agent <substr>", "only include agents whose id contains this substring").option("--min-steps <n>", "ignore trivial sessions with fewer steps", "3").option("--out <file>", "HTML report output path", "effigent-report.html").option("--json <file>", "JSON report output path", "effigent-report.json").action((opts) => {
   const sources = Array.isArray(opts.source) ? opts.source : [opts.source];
   const runs = loadRuns(sources.map((s) => (0, import_node_path2.resolve)(s)), {
