@@ -30,7 +30,7 @@ export const dynamic = 'force-dynamic';
  * See packages/core/src/determinism.ts + docs/determinism-v3.md.
  */
 
-const DEFAULT_WINDOW = 40;
+const DEFAULT_WINDOW = 20;
 const MIN_WINDOW = 5;
 const MAX_WINDOW = 100;
 

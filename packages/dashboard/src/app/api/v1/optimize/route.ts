@@ -19,7 +19,7 @@ export const maxDuration = 60;
  * activatable exists (the dashboard's Optimized badge).
  */
 
-const WINDOW = 40;
+const WINDOW = 20;
 
 interface DbStep {
   kind: RawStep['kind'];
