@@ -242,7 +242,7 @@ export interface InstallMethod {
 
 /** Hosted collector — matches the CLI's built-in default, so we only surface
  *  --server when a self-hosted collector actually differs from it. */
-const DEFAULT_SERVER = 'https://app.effigent.ai';
+const DEFAULT_SERVER = 'https://collector.effigent.ai';
 
 /** Step 1 — with the user's real key interpolated once they mint one. */
 export function installStep1(base: string, tenantKey?: string) {
