@@ -4733,6 +4733,7 @@ async function uploadSessionFile(target, filePath, sessionId, agentId) {
 // packages/cli/src/index.ts
 var program2 = new Command();
 program2.name("effigent").description("Effigent \u2014 the Optimizer CLI: capture agent runs, compile away the waste").version("0.5.0");
+var DEFAULT_SERVER = "https://app.effigent.ai";
 program2.command("analyze").description("Analyze local Claude Code transcripts and render the Waste Report").option("--source <dir...>", "transcript directories", defaultSources()).option("--days <n>", "analysis window in days", "30").option("--agent <substr>", "only include agents whose id contains this substring").option("--min-steps <n>", "ignore trivial sessions with fewer steps", "3").option("--out <file>", "HTML report output path", "effigent-report.html").option("--json <file>", "JSON report output path", "effigent-report.json").action((opts) => {
   const sources = Array.isArray(opts.source) ? opts.source : [opts.source];
   const runs = loadRuns(sources.map((s) => (0, import_node_path2.resolve)(s)), {
@@ -4758,7 +4759,7 @@ program2.command("analyze").description("Analyze local Claude Code transcripts a
   }
   console.log(`Report: ${(0, import_node_path2.resolve)(opts.out)}`);
 });
-program2.command("login").description("Persist the effigent server + API key (used as defaults by sync/run/doctor)").requiredOption("--server <url>", "effigent server base URL").requiredOption("--key <apiKey>", "tenant API key").action(async (opts) => {
+program2.command("login").description("Persist the effigent server + API key (used as defaults by sync/run/doctor)").option("--server <url>", "effigent server base URL (default: the hosted collector)", DEFAULT_SERVER).requiredOption("--key <apiKey>", "tenant API key").action(async (opts) => {
   const config = loadConfig();
   config.server = opts.server;
   config.apiKey = opts.key;
@@ -4879,7 +4880,7 @@ program2.command("sync").description("Upload local session transcripts to the ef
   "DANGER: also upload unattributed sessions (everything on this machine). Default is attributed-only: a session uploads only when a tag or agentRule claims it."
 ).action(async (opts) => {
   const config = loadConfig();
-  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   const apiKey = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
   if (!server || !apiKey) {
     console.error("No server/key: pass --server/--key, set EFFIGENT_SERVER/EFFIGENT_API_KEY, or run `effigent login`.");
@@ -4961,7 +4962,7 @@ program2.command("doctor").description("Check that effigent can capture, attribu
       "no env-based auth detected \u2014 `effigent run --isolated` needs ANTHROPIC_API_KEY (or Bedrock/Vertex); non-isolated capture works regardless"
     );
   const config = loadConfig();
-  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   const apiKey = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
   if (server) {
     try {
@@ -4997,7 +4998,7 @@ program2.command("run").description(
 ).option("--server <url>", "effigent server to upload captured sessions to (env EFFIGENT_SERVER)").option("--key <apiKey>", "tenant API key for --server (env EFFIGENT_API_KEY)").allowUnknownOption(true).argument("<cmd...>", 'command to execute, e.g. -- claude -p "\u2026" or -- node my-agent.js').action(async (cmd, opts) => {
   const argv = [...cmd];
   const config = loadConfig();
-  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   const apiKey = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
   if (server && !apiKey) {
     console.error("[effigent] --server requires --key (or EFFIGENT_API_KEY)");
@@ -5061,7 +5062,7 @@ program2.command("run").description(
 var agentCmd = program2.command("agent").description("Register agents and mint scoped capture keys");
 agentCmd.command("add <name>").description("Register an agent in your workspace and save its scoped capture key").option("--harness <name>", "harness label (e.g. claude-code, codex, hermes, langgraph)").option("--server <url>", "effigent server base URL (default: effigent login config)").option("--key <apiKey>", "tenant OWNER key (default: effigent login config)").action(async (name, opts) => {
   const config = loadConfig();
-  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   const apiKey = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
   if (!server || !apiKey) {
     console.error("No server/key: run `effigent login` first (owner key), or pass --server/--key.");
@@ -5172,7 +5173,7 @@ export OPENAI_BASE_URL=http://localhost:4319/v1
 function printOtelInstall(harness, agentName) {
   const config = loadConfig();
   const entry = config.agents?.[agentName];
-  const server = process.env.EFFIGENT_SERVER ?? config.server;
+  const server = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   if (!entry || !server) {
     console.error(`Agent '${agentName}' not registered here \u2014 run \`effigent agent add ${agentName}\` first.`);
     process.exitCode = 2;
@@ -5235,7 +5236,7 @@ program2.command("claude-refresh").description("(internal) Claude Code SessionSt
     const bundlePath = (0, import_node_path2.join)(bundleDir, "bundle.json");
     if ((0, import_node_fs3.existsSync)(bundlePath) && Date.now() - (0, import_node_fs3.statSync)(bundlePath).mtimeMs < 15 * 6e4) return;
     const config = loadConfig();
-    const server = process.env.EFFIGENT_SERVER ?? config.server;
+    const server = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     const apiKey = config.agents?.[opts.agent]?.key ?? config.apiKey;
     if (!server || !apiKey) return;
     const ctl = new AbortController();
@@ -5267,7 +5268,7 @@ program2.command("claude-refresh").description("(internal) Claude Code SessionSt
 program2.command("claude-hook").description("(internal) Claude Code SessionEnd hook \u2014 uploads the finished session for a scoped agent").requiredOption("--agent <name>", "registered agent name").action(async (opts) => {
   const config = loadConfig();
   const entry = config.agents?.[opts.agent];
-  const server = process.env.EFFIGENT_SERVER ?? config.server;
+  const server = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   if (!entry || !server) {
     console.error(`[effigent] claude-hook: agent '${opts.agent}' or server not configured`);
     process.exitCode = 2;
@@ -5370,7 +5371,7 @@ function renderSkill(bundle, executables, format = "skill") {
 }
 program2.command("optimize").description("Download the activation bundle (validated tools + knowledge graph) and install it into the running agent (Claude Code: a generated skill)").argument("<agent>", "registered agent name").option("--server <url>", "effigent server base URL (default: effigent login config)").option("--key <apiKey>", "capture key (default: the agent\u2019s scoped key, then the tenant key)").option("--out <dir>", "bundle output directory (default ~/.effigent/bundles/<agent>)").option("--no-install", "write the bundle only \u2014 skip the Claude Code skill").option("--codex [dir]", "also inject into Codex: maintain a managed Effigent section in <dir>/AGENTS.md (default: cwd)").option("--no-mark", "do not stamp the agent as optimized").action(async (agentName, opts) => {
   const config = loadConfig();
-  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   const apiKey = opts.key ?? config.agents?.[agentName]?.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
   if (!server || !apiKey) {
     console.error("No server/key: run `effigent login` (or `effigent agent add`) first, or pass --server/--key.");
@@ -5615,7 +5616,7 @@ program2.command("proxy").description("Run a local OpenAI-compatible capturing g
   const { createServer } = await import("node:http");
   const { Readable } = await import("node:stream");
   const config = loadConfig();
-  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   const apiKey = opts.key ?? config.agents?.[opts.agent]?.key ?? config.apiKey;
   if (!server || !apiKey) {
     console.error("No server/key: run `effigent login` / `effigent agent add` first, or pass --server/--key.");

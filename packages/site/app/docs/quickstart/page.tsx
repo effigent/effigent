@@ -24,7 +24,7 @@ export default function Quickstart() {
           The workspace key comes from the dashboard; each agent gets its own least-privilege capture key.
         </p>
         <CodeBlock title="zsh — once per workspace / agent">{`npm i -g effigent
-effigent login --server ${COLLECTOR_URL} --key <workspace-key>
+effigent login --key <workspace-key>
 effigent agent add billing-agent`}</CodeBlock>
       </DocSection>
 

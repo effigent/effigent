@@ -144,7 +144,7 @@ export default function DevelopersPage() {
           Each agent gets its own <strong>scoped capture key</strong> — it can only upload runs for that agent, nothing else. Your workspace key never leaves your machine.
         </p>
         <CodeBlock title="zsh — one time per agent">{`npm i -g effigent
-effigent login --server ${COLLECTOR_URL} --key <workspace-key>
+effigent login --key <workspace-key>
 
 effigent agent add billing-agent
 # ✓ registered 'billing-agent' — scoped capture key saved to ~/.effigent/config.json`}</CodeBlock>

@@ -240,12 +240,17 @@ export interface InstallMethod {
   steps: { label: string; code: string }[];
 }
 
+/** Hosted collector — matches the CLI's built-in default, so we only surface
+ *  --server when a self-hosted collector actually differs from it. */
+const DEFAULT_SERVER = 'https://app.effigent.ai';
+
 /** Step 1 — with the user's real key interpolated once they mint one. */
 export function installStep1(base: string, tenantKey?: string) {
+  const serverFlag = base && base !== DEFAULT_SERVER ? ` --server ${base}` : '';
   return {
     label: 'Log in with your workspace key, then register the agent',
     code: `npm i -g effigent
-effigent login --server ${base || '<dashboard-url>'} --key ${tenantKey ?? '<workspace-key>'}
+effigent login${serverFlag} --key ${tenantKey ?? '<workspace-key>'}
 effigent agent add my-agent            # → prints a scoped capture key`,
   };
 }
@@ -322,7 +327,7 @@ export function agentInstallPrompt(methodKey: string, base: string, tenantKey?: 
 
 Common setup:
 1. npm i -g effigent
-2. effigent login --server ${COLLECTOR} --key ${KEY}
+2. effigent login${base && base !== DEFAULT_SERVER ? ` --server ${COLLECTOR}` : ''} --key ${KEY}
 3. effigent agent add ${A}`;
 
   const tail: Record<string, string> = {

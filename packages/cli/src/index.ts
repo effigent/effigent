@@ -34,6 +34,10 @@ import { uploadSessionFile } from './upload.js';
 const program = new Command();
 program.name('effigent').description('Effigent — the Optimizer CLI: capture agent runs, compile away the waste').version('0.5.0');
 
+/** Hosted collector. The default so nobody has to type (or typo) --server; still
+ *  overridable with --server / EFFIGENT_SERVER for self-hosting or local dev. */
+const DEFAULT_SERVER = 'https://app.effigent.ai';
+
 program
   .command('analyze')
   .description('Analyze local Claude Code transcripts and render the Waste Report')
@@ -74,7 +78,7 @@ program
 program
   .command('login')
   .description('Persist the effigent server + API key (used as defaults by sync/run/doctor)')
-  .requiredOption('--server <url>', 'effigent server base URL')
+  .option('--server <url>', 'effigent server base URL (default: the hosted collector)', DEFAULT_SERVER)
   .requiredOption('--key <apiKey>', 'tenant API key')
   .action(async (opts) => {
     const config = loadConfig();
@@ -238,7 +242,7 @@ program
   )
   .action(async (opts) => {
     const config = loadConfig();
-    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     const apiKey: string | undefined = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
     if (!server || !apiKey) {
       console.error('No server/key: pass --server/--key, set EFFIGENT_SERVER/EFFIGENT_API_KEY, or run `effigent login`.');
@@ -352,7 +356,7 @@ program
       );
 
     const config = loadConfig();
-    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     const apiKey: string | undefined = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
     if (server) {
       try {
@@ -409,7 +413,7 @@ program
   .action(async (cmd: string[], opts) => {
     const argv = [...cmd];
     const config = loadConfig();
-    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     const apiKey: string | undefined = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
     if (server && !apiKey) {
       console.error('[effigent] --server requires --key (or EFFIGENT_API_KEY)');
@@ -500,7 +504,7 @@ agentCmd
   .option('--key <apiKey>', 'tenant OWNER key (default: effigent login config)')
   .action(async (name: string, opts) => {
     const config = loadConfig();
-    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     const apiKey: string | undefined = opts.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
     if (!server || !apiKey) {
       console.error('No server/key: run `effigent login` first (owner key), or pass --server/--key.');
@@ -599,7 +603,7 @@ const OTEL_HARNESSES: Record<string, { title: string; render: (base: string, key
 function printOtelInstall(harness: string, agentName: string): void {
   const config = loadConfig();
   const entry = config.agents?.[agentName];
-  const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server;
+  const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
   if (!entry || !server) {
     console.error(`Agent '${agentName}' not registered here — run \`effigent agent add ${agentName}\` first.`);
     process.exitCode = 2;
@@ -688,7 +692,7 @@ program
       // Throttle: at most one refresh per 15 minutes.
       if (existsSync(bundlePath) && Date.now() - statSync(bundlePath).mtimeMs < 15 * 60_000) return;
       const config = loadConfig();
-      const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server;
+      const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
       const apiKey: string | undefined = config.agents?.[opts.agent]?.key ?? config.apiKey;
       if (!server || !apiKey) return;
       const ctl = new AbortController();
@@ -726,7 +730,7 @@ program
   .action(async (opts) => {
     const config = loadConfig();
     const entry = config.agents?.[opts.agent];
-    const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server;
+    const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     if (!entry || !server) {
       console.error(`[effigent] claude-hook: agent '${opts.agent}' or server not configured`);
       process.exitCode = 2;
@@ -909,7 +913,7 @@ program
   .option('--no-mark', 'do not stamp the agent as optimized')
   .action(async (agentName: string, opts) => {
     const config = loadConfig();
-    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     const apiKey: string | undefined =
       opts.key ?? config.agents?.[agentName]?.key ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
     if (!server || !apiKey) {
@@ -1192,7 +1196,7 @@ program
     const { createServer } = await import('node:http');
     const { Readable } = await import('node:stream');
     const config = loadConfig();
-    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server;
+    const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
     const apiKey: string | undefined = opts.key ?? config.agents?.[opts.agent]?.key ?? config.apiKey;
     if (!server || !apiKey) {
       console.error('No server/key: run `effigent login` / `effigent agent add` first, or pass --server/--key.');
