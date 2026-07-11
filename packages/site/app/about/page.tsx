@@ -68,7 +68,6 @@ export default function About() {
         <h2 className="h-serif" style={{ fontSize: 26, margin: '0 0 14px' }}>Get in touch</h2>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           <a href={`mailto:${CONTACT_EMAIL}`} className="btn btn-primary" style={{ padding: '12px 22px', fontSize: 14, display: 'inline-block' }}>Email us</a>
-          <a href="https://github.com/effigent/effigent" target="_blank" rel="noreferrer" className="btn btn-ghost" style={{ padding: '12px 20px', fontSize: 14, display: 'inline-block' }}>GitHub</a>
           <Link href="/developers" className="btn btn-ghost" style={{ padding: '12px 20px', fontSize: 14, display: 'inline-block' }}>Install it instead</Link>
         </div>
       </DocSection>

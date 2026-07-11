@@ -43,7 +43,6 @@ export function Footer() {
         <Link href="/security">Security</Link>
         <Link href="/terms">Terms</Link>
         <Link href="/privacy">Privacy</Link>
-        <a href="https://github.com/effigent/effigent" target="_blank" rel="noreferrer">GitHub</a>
       </div>
     </div>
   );
