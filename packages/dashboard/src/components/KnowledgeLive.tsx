@@ -62,6 +62,19 @@ export function KnowledgeLive({ agent }: { agent: string }) {
 
   return (
     <div className="page-stack">
+      {/* Always-visible key for the fact kinds and metric columns. */}
+      <div className="tool-legend" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
+        <div>
+          <b>Fact kinds:</b>{' '}
+          <b>file</b> stable file content re-read · <b>search</b> a grep whose matches don’t change ·{' '}
+          <b>listing</b> a stable dir/glob listing · <b>fetch</b> an idempotent fetch ·{' '}
+          <b>value</b> a stable computed value.
+        </div>
+        <div>
+          <b>±N</b> = answer stability (Wilson lower bound) · <b>$ / run</b> = exploration cost saved per run ·{' '}
+          <b>N×</b> = times the fact recurred across runs. Click a fact to see its value.
+        </div>
+      </div>
       {data.map((a) => {
         const k = a.knowledge!;
         return (
