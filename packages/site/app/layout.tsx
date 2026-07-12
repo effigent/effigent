@@ -8,7 +8,7 @@ const sans = Roboto_Flex({ subsets: ['latin'], variable: '--font-sans', display:
 const mono = IBM_Plex_Mono({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--font-mono', display: 'swap' });
 
 const description =
-  'Effigent is the runtime layer for production AI agents. It watches which tool calls and reasoning steps never change and replaces them with cache — no code changes, no new framework.';
+  'Effigent runs alongside your agents, learns which steps are always the same, and automatically replaces them with efficient deterministic code — dramatically reducing LLM token consumption while eliminating non-deterministic outputs.';
 
 export const metadata: Metadata = {
   title: 'Effigent — the compiler for AI agents',

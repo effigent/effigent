@@ -161,7 +161,7 @@ export default function Page() {
               </div>
               <h1 className="h-serif" style={{ fontSize: 'clamp(32px, 8vw, 52px)', lineHeight: 1.12, margin: '0 0 22px' }}>Stop paying your agents to <b>think twice</b>.</h1>
               <div style={{ fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.65, maxWidth: 520, marginBottom: 36 }}>
-                Effigent sits alongside every agent execution, watches which tool calls and reasoning steps never change, and replaces them with cache — no code changes, no new framework.
+                Effigent runs alongside your agents, learns which steps are always the same, and automatically replaces them with efficient deterministic code — dramatically reducing LLM token consumption while eliminating non-deterministic outputs.
               </div>
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 14, marginBottom: 28 }}>
                 <Link href="/developers" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Install in 2 minutes</Link>
