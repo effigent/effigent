@@ -20,6 +20,7 @@
  */
 
 import type { RunGraph } from './types.ts';
+import { tsKey } from './align.ts';
 import { centroid, cosineSim, embedRunGraph } from './embed.ts';
 
 export interface DriftOptions {
@@ -58,7 +59,7 @@ export function detectDrift(graphs: RunGraph[], opts: DriftOptions = {}): DriftR
   const minAbsDelta = opts.minAbsDelta ?? 0.05;
 
   const ordered = [...graphs].sort(
-    (a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? '') || a.runId.localeCompare(b.runId),
+    (a, b) => tsKey(a.startedAt).localeCompare(tsKey(b.startedAt)) || a.runId.localeCompare(b.runId),
   );
   const n = ordered.length;
   const probeRuns = Math.min(probeSize, Math.floor(n / 3));

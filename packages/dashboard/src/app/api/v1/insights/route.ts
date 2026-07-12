@@ -129,7 +129,9 @@ export async function GET(req: Request) {
     const run: Run = {
       runId: r.session_id,
       agentId: r.agent_id,
-      startedAt: r.started_at ?? undefined,
+      // pg returns timestamp columns as Date; the engine sorts startedAt as an
+      // ISO string (localeCompare). Coerce at the boundary or the pipeline throws.
+      startedAt: r.started_at ? new Date(r.started_at).toISOString() : undefined,
       models: r.models ?? [],
       usageByModel: {},
       costUsd: Number(r.cost_usd ?? 0),

@@ -7,6 +7,7 @@ import {
   parseTranscript,
   replayToolSpec,
   synthesizeTools,
+  tsKey,
   type RawStep,
   type Run,
 } from '../src/index.js';
@@ -69,6 +70,20 @@ const runsOf = (specs: SynthRunSpec[]): Run[] =>
     return r;
   });
 
+describe('tsKey — Date-tolerant chronological sort key', () => {
+  it('passes ISO strings through and normalizes Dates to the same key', () => {
+    const iso = '2026-07-01T10:00:00.000Z';
+    expect(tsKey(iso)).toBe(iso);
+    expect(tsKey(new Date(iso))).toBe(iso);
+    expect(tsKey(new Date(iso)).localeCompare(tsKey(iso))).toBe(0);
+  });
+  it('treats null/undefined/invalid as empty without throwing', () => {
+    expect(tsKey(null)).toBe('');
+    expect(tsKey(undefined)).toBe('');
+    expect(() => tsKey('not-a-date')).not.toThrow();
+  });
+});
+
 describe('optimize pipeline — happy path (exercises synthesis + replay)', () => {
   it('synthesizes at least one tool and runs replay over a clean compile-unit', () => {
     const { tools } = runOptimizePipeline(runsOf(deployCheckSpecs(12)));
@@ -105,6 +120,18 @@ describe('optimize pipeline — robustness (must never throw)', () => {
       mkRun('b', [step('thinking', 'thinking', 'hmm'), step('tool_use', 'Grep', 'foo', { toolUseId: 't2' })]),
       mkRun('c', [step('model_turn', 'assistant', 'x'), step('model_turn', 'assistant', 'y'), step('model_turn', 'assistant', 'z')]),
     ],
+    // Regression: pg returns timestamp columns as Date objects, not ISO
+    // strings. The engine sorts startedAt with localeCompare — a Date has none,
+    // which crashed /optimize + /insights in production (the 19-run agent).
+    'runs with Date startedAt (pg timestamp shape)': () =>
+      Array.from({ length: 4 }, (_, i) => ({
+        ...mkRun(`d${i}`, [
+          step('tool_use', 'Read', `{"f":${i}}`, { toolUseId: `u${i}` }),
+          step('tool_result', 'Read', `ok${i}`, { toolUseId: `u${i}` }),
+        ]),
+        // deliberate type violation the DB layer used to introduce:
+        startedAt: new Date(Date.parse('2026-07-01T10:00:00Z') + i * 86_400_000) as unknown as string,
+      })),
     'runs where every tool call errored': () =>
       Array.from({ length: 6 }, (_, i) =>
         mkRun(`e${i}`, [

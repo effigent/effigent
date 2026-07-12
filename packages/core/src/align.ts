@@ -101,12 +101,22 @@ export interface AlignOptions {
  * visited in (startedAt, runId) order and join the first cluster whose EVERY
  * member is ≥ threshold similar; otherwise they found a new cluster.
  */
+/** Chronological sort key tolerant of Date/number/invalid startedAt values —
+ *  callers (e.g. a DB layer handing back Date objects) may violate the string
+ *  contract; a bad timestamp must never crash clustering. */
+export function tsKey(s: unknown): string {
+  if (typeof s === 'string') return s;
+  if (s == null) return '';
+  const d = new Date(s as string | number | Date);
+  return Number.isNaN(d.getTime()) ? String(s) : d.toISOString();
+}
+
 export function clusterBySimilarity(graphs: RunGraph[], opts: AlignOptions = {}): RunCluster[] {
   const threshold = opts.threshold ?? 0.75;
   const ordered = [...graphs].sort(
     (a, b) =>
       a.agentId.localeCompare(b.agentId) ||
-      (a.startedAt ?? '').localeCompare(b.startedAt ?? '') ||
+      tsKey(a.startedAt).localeCompare(tsKey(b.startedAt)) ||
       a.runId.localeCompare(b.runId),
   );
 
