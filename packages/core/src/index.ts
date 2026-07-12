@@ -21,3 +21,4 @@ export * from './embed.js';
 export * from './drift.js';
 export * from './knowledge.js';
 export * from './redact.js';
+export * from './routing.js';

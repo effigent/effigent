@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ALL_AGENTS } from '../data.ts';
+import { RouteTest } from './RouteTest.tsx';
 
 interface Opportunity {
   index: number;
@@ -101,6 +102,8 @@ export function Insights({ agent }: { agent: string }) {
               <span className="ins-save-k">est. removable cost</span>
             </div>
           </div>
+
+          <RouteTest agent={a.agentId} />
 
           {a.opportunities.length === 0 ? (
             <div className="foot-note" style={{ marginTop: 10 }}>No deterministic patterns found — this agent’s work varies run to run.</div>
