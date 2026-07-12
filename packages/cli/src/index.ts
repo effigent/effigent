@@ -803,6 +803,8 @@ interface Bundle {
   tools: BundleTool[]; readyTools?: number; knowledge: BundleKnowledge | null;
   /** OKF (Open Knowledge Format) concept files, rendered server-side. */
   okf?: { path: string; content: string }[];
+  /** The slim, budgeted knowledge actually injected in-context. */
+  slimContext?: { markdown: string; factsIncluded: number; estTokens: number; estUsdPerRun: number } | null;
   drift?: { changed: boolean; changedAt?: string } | null; activatable?: boolean; note?: string;
 }
 
@@ -908,17 +910,23 @@ function renderSkill(bundle: Bundle, executables: Set<string>, format: 'skill' |
     }
   }
 
+  const slim = bundle.slimContext?.markdown?.trim();
   const facts = bundle.knowledge?.entries ?? [];
-  if (facts.length > 0) {
-    lines.push('', '## Known facts — read these, do NOT re-run the lookups', '');
+  if (slim) {
+    // The smallest set of facts that stops re-exploration — pushed in-context.
+    // The full graph (every fact + connections) stays on disk as OKF, read
+    // on demand only for something not listed here.
+    lines.push('', slim, '');
     if (bundle.okf?.length) {
       lines.push(
-        'A navigable knowledge graph (OKF) is bundled under `knowledge/` — start at ' +
-          '[`knowledge/index.md`](knowledge/index.md) and follow the links between concepts ' +
-          '(files, symbols, listings) instead of re-running greps/globs/reads.',
+        'Full knowledge graph under `knowledge/` — open [`knowledge/index.md`](knowledge/index.md) ' +
+          'ONLY if you need a fact not listed above.',
         '',
       );
     }
+  } else if (facts.length > 0) {
+    // Fallback for bundles without a slim context.
+    lines.push('', '## Known facts — read these, do NOT re-run the lookups', '');
     for (const f of facts) {
       const key = f.key.replace(/`/g, "'").slice(0, 160);
       if (f.value.length <= 80 && !f.value.includes('\n')) {

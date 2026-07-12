@@ -4,7 +4,7 @@ import { buildRunGraph } from '@/lib/engine/graph.ts';
 import { analyzeDeterminism } from '@/lib/engine/determinism.ts';
 import { synthesizeTools } from '@/lib/engine/synthesize.ts';
 import { replayToolSpec } from '@/lib/engine/replay.ts';
-import { buildKnowledgeGraph, renderKnowledgeBundle } from '@/lib/engine/knowledge.ts';
+import { buildKnowledgeGraph, renderKnowledgeBundle, renderSlimContext } from '@/lib/engine/knowledge.ts';
 import { detectDrift } from '@/lib/engine/drift.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
@@ -146,6 +146,10 @@ export async function GET(req: Request) {
     const okf = knowledge?.worthIt
       ? renderKnowledgeBundle(knowledge, { generatedAt: new Date().toISOString() })
       : [];
+    // The slim, budgeted knowledge actually pushed into the agent's context —
+    // the smallest set of facts that stops it re-running the lookups. OKF (above)
+    // + the explorer hold the full detail; only this goes in-prompt.
+    const slimContext = knowledge?.worthIt ? renderSlimContext(knowledge) : null;
 
     const activatable = ready.length > 0 || (knowledge?.worthIt ?? false);
     if (url.searchParams.get('mark') === '1' && activatable) {
@@ -167,6 +171,7 @@ export async function GET(req: Request) {
       disabledTools: disabled.size,
       knowledge,
       okf,
+      slimContext,
       drift: drift ? { changed: drift.changed, changedAt: drift.changedAt, z: drift.z } : null,
       activatable,
     });

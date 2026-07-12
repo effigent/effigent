@@ -5,6 +5,7 @@ import {
   buildRunGraph,
   parseTranscript,
   renderKnowledgeBundle,
+  renderSlimContext,
   type Run,
 } from '../src/index.js';
 import { synthTranscript, type SynthRunSpec } from './helpers.js';
@@ -120,6 +121,28 @@ describe('knowledge graph — entities + connections', () => {
   it('empty graph → no OKF files', () => {
     const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(deployCheckSpecs(12)).map(buildRunGraph)));
     expect(renderKnowledgeBundle(kg)).toHaveLength(0);
+  });
+
+  it('renders slim context: highest-value facts, under budget, directive', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(repoExplorerSpecs(10)).map(buildRunGraph)));
+    const slim = renderSlimContext(kg, { tokenBudget: 1200 });
+    expect(slim.markdown).toContain('do NOT re-run');
+    expect(slim.factsIncluded).toBeGreaterThan(0);
+    expect(slim.estTokens).toBeLessThanOrEqual(1200); // budget respected
+    expect(slim.markdown).toContain('package.json'); // the known file is pushed
+  });
+
+  it('a tiny budget still respects the cap (pushes only what fits)', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(repoExplorerSpecs(10)).map(buildRunGraph)));
+    const slim = renderSlimContext(kg, { tokenBudget: 40 });
+    expect(slim.estTokens).toBeLessThanOrEqual(40);
+    expect(slim.factsIncluded).toBeLessThanOrEqual(kg.entries.length);
+  });
+
+  it('no facts → empty slim context', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(deployCheckSpecs(12)).map(buildRunGraph)));
+    expect(renderSlimContext(kg).markdown).toBe('');
+    expect(renderSlimContext(kg).factsIncluded).toBe(0);
   });
 });
 

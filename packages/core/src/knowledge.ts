@@ -504,3 +504,71 @@ export function renderKnowledgeBundle(
   files.unshift({ path: 'knowledge/index.md', content: `${idx.join('\n')}\n` });
   return files;
 }
+
+/* ---- slim context -------------------------------------------------------
+ * The SMALLEST set of facts worth carrying in an agent's context: the answers
+ * to the lookups it repeats every run, highest-value first, capped at a token
+ * budget, each answer compacted. The agent reads these and SKIPS the
+ * greps/globs/reads that produce them. Nothing else is pushed — the long tail
+ * (cheap to re-derive) stays out of context; big values point at the OKF file
+ * instead of bloating the prompt. Universal: a plain string any agent can be
+ * given as system context (not Claude-only, unlike a SKILL). */
+
+export interface SlimContext {
+  /** Ready-to-inject markdown. Empty when nothing clears the bar. */
+  markdown: string;
+  factsIncluded: number;
+  factsTotal: number;
+  /** Rough token estimate of `markdown` (chars ÷ 4). */
+  estTokens: number;
+  /** Per-run re-derivation cost the included facts remove. */
+  estUsdPerRun: number;
+}
+
+export function renderSlimContext(
+  report: KnowledgeGraphReport,
+  opts: { tokenBudget?: number; maxValueChars?: number } = {},
+): SlimContext {
+  const budget = opts.tokenBudget ?? 1200;
+  const maxVal = opts.maxValueChars ?? 200;
+  const estTokens = (s: string) => Math.ceil(s.length / 4);
+
+  const compactKey = (e: KnowledgeEntry): string => {
+    let arg = e.key;
+    try {
+      const o = JSON.parse(e.key) as Record<string, unknown>;
+      const vals = Object.values(o).filter((x): x is string => typeof x === 'string');
+      if (vals.length) arg = vals.join(' ');
+    } catch {
+      /* raw */
+    }
+    return `${e.tool} ${arg}`.replace(/\s+/g, ' ').trim().slice(0, 120);
+  };
+  const compactVal = (v: string): string => {
+    const one = v.replace(/\s*\n\s*/g, ' · ').replace(/\s+/g, ' ').trim();
+    return one.length > maxVal ? `${one.slice(0, maxVal)}… (full content known — do not re-read)` : one;
+  };
+
+  const ranked = [...report.entries].sort(
+    (a, b) => b.support * b.estUsdPerRun - a.support * a.estUsdPerRun || b.confidence - a.confidence,
+  );
+  const header = `## Already known — do NOT re-run these lookups (stable across ${report.runCount} runs)`;
+  const lines: string[] = [];
+  let tokens = estTokens(header);
+  let usd = 0;
+  for (const e of ranked) {
+    const line = `- \`${compactKey(e)}\` → ${compactVal(e.value)}`;
+    const t = estTokens(line);
+    if (tokens + t > budget) continue; // too big for what's left — keep scanning for smaller high-value facts
+    lines.push(line);
+    tokens += t;
+    usd += e.estUsdPerRun;
+  }
+  return {
+    markdown: lines.length ? `${header}\n\n${lines.join('\n')}\n` : '',
+    factsIncluded: lines.length,
+    factsTotal: report.entries.length,
+    estTokens: tokens,
+    estUsdPerRun: Math.round(usd * 10000) / 10000,
+  };
+}
