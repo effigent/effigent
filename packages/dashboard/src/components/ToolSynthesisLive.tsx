@@ -156,6 +156,19 @@ export function ToolSynthesisLive({ agent }: { agent: string }) {
             </div>
           ))}
         </div>
+
+        {/* Always-visible legend so the markers/columns are self-explanatory
+            without relying on hover tooltips. */}
+        <div className="tool-legend">
+          {rows.some((t) => t.guarded) && (
+            <div>
+              <span className="ins-act act-route" style={{ color: 'var(--gold)', background: 'color-mix(in srgb, var(--gold) 14%, transparent)', borderColor: 'color-mix(in srgb, var(--gold) 32%, transparent)' }}>⚠ side-effect</span>
+              {' '}the tool includes a step that changes external state (a file write, a network POST, …). It runs <b>guarded</b> — a dry-run plus an exact-template match are required before the real action fires.
+            </div>
+          )}
+          <div><b>replay</b> = share of recorded runs the compiled tool reproduces exactly · <b>saved / run</b> = measured LLM cost removed per run · <b>in runs</b> = share of this agent’s runs containing the procedure.</div>
+          <div><span className="ins-act act-replace">ready</span> replay-validated &amp; injected · <span className="ins-act act-route">shadow</span> still validating, not yet injected.</div>
+        </div>
       </section>
     </div>
   );
