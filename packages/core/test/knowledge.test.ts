@@ -4,6 +4,7 @@ import {
   buildKnowledgeGraph,
   buildRunGraph,
   parseTranscript,
+  renderKnowledgeBundle,
   type Run,
 } from '../src/index.js';
 import { synthTranscript, type SynthRunSpec } from './helpers.js';
@@ -50,6 +51,77 @@ function deployCheckSpecs(n: number): SynthRunSpec[] {
     };
   });
 }
+
+/** Agent that lists a dir AND reads a file that listing enumerated — so the
+ *  listing fact and the read fact share an entity (the connection). */
+function connectedSpecs(n: number): SynthRunSpec[] {
+  return Array.from({ length: n }, (_, i) => ({
+    sessionId: `conn-${i}`,
+    cwd: '/work/agents/linker',
+    prompt: `Task ${i}.`,
+    tools: [
+      { name: 'Glob', input: { pattern: 'src/**/*.ts' }, result: 'src/index.ts\nsrc/routes.ts\nsrc/db.ts' },
+      { name: 'Read', input: { file_path: 'src/routes.ts' }, result: 'export function registerRoute() { return 1; }' },
+      { name: 'Read', input: { file_path: 'package.json' }, result: '{"name":"linker","version":"1.0.0"}' },
+    ],
+    finalText: `Done ${i}.`,
+    startedAt: `2026-07-0${(i % 5) + 1}T10:00:00.000Z`,
+  }));
+}
+
+describe('knowledge graph — entities + connections', () => {
+  it('builds entity nodes with an `about` edge from every fact', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(connectedSpecs(10)).map(buildRunGraph)));
+    const facts = kg.nodes.filter((n) => n.type === 'fact');
+    const entities = kg.nodes.filter((n) => n.type === 'entity');
+    expect(facts.length).toBeGreaterThanOrEqual(3);
+    expect(entities.length).toBeGreaterThanOrEqual(3);
+    for (const f of facts) {
+      expect(kg.edges.some((e) => e.from === f.id && e.rel === 'about')).toBe(true);
+    }
+  });
+
+  it('connects a listing to the file it enumerates through a shared entity', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(connectedSpecs(10)).map(buildRunGraph)));
+    const routes = kg.nodes.find((n) => n.type === 'entity' && n.label.includes('routes.ts'));
+    expect(routes).toBeDefined();
+    const into = kg.edges.filter((e) => e.to === routes!.id);
+    // read routes.ts is ABOUT it; the glob LISTS it — two facts, one hub.
+    expect(into.some((e) => e.rel === 'about')).toBe(true);
+    expect(into.some((e) => e.rel === 'lists')).toBe(true);
+    expect(routes!.degree).toBeGreaterThanOrEqual(2);
+  });
+
+  it('no facts → empty graph (gate stays closed)', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(deployCheckSpecs(12)).map(buildRunGraph)));
+    expect(kg.nodes).toHaveLength(0);
+    expect(kg.edges).toHaveLength(0);
+  });
+
+  it('renders an OKF bundle: index.md + interlinked concept files', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(connectedSpecs(10)).map(buildRunGraph)));
+    const files = renderKnowledgeBundle(kg, { generatedAt: '2026-07-12T00:00:00.000Z' });
+
+    // index.md is the entry point, with OKF `type: index` frontmatter.
+    expect(files[0].path).toBe('knowledge/index.md');
+    expect(files[0].content).toMatch(/^---\ntype: index/);
+    expect(files[0].content).toContain('look up the concept you need');
+    expect(files[0].content).toMatch(/\]\(\w+\/[\w-]+\.md\)/); // links to concepts
+
+    // every concept file carries the one required OKF field, `type`.
+    const concepts = files.slice(1);
+    expect(concepts.length).toBeGreaterThan(0);
+    for (const c of concepts) expect(c.content).toMatch(/^---\ntype: \w+/);
+
+    // the graph's edges become OKF interlinks between concept files.
+    expect(concepts.some((c) => /\]\(\.\.\/\w+\/[\w-]+\.md\)/.test(c.content))).toBe(true);
+  });
+
+  it('empty graph → no OKF files', () => {
+    const [kg] = buildKnowledgeGraph(analyzeDeterminism(runsOf(deployCheckSpecs(12)).map(buildRunGraph)));
+    expect(renderKnowledgeBundle(kg)).toHaveLength(0);
+  });
+});
 
 describe('knowledge graph mining', () => {
   it('turns stable exploration into typed facts and gates on coverage', () => {

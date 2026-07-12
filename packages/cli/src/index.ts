@@ -718,7 +718,11 @@ program
         const skillDir = join(homedir(), '.claude', 'skills', `effigent-${slugify(opts.agent)}`);
         mkdirSync(skillDir, { recursive: true });
         writeFileSync(join(skillDir, 'SKILL.md'), renderSkill(bundle, executables));
-        console.error(`[effigent] bundle refreshed: ${ready.length} tool(s), ${bundle.knowledge?.entries.length ?? 0} fact(s)`);
+        const kgFiles = writeOkfBundle(skillDir, bundle.okf);
+        console.error(
+          `[effigent] bundle refreshed: ${ready.length} tool(s), ${bundle.knowledge?.entries.length ?? 0} fact(s)` +
+            (kgFiles ? `, ${kgFiles} OKF concept file(s)` : ''),
+        );
       }
     } catch {
       /* fail-open — a refresh problem must never block a session */
@@ -797,10 +801,31 @@ interface BundleTool {
 interface Bundle {
   agentId: string; window: number; runCount: number; generatedAt?: string;
   tools: BundleTool[]; readyTools?: number; knowledge: BundleKnowledge | null;
+  /** OKF (Open Knowledge Format) concept files, rendered server-side. */
+  okf?: { path: string; content: string }[];
   drift?: { changed: boolean; changedAt?: string } | null; activatable?: boolean; note?: string;
 }
 
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+
+/**
+ * Write the server-rendered OKF bundle under a skill dir. Paths arrive as
+ * `knowledge/…/x.md`; each segment is validated (no absolute paths, no `..`,
+ * word chars only) so a malicious bundle can't escape the target directory.
+ */
+function writeOkfBundle(baseDir: string, okf?: { path: string; content: string }[]): number {
+  if (!okf?.length) return 0;
+  let n = 0;
+  for (const f of okf) {
+    const segs = f.path.split('/').filter((p) => p && p !== '..' && /^[\w.-]+$/.test(p));
+    if (segs.length === 0 || typeof f.content !== 'string') continue;
+    const full = join(baseDir, ...segs);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, f.content);
+    n++;
+  }
+  return n;
+}
 
 /* --- deterministic executability ------------------------------------------
  * A tool is EXECUTABLE when code can run every step without an LLM: read-only
@@ -886,6 +911,14 @@ function renderSkill(bundle: Bundle, executables: Set<string>, format: 'skill' |
   const facts = bundle.knowledge?.entries ?? [];
   if (facts.length > 0) {
     lines.push('', '## Known facts — read these, do NOT re-run the lookups', '');
+    if (bundle.okf?.length) {
+      lines.push(
+        'A navigable knowledge graph (OKF) is bundled under `knowledge/` — start at ' +
+          '[`knowledge/index.md`](knowledge/index.md) and follow the links between concepts ' +
+          '(files, symbols, listings) instead of re-running greps/globs/reads.',
+        '',
+      );
+    }
     for (const f of facts) {
       const key = f.key.replace(/`/g, "'").slice(0, 160);
       if (f.value.length <= 80 && !f.value.includes('\n')) {
@@ -992,7 +1025,9 @@ program
       const skillDir = join(homedir(), '.claude', 'skills', `effigent-${slugify(agentName)}`);
       mkdirSync(skillDir, { recursive: true });
       writeFileSync(join(skillDir, 'SKILL.md'), renderSkill(bundle, executables));
+      const kgFiles = writeOkfBundle(skillDir, bundle.okf);
       console.log(`✓ Claude Code skill installed: ${skillDir}`);
+      if (kgFiles) console.log(`  ${kgFiles} OKF knowledge concept file(s) under knowledge/ — the agent navigates them from knowledge/index.md`);
       console.log(
         `  ${executables.size} tool(s) run as CODE via \`effigent tool\` — zero LLM tokens inside; ` +
           `${ready - executables.size} stay as recipes; facts replace re-exploration.`,

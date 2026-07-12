@@ -4,7 +4,7 @@ import { buildRunGraph } from '@/lib/engine/graph.ts';
 import { analyzeDeterminism } from '@/lib/engine/determinism.ts';
 import { synthesizeTools } from '@/lib/engine/synthesize.ts';
 import { replayToolSpec } from '@/lib/engine/replay.ts';
-import { buildKnowledgeGraph } from '@/lib/engine/knowledge.ts';
+import { buildKnowledgeGraph, renderKnowledgeBundle } from '@/lib/engine/knowledge.ts';
 import { detectDrift } from '@/lib/engine/drift.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
@@ -141,6 +141,11 @@ export async function GET(req: Request) {
     const activeTools = tools.filter((t) => !disabled.has(t.id));
     const ready = activeTools.filter((t) => t.replay?.status === 'ready');
     const knowledge = buildKnowledgeGraph(analyses).find((k) => k.agentId === agentId) ?? null;
+    // OKF bundle (Open Knowledge Format) — interlinked markdown concept files the
+    // agent navigates. Rendered server-side; the CLI just writes them to disk.
+    const okf = knowledge?.worthIt
+      ? renderKnowledgeBundle(knowledge, { generatedAt: new Date().toISOString() })
+      : [];
 
     const activatable = ready.length > 0 || (knowledge?.worthIt ?? false);
     if (url.searchParams.get('mark') === '1' && activatable) {
@@ -161,6 +166,7 @@ export async function GET(req: Request) {
       readyTools: ready.length,
       disabledTools: disabled.size,
       knowledge,
+      okf,
       drift: drift ? { changed: drift.changed, changedAt: drift.changedAt, z: drift.z } : null,
       activatable,
     });
