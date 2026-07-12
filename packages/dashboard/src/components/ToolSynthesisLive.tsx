@@ -50,6 +50,18 @@ export function ToolSynthesisLive({ agent }: { agent: string }) {
   const ready = rows.filter((t) => t.replay?.status === 'ready');
   const totalPerRun = rows.reduce((s, t) => s + (t.savings?.perRunUsd ?? 0), 0);
 
+  // Fixed metric-column widths so the header labels line up over the values.
+  const COL = { replay: 52, usd: 72, runs: 52 };
+  const rightCol = (w: number) => ({ minWidth: w, textAlign: 'right' as const, whiteSpace: 'nowrap' as const });
+  const TIP = {
+    replay: 'Replay pass rate — the share of recorded runs where the compiled tool reproduces the exact arguments and output it was mined from. ≥95% over ≥10 runs promotes it from "shadow" to "ready".',
+    usd: 'Measured LLM cost saved each run by replacing these steps with the compiled tool — includes context-carriage (intermediate results no longer re-read by later turns).',
+    runs: 'Support — the share of this agent\'s runs that contain this exact procedure.',
+    sideEffect: 'This tool includes a step that changes external state (a file write, a network POST, etc.). It runs guarded: a dry-run plus an exact-template match is required before the real action fires.',
+    ready: 'Replay-validated against the recorded runs — active in the injected bundle.',
+    shadow: 'Still in shadow validation — informational only, not yet injected.',
+  };
+
   if (loading) return <div className="dag-empty">Synthesizing tools from recent runs…</div>;
 
   if (rows.length === 0) {
@@ -68,9 +80,15 @@ export function ToolSynthesisLive({ agent }: { agent: string }) {
   return (
     <div className="page-stack">
       <div className="sess-totals">
-        <div className="totstat"><span className="k">Synthesized tools</span><span className="v tnum">{rows.length}</span></div>
-        <div className="totstat"><span className="k">Replay-validated</span><span className="v tnum">{ready.length}</span></div>
-        <div className="totstat"><span className="k">Est. saving / run</span><span className="v tnum">{usd(totalPerRun)}</span></div>
+        <div className="totstat" title="Deterministic procedures the engine has compiled from repeated steps across this workspace's agents.">
+          <span className="k">Synthesized tools</span><span className="v tnum">{rows.length}</span>
+        </div>
+        <div className="totstat" title="Tools that passed replay validation (≥95% over ≥10 runs) and are active in the injected bundle. The rest are in shadow.">
+          <span className="k">Replay-validated</span><span className="v tnum">{ready.length}</span>
+        </div>
+        <div className="totstat" title="Sum of the measured per-run LLM cost these tools remove when injected.">
+          <span className="k">Est. saving / run</span><span className="v tnum">{usd(totalPerRun)}</span>
+        </div>
       </div>
 
       <section className="panel panel-pad">
@@ -84,15 +102,22 @@ export function ToolSynthesisLive({ agent }: { agent: string }) {
           </div>
         </div>
         <div className="ins-list">
+          {/* column header — makes the three metric columns self-explanatory */}
+          <div className="ins-row" style={{ borderTop: 'none', paddingTop: 0, paddingBottom: 8 }}>
+            <div className="ins-main"><span className="ins-kind">Tool · agent · shape</span></div>
+            <div className="ins-metrics">
+              <span className="ins-kind" style={rightCol(COL.replay)} title={TIP.replay}>replay</span>
+              <span className="ins-kind" style={rightCol(COL.usd)} title={TIP.usd}>saved / run</span>
+              <span className="ins-kind" style={rightCol(COL.runs)} title={TIP.runs}>in runs</span>
+            </div>
+          </div>
           {rows.map((t) => (
             <div key={`${t.agentId}-${t.id}`} className="ins-row">
               <div className="ins-main">
                 <div className="ins-top">
                   <span
                     className={`ins-act ${t.replay?.status === 'ready' ? 'act-replace' : 'act-route'}`}
-                    title={t.replay?.status === 'ready'
-                      ? 'replay-validated — active in the bundle'
-                      : 'in shadow validation — not yet activated'}
+                    title={t.replay?.status === 'ready' ? TIP.ready : TIP.shadow}
                   >
                     {t.replay?.status ?? 'shadow'}
                   </span>
@@ -100,19 +125,31 @@ export function ToolSynthesisLive({ agent }: { agent: string }) {
                   <span className="ins-kind">
                     {t.agentId} · {t.steps} steps
                     {t.params.length ? ` · ${t.params.length} param${t.params.length === 1 ? '' : 's'}` : ''}
-                    {t.guarded ? ' · ⚠ side-effect' : ''}
                   </span>
+                  {t.guarded && (
+                    <span
+                      className="ins-kind"
+                      style={{ color: 'var(--gold)', cursor: 'help' }}
+                      title={TIP.sideEffect}
+                    >
+                      ⚠ side-effect
+                    </span>
+                  )}
                 </div>
-                {t.tools?.length > 0 && <div className="ins-preview">{t.tools.join('  →  ')}</div>}
+                {t.tools?.length > 0 && (
+                  <div className="ins-preview" title="The recorded step sequence this tool compiles.">
+                    {t.tools.join('  →  ')}
+                  </div>
+                )}
               </div>
               <div className="ins-metrics">
-                {t.replay && (
-                  <span className="ins-conf tnum" title="replay pass rate">
-                    {Math.round(t.replay.passRate * 100)}%
-                  </span>
-                )}
-                <span className="ins-usd tnum" title="measured saving per run">{usd(t.savings?.perRunUsd ?? 0)}</span>
-                <span className="ins-runs tnum" title="share of runs containing this procedure">
+                <span className="ins-conf tnum" style={rightCol(COL.replay)} title={TIP.replay}>
+                  {t.replay ? `${Math.round(t.replay.passRate * 100)}%` : '—'}
+                </span>
+                <span className="ins-usd tnum" style={rightCol(COL.usd)} title={TIP.usd}>
+                  {usd(t.savings?.perRunUsd ?? 0)}
+                </span>
+                <span className="ins-runs tnum" style={rightCol(COL.runs)} title={TIP.runs}>
                   {Math.round((t.evidence?.support ?? 0) * 100)}%
                 </span>
               </div>
