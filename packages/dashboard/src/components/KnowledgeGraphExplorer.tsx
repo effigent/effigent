@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import ReactFlow, { Background, Controls, MiniMap, type Edge, type Node } from 'reactflow';
+import ReactFlow, { Background, BackgroundVariant, Controls, MiniMap, type Edge, type Node } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { ALL_AGENTS } from '../data.ts';
 
@@ -11,20 +11,20 @@ interface Knowledge { agentId: string; runCount: number; entries: KEntry[]; node
 interface AgentInsight { agentId: string; knowledge?: Knowledge | null }
 
 const KIND_COLOR: Record<string, string> = {
-  file: 'var(--cyan)', listing: 'var(--blue)', search: 'var(--gold)', fetch: 'var(--purple)', value: 'var(--green)',
+  file: '#37d3e6', listing: '#5b9dff', search: '#ecb94a', fetch: '#9b7bff', value: '#35d29a',
 };
+const ENTITY_COLOR = '#9b7bff';
+const colorOf = (n: KNode) => (n.type === 'entity' ? ENTITY_COLOR : KIND_COLOR[n.kind ?? ''] ?? '#66667a');
 
-/** Deterministic hub-and-spoke layout: entities on a ring, each fact placed
- *  near the entity it is `about`. reactflow renders + lets the user drag. */
 function layout(nodes: KNode[], edges: KEdge[]): Map<string, { x: number; y: number }> {
   const pos = new Map<string, { x: number; y: number }>();
   const entities = nodes.filter((n) => n.type === 'entity');
   const facts = nodes.filter((n) => n.type === 'fact');
   const subjectOf = new Map<string, string>();
   for (const e of edges) if (e.rel === 'about') subjectOf.set(e.from, e.to);
-  const R = Math.max(280, entities.length * 90);
+  const R = Math.max(300, entities.length * 95);
   entities.forEach((n, i) => {
-    const a = (2 * Math.PI * i) / Math.max(1, entities.length);
+    const a = (2 * Math.PI * i) / Math.max(1, entities.length) - Math.PI / 2;
     pos.set(n.id, { x: R * Math.cos(a), y: R * Math.sin(a) });
   });
   const around = new Map<string, number>();
@@ -34,20 +34,38 @@ function layout(nodes: KNode[], edges: KEdge[]): Map<string, { x: number; y: num
     if (base) {
       const k = around.get(sub!) ?? 0;
       around.set(sub!, k + 1);
-      const a = (2 * Math.PI * k) / 6 + 0.4;
-      pos.set(n.id, { x: base.x + 130 * Math.cos(a), y: base.y + 130 * Math.sin(a) });
+      const a = (2 * Math.PI * k) / 5 + 0.6;
+      pos.set(n.id, { x: base.x + 155 * Math.cos(a), y: base.y + 155 * Math.sin(a) });
     } else {
-      pos.set(n.id, { x: (i % 6) * 120 - 300, y: (Math.floor(i / 6)) * 90 });
+      pos.set(n.id, { x: (i % 6) * 150 - 375, y: Math.floor(i / 6) * 100 });
     }
   });
   return pos;
 }
 
+const nodeLabel = (n: KNode) => {
+  const color = colorOf(n);
+  if (n.type === 'entity') {
+    return (
+      <span className="kgn kgn-entity">
+        <span className="kgn-type" style={{ color }}>{n.entityType}</span>
+        {n.label}
+      </span>
+    );
+  }
+  return (
+    <span className="kgn kgn-fact">
+      <span className="kgn-dot" style={{ background: color }} />
+      {n.label}
+    </span>
+  );
+};
+
 export function KnowledgeGraphExplorer({ agent }: { agent: string }) {
   const [data, setData] = useState<Knowledge[]>([]);
   const [loading, setLoading] = useState(true);
   const [picked, setPicked] = useState<string | null>(null);
-  const [sel, setSel] = useState<KNode | null>(null);
+  const [selId, setSelId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -60,50 +78,65 @@ export function KnowledgeGraphExplorer({ agent }: { agent: string }) {
           .filter((k): k is Knowledge => !!k && (k.nodes?.length ?? 0) > 0);
         setData(kgs);
         setPicked(kgs[0]?.agentId ?? null);
+        setSelId(null);
       })
       .catch(() => setData([]))
       .finally(() => setLoading(false));
   }, [agent]);
 
   const kg = useMemo(() => data.find((k) => k.agentId === picked) ?? data[0], [data, picked]);
+  const nodeById = useMemo(() => new Map((kg?.nodes ?? []).map((n) => [n.id, n])), [kg]);
   const entryByFact = useMemo(() => new Map((kg?.entries ?? []).map((e) => [e.id, e])), [kg]);
+  const positions = useMemo(() => (kg ? layout(kg.nodes, kg.edges) : new Map()), [kg]);
+
+  const sel = selId ? nodeById.get(selId) : undefined;
+  const neighbors = useMemo(() => {
+    if (!kg || !selId) return null;
+    const set = new Set<string>([selId]);
+    for (const e of kg.edges) {
+      if (e.from === selId) set.add(e.to);
+      if (e.to === selId) set.add(e.from);
+    }
+    return set;
+  }, [kg, selId]);
 
   const { nodes, edges } = useMemo(() => {
     if (!kg) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const pos = layout(kg.nodes, kg.edges);
     const nodes: Node[] = kg.nodes.map((n) => {
+      const color = colorOf(n);
       const isEntity = n.type === 'entity';
-      const color = isEntity ? 'var(--purple)' : (KIND_COLOR[n.kind ?? ''] ?? 'var(--txt-3)');
+      const dim = neighbors ? !neighbors.has(n.id) : false;
+      const isSel = n.id === selId;
       return {
         id: n.id,
-        position: pos.get(n.id) ?? { x: 0, y: 0 },
-        data: { label: n.label },
+        position: positions.get(n.id) ?? { x: 0, y: 0 },
+        data: { label: nodeLabel(n) },
+        className: `kg-node ${isEntity ? 'is-entity' : 'is-fact'}${isSel ? ' is-sel' : ''}`,
         style: {
-          background: 'var(--panel-2)',
-          color: 'var(--txt)',
-          border: `1px solid ${color}`,
-          borderRadius: isEntity ? 10 : 6,
-          fontSize: isEntity ? 12 : 11,
-          fontWeight: isEntity ? 650 : 500,
-          padding: isEntity ? '8px 12px' : '5px 9px',
-          width: 'auto',
-          maxWidth: 200,
-          boxShadow: isEntity && n.degree > 1 ? `0 0 0 3px color-mix(in srgb, ${color} 22%, transparent)` : undefined,
-        },
+          '--kg-c': color,
+          opacity: dim ? 0.2 : 1,
+        } as React.CSSProperties,
       };
     });
-    const edges: Edge[] = kg.edges.map((e, i) => ({
-      id: `e${i}`,
-      source: e.from,
-      target: e.to,
-      label: e.rel,
-      animated: e.rel !== 'about',
-      style: { stroke: e.rel === 'about' ? 'var(--border)' : 'var(--accent-line)' },
-      labelStyle: { fill: 'var(--txt-3)', fontSize: 9, textTransform: 'uppercase' },
-      labelBgStyle: { fill: 'var(--panel)' },
-    }));
+    const edges: Edge[] = kg.edges.map((e, i) => {
+      const incident = selId ? e.from === selId || e.to === selId : false;
+      const muted = neighbors ? !incident : false;
+      const c = e.rel === 'about' ? '#3a3a4a' : ENTITY_COLOR;
+      return {
+        id: `e${i}`,
+        source: e.from,
+        target: e.to,
+        type: 'smoothstep',
+        label: !neighbors || incident ? e.rel : undefined,
+        animated: e.rel !== 'about' && (!neighbors || incident),
+        style: { stroke: incident ? '#c9b8ff' : c, strokeWidth: incident ? 2 : 1, opacity: muted ? 0.07 : 0.9 },
+        labelStyle: { fill: 'var(--txt-3)', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.06em' },
+        labelBgStyle: { fill: 'var(--panel)', fillOpacity: 0.9 },
+        labelBgPadding: [4, 2],
+      };
+    });
     return { nodes, edges };
-  }, [kg]);
+  }, [kg, positions, neighbors, selId]);
 
   if (loading) return <div className="dag-empty">Building the knowledge graph…</div>;
   if (!kg) {
@@ -116,6 +149,12 @@ export function KnowledgeGraphExplorer({ agent }: { agent: string }) {
   }
 
   const selEntry = sel?.factId ? entryByFact.get(sel.factId) : undefined;
+  const connected = sel
+    ? kg.edges
+        .filter((e) => e.from === sel.id || e.to === sel.id)
+        .map((e) => ({ node: nodeById.get(e.from === sel.id ? e.to : e.from), rel: e.rel }))
+        .filter((c): c is { node: KNode; rel: KEdge['rel'] } => !!c.node)
+    : [];
 
   return (
     <div className="page-stack">
@@ -124,9 +163,10 @@ export function KnowledgeGraphExplorer({ agent }: { agent: string }) {
           <b>{kg.nodes.filter((n) => n.type === 'entity').length}</b> concepts ·{' '}
           <b>{kg.nodes.filter((n) => n.type === 'fact').length}</b> facts ·{' '}
           <b>{kg.edges.length}</b> connections · mined from {kg.runCount} runs
+          <span className="kg-hint"> — click a node to focus its connections</span>
         </span>
         {data.length > 1 && (
-          <select className="kg-agent-select" value={picked ?? ''} onChange={(e) => { setPicked(e.target.value); setSel(null); }}>
+          <select className="kg-agent-select" value={picked ?? ''} onChange={(e) => { setPicked(e.target.value); setSelId(null); }}>
             {data.map((k) => <option key={k.agentId} value={k.agentId}>{k.agentId}</option>)}
           </select>
         )}
@@ -137,37 +177,49 @@ export function KnowledgeGraphExplorer({ agent }: { agent: string }) {
           nodes={nodes}
           edges={edges}
           fitView
+          fitViewOptions={{ padding: 0.2 }}
           minZoom={0.2}
+          nodesConnectable={false}
           proOptions={{ hideAttribution: true }}
-          onNodeClick={(_, n) => setSel(kg.nodes.find((x) => x.id === n.id) ?? null)}
-          onPaneClick={() => setSel(null)}
+          onNodeClick={(_, n) => setSelId(n.id)}
+          onPaneClick={() => setSelId(null)}
         >
-          <Background color="var(--border)" gap={18} />
+          <Background variant={BackgroundVariant.Dots} color="#26263a" gap={20} size={1} />
           <Controls showInteractive={false} />
-          <MiniMap pannable zoomable nodeColor={() => 'var(--accent-line)'} maskColor="rgba(0,0,0,0.6)" style={{ background: 'var(--panel-2)' }} />
+          <MiniMap pannable zoomable nodeColor={(n) => (nodeById.get(n.id)?.type === 'entity' ? ENTITY_COLOR : '#3a3a4a')} maskColor="rgba(6,6,12,0.72)" style={{ background: 'var(--panel-2)', border: '1px solid var(--border)', borderRadius: 8 }} />
         </ReactFlow>
 
         {sel && (
           <div className="kg-detail">
             <div className="kg-detail-head">
-              <span className={`ins-act ${sel.type === 'entity' ? 'act-template' : 'act-memoize'}`}>
+              <span className="kg-detail-badge" style={{ '--kg-c': colorOf(sel) } as React.CSSProperties}>
                 {sel.type === 'entity' ? sel.entityType : sel.kind}
               </span>
-              <button className="kg-detail-x" onClick={() => setSel(null)} aria-label="close">×</button>
+              <button className="kg-detail-x" onClick={() => setSelId(null)} aria-label="close">×</button>
             </div>
-            <div className="mono-name" style={{ fontSize: 13, wordBreak: 'break-all' }}>{sel.label}</div>
+            <div className="kg-detail-title mono-name">{sel.label}</div>
             {selEntry ? (
               <>
-                <div className="panel-sub" style={{ margin: '8px 0' }}>
+                <div className="panel-sub" style={{ margin: '6px 0 10px' }}>
                   {selEntry.support}× · confidence {selEntry.confidence}/100 · ~${selEntry.estUsdPerRun}/run to re-derive
                 </div>
-                <pre className="kg-detail-val">{selEntry.value.slice(0, 1200)}</pre>
+                <pre className="kg-detail-val">{selEntry.value.slice(0, 1400)}</pre>
               </>
             ) : (
-              <div className="panel-sub" style={{ marginTop: 8 }}>
-                {sel.type === 'entity'
-                  ? `${sel.degree} connection(s). Click a linked fact to see its value.`
-                  : 'Fact node.'}
+              <div className="panel-sub" style={{ margin: '6px 0 10px' }}>
+                {sel.type === 'entity' ? `Concept · ${sel.degree} connection${sel.degree === 1 ? '' : 's'}` : 'Fact node'}
+              </div>
+            )}
+            {connected.length > 0 && (
+              <div className="kg-detail-conns">
+                <div className="kg-detail-conns-h">Connected</div>
+                {connected.map((c, i) => (
+                  <button key={i} className="kg-chip" onClick={() => setSelId(c.node.id)}>
+                    <span className="kg-chip-rel">{c.rel}</span>
+                    <span className="kg-chip-dot" style={{ background: colorOf(c.node) }} />
+                    {c.node.label}
+                  </button>
+                ))}
               </div>
             )}
           </div>
