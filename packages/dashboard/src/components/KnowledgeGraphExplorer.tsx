@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import ReactFlow, { Background, BackgroundVariant, Controls, MiniMap, type Edge, type Node } from 'reactflow';
-import 'reactflow/dist/style.css';
+import { ReactFlow, Background, BackgroundVariant, Controls, MiniMap, type Edge, type Node } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { ALL_AGENTS } from '../data.ts';
 
 interface KEntry { id: string; kind: string; tool: string; key: string; value: string; support: number; confidence: number; estUsdPerRun: number }
@@ -181,7 +181,7 @@ export function KnowledgeGraphExplorer({ agent }: { agent: string }) {
           minZoom={0.2}
           nodesConnectable={false}
           proOptions={{ hideAttribution: true }}
-          onNodeClick={(_, n) => setSelId(n.id)}
+          onNodeClick={(_: React.MouseEvent, n: Node) => setSelId(n.id)}
           onPaneClick={() => setSelId(null)}
         >
           <Background variant={BackgroundVariant.Dots} color="#26263a" gap={20} size={1} />
