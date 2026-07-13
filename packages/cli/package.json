@@ -1,6 +1,6 @@
 {
   "name": "effigent",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "effigent — the Optimizer CLI: capture AI-agent runs (Claude Code, Codex, any OTel agent) and send them to your Optimizer workspace.",
   "type": "module",
   "bin": {
