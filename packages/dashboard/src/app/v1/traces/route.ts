@@ -1,4 +1,5 @@
 import { authenticateKey, persistRun } from '@/lib/agent-auth.ts';
+import { StorageNotProvisioned } from '@/lib/storage.ts';
 import { otelToRuns, type OtlpTracesPayload } from '@/lib/engine/otel.ts';
 
 export const dynamic = 'force-dynamic';
@@ -32,6 +33,16 @@ export async function POST(req: Request) {
   });
   if (runs.length === 0) return Response.json({ parsed: false, runs: 0 }, { status: 202 });
 
-  for (const run of runs) await persistRun(auth, run.runId, run);
+  try {
+    for (const run of runs) await persistRun(auth, run.runId, run);
+  } catch (err) {
+    if (err instanceof StorageNotProvisioned) {
+      return Response.json(
+        { error: 'workspace storage not provisioned', hint: 'an org admin must configure S3 storage before capture can start' },
+        { status: 409 },
+      );
+    }
+    throw err;
+  }
   return Response.json({ parsed: true, runs: runs.length });
 }

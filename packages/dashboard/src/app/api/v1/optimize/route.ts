@@ -6,7 +6,8 @@ import { synthesizeTools } from '@/lib/engine/synthesize.ts';
 import { replayToolSpec } from '@/lib/engine/replay.ts';
 import { buildKnowledgeGraph, renderKnowledgeBundle, renderSlimContext } from '@/lib/engine/knowledge.ts';
 import { detectDrift } from '@/lib/engine/drift.ts';
-import type { RawStep, Run } from '@/lib/engine/types.ts';
+import { loadRun } from '@/lib/storage.ts';
+import type { Run } from '@/lib/engine/types.ts';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -26,25 +27,12 @@ const WINDOW = 20;
 // implies an active injection). Set EFFIGENT_ENABLE_INJECTION=1 to re-enable.
 const INJECTION_ENABLED = process.env.EFFIGENT_ENABLE_INJECTION === '1';
 
-interface DbStep {
-  kind: RawStep['kind'];
-  name: string;
-  payload: string;
-  isError?: boolean;
-  toolUseId?: string;
-  model?: string;
-  tokens?: { input: number; output: number; cacheCreation?: number; cacheRead?: number };
-  ms?: number;
-  durationMs?: number;
-}
 interface RunRow {
   session_id: string;
   started_at: string | null;
   cost_usd: string | number | null;
-  steps: DbStep[] | null;
-  first_prompt: string | null;
-  final_output: string | null;
-  models: string[] | null;
+  blob_path: string | null;
+  parsed: Run | null; // legacy inline rows; null for S3-stored runs
 }
 
 export async function GET(req: Request) {
@@ -61,40 +49,30 @@ export async function GET(req: Request) {
   }
 
   const { rows } = await pool.query<RunRow>(
-    `select session_id, started_at, cost_usd,
-            parsed->'steps' as steps,
-            parsed->>'firstPrompt' as first_prompt,
-            parsed->>'finalOutput' as final_output,
-            parsed->'models' as models
+    `select session_id, started_at, cost_usd, blob_path, parsed
        from runs where tenant_id = $1 and agent_id = $2
       order by started_at desc nulls last limit ${WINDOW}`,
     [auth.tenantId, agentId],
   );
 
+  // Run content lives in the org's S3 bucket — load the window in parallel
+  // (legacy pre-S3 rows carry inline `parsed`; loadRun handles both).
+  const loaded = await Promise.all(rows.map((r) => loadRun(auth.tenantId, r.blob_path, r.parsed)));
   const runs: Run[] = rows
-    .filter((r) => r.steps?.length)
-    .map((r) => ({
-      runId: r.session_id,
-      agentId,
-      // pg returns timestamp columns as Date; the engine sorts startedAt as an
-      // ISO string (localeCompare). Coerce at the boundary or the pipeline throws.
-      startedAt: r.started_at ? new Date(r.started_at).toISOString() : undefined,
-      models: r.models ?? [],
-      usageByModel: {},
-      costUsd: Number(r.cost_usd ?? 0),
-      firstPrompt: r.first_prompt ?? undefined,
-      finalOutput: r.final_output ?? undefined,
-      steps: (r.steps ?? []).map((s) => ({
-        kind: s.kind,
-        name: s.name,
-        payload: String(s.payload ?? ''),
-        isError: s.isError,
-        toolUseId: s.toolUseId,
-        model: s.model,
-        tokens: s.tokens,
-        durationMs: s.durationMs ?? s.ms,
-      })),
-    }));
+    .map((r, i) => {
+      const run = loaded[i];
+      if (!run?.steps?.length) return null;
+      // pg returns timestamps as Date; the engine sorts startedAt as an ISO string.
+      return {
+        ...run,
+        runId: r.session_id,
+        agentId,
+        startedAt: r.started_at ? new Date(r.started_at).toISOString() : run.startedAt,
+        usageByModel: run.usageByModel ?? {},
+        costUsd: Number(r.cost_usd ?? run.costUsd ?? 0),
+      } as Run;
+    })
+    .filter((r): r is Run => r !== null);
 
   if (runs.length < 2) {
     return Response.json(

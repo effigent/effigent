@@ -111,15 +111,19 @@ tracking table** — every statement must be idempotent (`if not exists`, `on co
 | `tenants` | A workspace. One per Clerk org / personal user. | `clerk_ref` (`org:<id>` / `user:<id>`, partial-unique) |
 | `api_keys` | `cck_` capture/tenant keys (sha256-hashed). | `role` (`owner`/`member`), `agent_id` (scoped keys) |
 | `agents` | Registered agents. | `name` (unique per tenant), `harness`, **`optimized_at`** |
-| `runs` | One session / invocation. | `session_id`, `agent_id` (name), `cost_usd`, `models` (jsonb), `n_steps`, `blob_path`, **`parsed`** (trimmed `Run` jsonb), `graph_blob_path` |
+| `runs` | One session / invocation. | `session_id`, `agent_id` (name), `cost_usd`, `models` (jsonb), `n_steps`, **`blob_path`** (`s3://<org-bucket>/…` — S3-only residency; legacy rows `'inline'`), `parsed` (jsonb — **null** for S3 rows; legacy inline only), `graph_blob_path` |
 | `reports`, `clusters`, `cluster_runs`, `findings` | Analysis output. | |
 
 Migrations of note: `003` agents + scoped keys, `004` run-graph pointer, `006` Clerk
 tenant ref, **`007` `agents.optimized_at`** (the Optimized indicator), `008` tenant
 limits, **`009` ownership** (`created_by`/`created_by_label` on `api_keys` + `agents` —
 who added/controls an agent; CLI registrations inherit from the registering key; all
-reads/writes column-guarded), **`010` `tenants.redaction_rules`** (org custom filters).
-Prod ALTERs for 009+010: `scripts/apply-ownership-redaction.mjs` (owner-run).
+reads/writes column-guarded), **`010` `tenants.redaction_rules`** (org custom filters),
+`011` `agent_tools` (injected-tool registry), **`012` `tenants.storage_*`** (per-org
+S3 storage config — bucket/region/prefix/kms/role_arn/external_id; role_arn set ⇒ BYO
+cross-account bucket, null ⇒ Effigent-account bucket).
+Prod ALTERs: `scripts/apply-ownership-redaction.mjs` (009+010) and
+`scripts/apply-org-storage.mjs` (012); per-org buckets via `scripts/provision-org-bucket.mjs` (owner-run).
 
 `runs.agent_id` stores the agent **name** (keeps the engine/queries stable); `agents.id`
 binds credentials only.
@@ -222,7 +226,14 @@ synthesize/replay/embed/drift/knowledge/redact/jsonb — copies of core with `.j
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb
-sanitizing at the single write choke point; `blob_path='inline'`, no blob store).
+sanitizing at the single write choke point). **Per-org S3 storage (S3-only
+residency):** `persistRun` writes the redacted run blob to the org's OWN bucket
+via `lib/storage.ts` (`putRunBlob`; BYO cross-account buckets via STS AssumeRole),
+storing only the `s3://` `blob_path` + metadata in Neon (`parsed` null). Reads
+(`sessions/[id]`, `insights`, `optimize`) fetch blobs with `loadRun` (parallel;
+legacy `parsed` rows still work). No bucket configured ⇒ ingest returns **409**
+(the onboarding gate). Org-admin `GET/PUT /api/v1/storage` sets BYO config with a
+write→read probe. See `docs/onboarding.md`.
 The CLI is published to npm as **`effigent`** (bin: `effigent`; config `~/.effigent`; keys minted `eff_`, legacy `cck_` accepted) (single-file esbuild CJS bundle, core
 inlined — no workspace dep). `packages/server` remains as reference/self-host only.
 

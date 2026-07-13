@@ -8,6 +8,7 @@ import { synthesizeTools } from '@/lib/engine/synthesize.ts';
 import { replayToolSpec } from '@/lib/engine/replay.ts';
 import { detectDrift } from '@/lib/engine/drift.ts';
 import { buildKnowledgeGraph } from '@/lib/engine/knowledge.ts';
+import { loadRun } from '@/lib/storage.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
 export const dynamic = 'force-dynamic';
@@ -34,28 +35,13 @@ const DEFAULT_WINDOW = 20;
 const MIN_WINDOW = 5;
 const MAX_WINDOW = 100;
 
-interface DbStep {
-  kind: RawStep['kind'];
-  name: string;
-  payload: string;
-  isError?: boolean;
-  toolUseId?: string;
-  model?: string;
-  tokens?: { input: number; output: number; cacheCreation?: number; cacheRead?: number };
-  /** Seed data calls it `ms`; OTLP capture calls it durationMs. */
-  ms?: number;
-  durationMs?: number;
-}
-
 interface RunRow {
   session_id: string;
   agent_id: string;
   started_at: string | null;
   cost_usd: string | number | null;
-  steps: DbStep[] | null;
-  first_prompt: string | null;
-  final_output: string | null;
-  models: string[] | null;
+  blob_path: string | null;
+  parsed: Run | null; // legacy inline rows; null for S3-stored runs
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -111,45 +97,33 @@ export async function GET(req: Request) {
   // Only the last `window` sessions per agent, and only the fields the engine
   // needs — the scan stays bounded no matter how much history exists.
   const { rows } = await pool.query<RunRow>(
-    `select session_id, agent_id, started_at, cost_usd, steps, first_prompt, final_output, models from (
-       select session_id, agent_id, started_at, cost_usd,
-              parsed->'steps' as steps,
-              parsed->>'firstPrompt' as first_prompt,
-              parsed->>'finalOutput' as final_output,
-              parsed->'models' as models,
+    `select session_id, agent_id, started_at, cost_usd, blob_path, parsed from (
+       select session_id, agent_id, started_at, cost_usd, blob_path, parsed,
               row_number() over (partition by agent_id order by started_at desc nulls last) as rn
          from runs where tenant_id = $1 ${agentFilter ? 'and agent_id = $2' : ''}
      ) w where rn <= ${window}`,
     agentFilter ? [tenantId, agentFilter] : [tenantId],
   );
 
+  // Run content lives in the org's S3 bucket — load the window in parallel.
+  // (Legacy pre-S3 rows carry inline `parsed`; loadRun handles both.)
+  const loaded = await Promise.all(rows.map((r) => loadRun(tenantId, r.blob_path, r.parsed)));
+
   const runsByAgent = new Map<string, Run[]>();
-  for (const r of rows) {
-    if (!r.steps?.length) continue;
-    const run: Run = {
+  rows.forEach((r, i) => {
+    const run = loaded[i];
+    if (!run?.steps?.length) return;
+    // pg returns timestamps as Date; the engine sorts startedAt as an ISO string.
+    const normalized: Run = {
+      ...run,
       runId: r.session_id,
       agentId: r.agent_id,
-      // pg returns timestamp columns as Date; the engine sorts startedAt as an
-      // ISO string (localeCompare). Coerce at the boundary or the pipeline throws.
-      startedAt: r.started_at ? new Date(r.started_at).toISOString() : undefined,
-      models: r.models ?? [],
-      usageByModel: {},
-      costUsd: Number(r.cost_usd ?? 0),
-      firstPrompt: r.first_prompt ?? undefined,
-      finalOutput: r.final_output ?? undefined,
-      steps: r.steps.map((s) => ({
-        kind: s.kind,
-        name: s.name,
-        payload: String(s.payload ?? ''),
-        isError: s.isError,
-        toolUseId: s.toolUseId,
-        model: s.model,
-        tokens: s.tokens,
-        durationMs: s.durationMs ?? s.ms,
-      })),
+      startedAt: r.started_at ? new Date(r.started_at).toISOString() : run.startedAt,
+      usageByModel: run.usageByModel ?? {},
+      costUsd: Number(r.cost_usd ?? run.costUsd ?? 0),
     };
-    (runsByAgent.get(r.agent_id) ?? runsByAgent.set(r.agent_id, []).get(r.agent_id)!).push(run);
-  }
+    (runsByAgent.get(r.agent_id) ?? runsByAgent.set(r.agent_id, []).get(r.agent_id)!).push(normalized);
+  });
 
   const insights = [];
   for (const [agentId, runs] of runsByAgent) {

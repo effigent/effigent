@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { pool } from './db.ts';
+import { putRunBlob } from './storage.ts';
 import { sanitizeForJsonb } from './engine/jsonb.ts';
 import {
   applyRedactionRules,
@@ -99,6 +100,11 @@ async function tenantRedactionRules(tenantId: string): Promise<CompiledCustomRul
  * Payloads are redacted + trimmed BEFORE storage (nothing sensitive is kept):
  * built-in patterns first, then the tenant's custom rules; jsonb-hostile
  * characters stripped (NULs, lone surrogates).
+ *
+ * S3-only residency: the redacted run blob is written to the ORG'S OWN bucket
+ * and only its `s3://` URI + metadata land in Neon (`parsed` stays null). If the
+ * workspace has no bucket configured, `putRunBlob` throws `StorageNotProvisioned`
+ * — the caller turns that into a 409 (no bucket ⇒ no capture).
  */
 export async function persistRun(auth: AgentAuth, sessionId: string, run: Run): Promise<void> {
   const custom = await tenantRedactionRules(auth.tenantId);
@@ -109,6 +115,8 @@ export async function persistRun(auth: AgentAuth, sessionId: string, run: Run): 
     finalOutput: run.finalOutput ? scrub(run.finalOutput) : run.finalOutput,
     steps: run.steps.map((s) => ({ ...s, payload: scrub(s.payload.slice(0, 8000)) })),
   });
+  const safe = (s: string) => s.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 200);
+  const blobPath = await putRunBlob(auth.tenantId, `${safe(run.agentId)}/${safe(sessionId)}.json.gz`, JSON.stringify(trimmed));
   await pool.query(
     `insert into runs (tenant_id, session_id, agent_id, started_at, ended_at,
                        cost_usd, models, n_steps, blob_path, parsed)
@@ -117,7 +125,7 @@ export async function persistRun(auth: AgentAuth, sessionId: string, run: Run): 
        set agent_id = excluded.agent_id, started_at = excluded.started_at,
            ended_at = excluded.ended_at, cost_usd = excluded.cost_usd,
            models = excluded.models, n_steps = excluded.n_steps,
-           parsed = excluded.parsed`,
+           blob_path = excluded.blob_path, parsed = excluded.parsed`,
     [
       auth.tenantId,
       sessionId,
@@ -127,8 +135,8 @@ export async function persistRun(auth: AgentAuth, sessionId: string, run: Run): 
       run.costUsd,
       JSON.stringify(run.models),
       run.steps.length,
-      'inline', // no blob store on this deployment; parsed (redacted) is the record
-      JSON.stringify(trimmed),
+      blobPath, // s3://<org-bucket>/<agent>/<session>.json.gz
+      null, // S3-only residency — no run content in Neon
     ],
   );
 }

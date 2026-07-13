@@ -1,6 +1,13 @@
 import { gunzipSync } from 'node:zlib';
 import { authenticateKey, persistRun } from '@/lib/agent-auth.ts';
+import { StorageNotProvisioned } from '@/lib/storage.ts';
 import { parseTranscript } from '@/lib/engine/transcript.ts';
+
+const notProvisioned = () =>
+  Response.json(
+    { error: 'workspace storage not provisioned', hint: 'an org admin must configure S3 storage before capture can start' },
+    { status: 409 },
+  );
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -65,7 +72,12 @@ export async function POST(req: Request) {
       steps: run.steps,
     };
     // persistRun redacts + trims payloads — same choke point as the raw path.
-    await persistRun(auth, sessionId, full as Parameters<typeof persistRun>[2]);
+    try {
+      await persistRun(auth, sessionId, full as Parameters<typeof persistRun>[2]);
+    } catch (err) {
+      if (err instanceof StorageNotProvisioned) return notProvisioned();
+      throw err;
+    }
     return Response.json({ parsed: true, agentId: effectiveAgentId, costUsd: full.costUsd, preparsed: true });
   }
 
@@ -88,6 +100,11 @@ export async function POST(req: Request) {
   const run = parseTranscript(jsonl, { agentId: effectiveAgentId });
   if (!run) return Response.json({ parsed: false, reason: 'no assistant activity' }, { status: 202 });
 
-  await persistRun(auth, sessionId, run);
+  try {
+    await persistRun(auth, sessionId, run);
+  } catch (err) {
+    if (err instanceof StorageNotProvisioned) return notProvisioned();
+    throw err;
+  }
   return Response.json({ parsed: true, agentId: run.agentId, costUsd: run.costUsd });
 }
