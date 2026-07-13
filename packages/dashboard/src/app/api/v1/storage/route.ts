@@ -31,7 +31,29 @@ async function migrated(): Promise<boolean> {
   return col;
 }
 
-export async function GET() {
+/**
+ * Live write→read probe against the org's bucket. Classifies failures so the
+ * caller sees whether it's an S3 or KMS misconfig, not just a raw error.
+ */
+async function probeStorage(tenantId: string) {
+  const key = `.effigent/healthcheck-${tenantId.slice(0, 8)}.json.gz`;
+  try {
+    const uri = await putRunBlob(tenantId, key, JSON.stringify({ probe: true }));
+    const round = JSON.parse(await getRunBlob(tenantId, uri)) as { probe?: boolean };
+    if (!round.probe) throw new Error('round-trip mismatch');
+    return { ok: true as const, s3: 'ok', kms: 'ok' };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    let hint = 'unknown error';
+    if (/NoSuchBucket|does not exist|NotFound/i.test(msg)) hint = 'bucket missing — not provisioned yet';
+    else if (/kms|GenerateDataKey|Decrypt|KMSKeyId/i.test(msg)) hint = 'KMS denied — add this principal as a key user on the CMK';
+    else if (/AccessDenied|Forbidden|not authorized/i.test(msg)) hint = 'S3 access denied — check the effigent-* IAM policy on this principal';
+    else if (/credential|region|ResolveEndpoint|ENOTFOUND/i.test(msg)) hint = 'AWS creds/region not configured in the dashboard env';
+    return { ok: false as const, hint, error: msg };
+  }
+}
+
+export async function GET(req: Request) {
   const { userId, orgId, orgRole } = await auth();
   if (!userId) return Response.json({ error: 'unauthorized' }, { status: 401 });
   const tenantId = await resolveTenant({ userId, orgId: orgId ?? null });
@@ -45,10 +67,22 @@ export async function GET() {
     [tenantId],
   );
   const r = rows[0] ?? {};
+  const canEdit = canEditOf(orgId, orgRole);
+  const provisioned = !!r.storage_bucket;
+
+  // ?probe=1 runs a real write→read (org-admin only) so you can confirm the
+  // S3 + KMS wiring end-to-end from the browser instead of reading logs.
+  let probe: Awaited<ReturnType<typeof probeStorage>> | { skipped: string } | undefined;
+  if (new URL(req.url).searchParams.get('probe') === '1') {
+    if (!canEdit) probe = { skipped: 'org-admin only' };
+    else if (!provisioned) probe = { skipped: 'no bucket configured yet' };
+    else probe = await probeStorage(tenantId);
+  }
+
   return Response.json({
     migrated: true,
-    provisioned: !!r.storage_bucket,
-    mode: r.storage_role_arn ? 'byo' : r.storage_bucket ? 'effigent' : 'none',
+    provisioned,
+    mode: r.storage_role_arn ? 'byo' : provisioned ? 'effigent' : 'none',
     bucket: r.storage_bucket ?? null,
     region: r.storage_region ?? null,
     prefix: r.storage_prefix ?? null,
@@ -56,7 +90,8 @@ export async function GET() {
     roleArn: r.storage_role_arn ?? null,
     externalId: r.storage_external_id ?? null,
     provisionedAt: r.storage_provisioned_at ?? null,
-    canEdit: canEditOf(orgId, orgRole),
+    canEdit,
+    ...(probe ? { probe } : {}),
   });
 }
 
