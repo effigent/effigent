@@ -32,7 +32,8 @@ import {
 import { uploadSessionFile } from './upload.js';
 
 const program = new Command();
-program.name('effigent').description('Effigent — the Optimizer CLI: capture agent runs, compile away the waste').version('0.5.0');
+const VERSION = '0.6.0';
+program.name('effigent').description('Effigent — the Optimizer CLI: capture agent runs, compile away the waste').version(VERSION);
 
 /** Hosted collector — a dedicated subdomain so the ingestion backend can move to
  *  its own infra later by repointing DNS, with zero client reconfiguration. The
@@ -1405,7 +1406,75 @@ program
     });
   });
 
-program.parseAsync().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exitCode = 1;
-});
+/** True when semver `a` is strictly newer than `b` (major.minor.patch, prerelease ignored). */
+function isNewerVersion(a: string, b: string): boolean {
+  const parse = (v: string) => v.split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+/**
+ * Tell the user when a newer `effigent` is on npm. Fail-open and non-intrusive:
+ * only on an interactive terminal, skipped for machine/background commands, the
+ * registry is hit at most once/day (result cached in ~/.effigent), and any
+ * error (offline, timeout) is swallowed — an update check must NEVER break a run.
+ */
+async function notifyUpdate(): Promise<void> {
+  try {
+    if (!process.stderr.isTTY || process.env.EFFIGENT_NO_UPDATE_CHECK) return;
+    const sub = process.argv[2];
+    const skip = new Set(['claude-hook', 'claude-refresh', 'sync', 'proxy']);
+    if (!sub || sub.startsWith('-') || skip.has(sub)) return;
+
+    const cachePath = join(EFFIGENT_HOME, 'update-check.json');
+    let cache: { lastCheck?: number; latest?: string } = {};
+    if (existsSync(cachePath)) {
+      try {
+        cache = JSON.parse(readFileSync(cachePath, 'utf8')) as typeof cache;
+      } catch {
+        /* ignore a corrupt cache */
+      }
+    }
+
+    let latest = cache.latest;
+    const DAY = 24 * 60 * 60 * 1000;
+    if (!cache.lastCheck || Date.now() - cache.lastCheck >= DAY) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 1500);
+      try {
+        const res = await fetch('https://registry.npmjs.org/effigent/latest', { signal: ctrl.signal });
+        if (res.ok) latest = ((await res.json()) as { version?: string }).version ?? latest;
+      } finally {
+        clearTimeout(timer);
+      }
+      try {
+        mkdirSync(EFFIGENT_HOME, { recursive: true });
+        writeFileSync(cachePath, JSON.stringify({ lastCheck: Date.now(), latest }));
+      } catch {
+        /* ignore cache-write failure */
+      }
+    }
+
+    if (latest && isNewerVersion(latest, VERSION)) {
+      console.error(
+        `\n[33m▲ A new version of effigent is available: ${latest}[0m (you have ${VERSION}).\n  Update to get the latest fixes:  [36mnpm i -g effigent@latest[0m`,
+      );
+    }
+  } catch {
+    /* fail-open: never let an update check interfere with the CLI */
+  }
+}
+
+program
+  .parseAsync()
+  .then(() => notifyUpdate())
+  .catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  });
