@@ -24,19 +24,19 @@ const HARNESSES = [
   {
     id: 'codex',
     name: 'OpenAI Codex CLI',
-    tag: 'Native OpenTelemetry',
+    tag: 'Native OpenTelemetry · config.toml',
     blurb:
-      'Codex emits OpenTelemetry natively. `effigent install codex` prints the exact environment block — with your scoped key already filled in — to point it at the collector.',
+      'Codex reads OTel config only from ~/.codex/config.toml — not from environment variables. `effigent install codex` writes a scoped [otel] block there, with your key filled in, so capture stays local to Codex and never touches your shell profile or other apps.',
     code: `effigent install codex --agent billing-agent
 
-# prints, ready to paste (endpoint + key filled in from your login):
-export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${TRACES_URL}
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
-export OTEL_EXPORTER_OTLP_COMPRESSION=none
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <scoped-key>"
+# ✓ wrote a scoped [otel] block to ~/.codex/config.toml:
+[otel]
+trace_exporter = { otlp-http = { endpoint = "${TRACES_URL}", protocol = "json", headers = { Authorization = "Bearer <scoped-key>" } } }
+exporter       = { otlp-http = { endpoint = "${COLLECTOR_URL}/v1/logs", protocol = "json", headers = { Authorization = "Bearer <scoped-key>" } } }
 
+# fully restart Codex (OTel initializes at launch), then:
 codex "fix the failing checkout test"`,
-    title: 'zsh — codex',
+    title: 'toml — ~/.codex/config.toml',
   },
   {
     id: 'python',

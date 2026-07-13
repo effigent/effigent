@@ -538,6 +538,7 @@ agentCmd
     console.log(`✓ registered agent '${name}' — scoped key saved to ${CONFIG_PATH}\n`);
     console.log('Capture options for this agent:');
     console.log(`  • Claude Code (this machine):  effigent install claude --agent ${name}`);
+    console.log(`  • OpenAI Codex (this machine): effigent install codex --agent ${name}`);
     console.log('  • SDK / OpenLLMetry agent — export before running it:');
     console.log(`      export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${base}/v1/traces`);
     console.log('      export OTEL_EXPORTER_OTLP_PROTOCOL=http/json');
@@ -574,10 +575,6 @@ function otelEnv(base: string, key: string): string {
 
 /** Per-harness capture recipes. Adding a harness = adding one entry here. */
 const OTEL_HARNESSES: Record<string, { title: string; render: (base: string, key: string) => string }> = {
-  codex: {
-    title: 'OpenAI Codex CLI (native OTel)',
-    render: (base, key) => `# Set before launching codex — it exports spans natively:\n${otelEnv(base, key)}\ncodex "your task"`,
-  },
   python: {
     title: 'Python agents — LangGraph / CrewAI / AutoGen / OpenAI Agents (OpenLLMetry)',
     // baseUrl/api_endpoint is the BASE — the SDK appends /v1/traces itself
@@ -625,13 +622,79 @@ installCmd
   .option('--harness <name>', `one of: ${Object.keys(OTEL_HARNESSES).join(', ')}`, 'generic')
   .action((opts) => printOtelInstall(opts.harness, opts.agent));
 
-for (const harness of ['codex', 'python', 'node', 'proxy'] as const) {
+for (const harness of ['python', 'node', 'proxy'] as const) {
   installCmd
     .command(harness)
     .description(`Print the ${OTEL_HARNESSES[harness].title} setup for a registered agent`)
     .requiredOption('--agent <name>', 'registered agent name (from `effigent agent add`)')
     .action((opts) => printOtelInstall(harness, opts.agent));
 }
+
+// Codex configures OpenTelemetry ONLY through ~/.codex/config.toml — it ignores
+// the standard OTEL_EXPORTER_OTLP_* env vars. So we write a scoped, clearly
+// delimited [otel] block there. Never a shell profile / global env: a global
+// OTEL_* block is inherited by every OTel-aware process (incl. Codex Desktop)
+// and breaks their telemetry init at startup.
+const CODEX_BEGIN = '# >>> effigent (managed) — delete this block to disable Effigent capture >>>';
+const CODEX_END = '# <<< effigent (managed) <<<';
+
+/** The managed `[otel]` block. Traces carry the DAG; logs carry token counts. */
+function codexOtelBlock(base: string, key: string): string {
+  const http = (path: string) =>
+    `{ otlp-http = { endpoint = "${base}${path}", protocol = "json", headers = { Authorization = "Bearer ${key}" } } }`;
+  return [
+    CODEX_BEGIN,
+    '[otel]',
+    `trace_exporter = ${http('/v1/traces')}`,
+    `exporter = ${http('/v1/logs')}`,
+    'metrics_exporter = "none"',
+    CODEX_END,
+  ].join('\n');
+}
+
+installCmd
+  .command('codex')
+  .description('Wire up Codex capture: write a scoped [otel] block into ~/.codex/config.toml (no global env)')
+  .requiredOption('--agent <name>', 'registered agent name (from `effigent agent add`)')
+  .action((opts) => {
+    const config = loadConfig();
+    const entry = config.agents?.[opts.agent];
+    const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
+    if (!entry || !server) {
+      console.error(`Agent '${opts.agent}' not registered here — run \`effigent agent add ${opts.agent}\` first.`);
+      process.exitCode = 2;
+      return;
+    }
+    const base = server.replace(/\/$/, '');
+    const block = codexOtelBlock(base, entry.key);
+    const cfgPath = join(homedir(), '.codex', 'config.toml');
+    const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : '';
+
+    if (existing.includes(CODEX_BEGIN)) {
+      // Idempotent: replace the previously-written managed block in place.
+      const start = existing.indexOf(CODEX_BEGIN);
+      const end = existing.indexOf(CODEX_END, start) + CODEX_END.length;
+      const next = existing.slice(0, start) + block + existing.slice(end);
+      copyFileSync(cfgPath, `${cfgPath}.bak`);
+      writeFileSync(cfgPath, next);
+      console.log(`✓ updated the Effigent [otel] block in ${cfgPath} (backup: ${cfgPath}.bak)`);
+    } else if (/^\s*\[otel[\].]/m.test(existing)) {
+      // A hand-written [otel] table already exists — don't risk corrupting it
+      // (TOML forbids a duplicate [otel] table). Print for manual merge.
+      console.log(`Your ${cfgPath} already has an [otel] section. Merge these keys into it by hand:\n`);
+      console.log(block);
+      console.log('\n(Then fully restart Codex — OpenTelemetry initializes at launch.)');
+      return;
+    } else {
+      mkdirSync(dirname(cfgPath), { recursive: true });
+      if (existing) copyFileSync(cfgPath, `${cfgPath}.bak`);
+      const next = existing.trim() ? `${existing.trimEnd()}\n\n${block}\n` : `${block}\n`;
+      writeFileSync(cfgPath, next);
+      console.log(`✓ wrote the Effigent [otel] block to ${cfgPath}${existing ? ` (backup: ${cfgPath}.bak)` : ''}`);
+    }
+    console.log('  Scoped to Codex only — no shell profile or global env is touched, so other apps (incl. Codex Desktop) are unaffected.');
+    console.log('  Fully restart Codex, then run a task. Runs appear in the dashboard under this agent after the session ends.');
+  });
 
 installCmd
   .command('claude')

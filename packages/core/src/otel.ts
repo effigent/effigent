@@ -24,6 +24,8 @@ export interface AnyValue {
   intValue?: string | number;
   doubleValue?: number;
   boolValue?: boolean;
+  /** OTLP structured body / nested value (log records carry event fields here). */
+  kvlistValue?: { values?: KeyValue[] };
 }
 export interface KeyValue {
   key: string;
@@ -171,8 +173,8 @@ export function otelToRuns(payload: OtlpTracesPayload, opts: OtelToRunOptions = 
   const groups = new Map<string, FlatSpan[]>();
   for (const f of flat) {
     const key =
-      str(f.attrs, 'gen_ai.conversation.id', 'session.id', 'gen_ai.session.id') ??
-      str(f.resourceAttrs, 'gen_ai.conversation.id', 'session.id', 'gen_ai.session.id') ??
+      str(f.attrs, 'gen_ai.conversation.id', 'session.id', 'gen_ai.session.id', 'conversation.id') ??
+      str(f.resourceAttrs, 'gen_ai.conversation.id', 'session.id', 'gen_ai.session.id', 'conversation.id') ??
       f.span.traceId ??
       'otel-unknown';
     (groups.get(key) ?? groups.set(key, []).get(key)!).push(f);
@@ -305,6 +307,191 @@ export function otelToRuns(payload: OtlpTracesPayload, opts: OtelToRunOptions = 
       steps,
       firstPrompt,
       finalOutput,
+    });
+  }
+
+  return runs;
+}
+
+// ---- OTLP/HTTP JSON logs shapes ----
+//
+// The THIRD ingestion shape: OTLP log records. OpenAI Codex configures OTel only
+// via ~/.codex/config.toml (it ignores OTEL_* env vars) and — unlike the trace
+// exporter, which carries structure — emits its token usage as structured LOG
+// EVENTS (`codex.sse_event`, `codex.api_request`, `codex.tool_result`, …), keyed
+// by `conversation.id`. We fold those into the SAME `Run` contract as traces.
+//
+// NOTE: the codex.* event/attribute names below follow OpenAI's Codex OTel docs
+// (2026). Attribute *keys* (e.g. token fields) should be reconciled against a
+// real captured payload — see the spike in the plan. Lookups are aliased so we
+// degrade gracefully if a key differs.
+
+export interface OtelLogRecord {
+  timeUnixNano?: string | number;
+  observedTimeUnixNano?: string | number;
+  eventName?: string;
+  severityText?: string;
+  body?: AnyValue;
+  attributes?: KeyValue[];
+  traceId?: string;
+  spanId?: string;
+}
+export interface ScopeLogs {
+  scope?: { name?: string };
+  logRecords?: OtelLogRecord[];
+}
+export interface ResourceLogs {
+  resource?: { attributes?: KeyValue[] };
+  scopeLogs?: ScopeLogs[];
+}
+export interface OtlpLogsPayload {
+  resourceLogs?: ResourceLogs[];
+}
+
+/** Record attributes plus any fields carried in a structured (kvlist) body. */
+function readLogAttrs(rec: OtelLogRecord): Attrs {
+  const m = readAttrs(rec.attributes);
+  const bodyKv = rec.body?.kvlistValue?.values;
+  if (bodyKv) for (const [k, v] of readAttrs(bodyKv)) if (!m.has(k)) m.set(k, v);
+  return m;
+}
+
+/**
+ * Group OTLP log records into runs and normalize each to the `Run` contract.
+ * Cost is accumulated once, from the token-bearing streaming events; API-request
+ * events supply the call structure. Groups with no assistant/tool activity are
+ * dropped (mirrors otelToRuns / parseTranscript).
+ */
+export function otelLogsToRuns(payload: OtlpLogsPayload, opts: OtelToRunOptions = {}): Run[] {
+  interface FlatLog {
+    rec: OtelLogRecord;
+    attrs: Attrs;
+    resourceAttrs: Attrs;
+  }
+  const flat: FlatLog[] = [];
+  for (const rl of payload.resourceLogs ?? []) {
+    const resourceAttrs = readAttrs(rl.resource?.attributes);
+    for (const sl of rl.scopeLogs ?? []) {
+      for (const rec of sl.logRecords ?? []) {
+        flat.push({ rec, attrs: readLogAttrs(rec), resourceAttrs });
+      }
+    }
+  }
+  if (flat.length === 0) return [];
+
+  const groups = new Map<string, FlatLog[]>();
+  for (const f of flat) {
+    const key =
+      str(f.attrs, 'conversation.id', 'gen_ai.conversation.id', 'session.id') ??
+      str(f.resourceAttrs, 'conversation.id', 'gen_ai.conversation.id', 'session.id') ??
+      f.rec.traceId ??
+      'codex-unknown';
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(f);
+  }
+
+  const runs: Run[] = [];
+  for (const [key, records] of groups) {
+    records.sort((a, b) => Number(a.rec.timeUnixNano ?? 0) - Number(b.rec.timeUnixNano ?? 0));
+
+    const steps: RawStep[] = [];
+    const usageByModel: Record<string, TokenUsage> = {};
+    const models = new Set<string>();
+    let agentId: string | undefined;
+    let firstPrompt: string | undefined;
+    let runModel: string | undefined;
+    let minStart: number | undefined;
+    let maxEnd: number | undefined;
+
+    for (const { rec, attrs, resourceAttrs } of records) {
+      agentId ??=
+        opts.agentId ?? str(resourceAttrs, 'service.name', 'gen_ai.agent.name') ?? str(attrs, 'service.name');
+      const t = Number(rec.timeUnixNano ?? rec.observedTimeUnixNano ?? 0);
+      if (t > 0) {
+        minStart = minStart === undefined ? t : Math.min(minStart, t);
+        maxEnd = maxEnd === undefined ? t : Math.max(maxEnd, t);
+      }
+      const ts = nanoToIso(rec.timeUnixNano ?? rec.observedTimeUnixNano);
+      const event = rec.eventName ?? str(attrs, 'event.name') ?? '';
+      const model =
+        str(attrs, 'model', 'gen_ai.request.model', 'gen_ai.response.model') ?? str(resourceAttrs, 'model');
+      if (model) runModel ??= model;
+
+      if (event.includes('tool')) {
+        const name = str(attrs, 'tool.name', 'tool_name', 'gen_ai.tool.name', 'name') ?? 'tool';
+        if (event.includes('result')) {
+          const isError = attrs.get('success') === false || str(attrs, 'status') === 'error';
+          steps.push({
+            kind: 'tool_result',
+            name,
+            payload: str(attrs, 'output', 'result', 'output.snippet') ?? '',
+            isError: isError || undefined,
+            timestamp: ts,
+            durationMs: num(attrs, 'duration_ms', 'duration') || undefined,
+          });
+        } else {
+          // tool_decision / tool_call → the invocation
+          steps.push({
+            kind: 'tool_use',
+            name,
+            payload: str(attrs, 'arguments', 'tool.arguments', 'input') ?? '{}',
+            timestamp: ts,
+          });
+        }
+      } else if (event.includes('user_prompt')) {
+        firstPrompt ??=
+          str(attrs, 'prompt', 'content') ?? `<prompt ${num(attrs, 'length', 'prompt.length', 'character_count')} chars>`;
+      } else if (event.includes('sse_event')) {
+        // Token-bearing streaming event: the source of truth for cost.
+        const usage = normalizeGenAiUsage(str(attrs, 'gen_ai.provider.name', 'gen_ai.system') ?? 'openai', attrs);
+        const merged: TokenUsage = {
+          inputTokens: usage.inputTokens || num(attrs, 'input_tokens', 'tokens.input', 'input'),
+          outputTokens: usage.outputTokens || num(attrs, 'output_tokens', 'tokens.output', 'output'),
+          cacheReadInputTokens:
+            usage.cacheReadInputTokens || num(attrs, 'cached_tokens', 'tokens.cached', 'cached', 'reasoning_tokens'),
+          cacheCreationInputTokens: usage.cacheCreationInputTokens,
+        };
+        if (merged.inputTokens || merged.outputTokens || merged.cacheReadInputTokens) {
+          const m = model ?? runModel ?? 'unknown';
+          models.add(m);
+          usageByModel[m] = addUsage(usageByModel[m] ?? emptyUsage(), merged);
+        }
+      } else if (event.includes('api_request')) {
+        // The model call boundary → one assistant turn (structure; cost is summed
+        // from sse_event above so we don't double-count).
+        const m = model ?? runModel ?? 'unknown';
+        steps.push({
+          kind: 'model_turn',
+          name: 'assistant',
+          payload: '',
+          timestamp: ts,
+          model: m,
+          durationMs: num(attrs, 'duration_ms', 'duration') || undefined,
+        });
+      }
+      // conversation_starts / websocket_* → metadata only.
+    }
+
+    // Ensure a run with token usage always has at least one assistant turn.
+    const hasTurn = steps.some((s) => s.kind === 'model_turn' && s.name === 'assistant');
+    if (!hasTurn && Object.keys(usageByModel).length > 0) {
+      steps.push({ kind: 'model_turn', name: 'assistant', payload: '', timestamp: nanoToIso(maxEnd), model: runModel ?? 'unknown' });
+    }
+
+    const hasActivity = steps.some((s) => s.kind === 'tool_use' || (s.kind === 'model_turn' && s.name === 'assistant'));
+    if (!hasActivity) continue;
+
+    const costUsd = Object.entries(usageByModel).reduce((sum, [m, u]) => sum + usageCostUsd(m, u), 0);
+
+    runs.push({
+      runId: `codex:${key}`,
+      agentId: agentId ?? opts.defaultAgentId ?? 'unknown-agent',
+      startedAt: nanoToIso(minStart),
+      endedAt: nanoToIso(maxEnd),
+      models: [...models],
+      usageByModel,
+      costUsd,
+      steps,
+      firstPrompt,
     });
   }
 

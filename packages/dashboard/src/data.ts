@@ -335,10 +335,10 @@ Common setup:
 5. Verify: effigent doctor
 
 From your next finished session onward, every run uploads automatically. Paste the output of \`effigent doctor\` back to me. If any step fails, show the exact error and do not retry destructively.`,
-    codex: `4. effigent install codex --agent ${A}   (prints the exact OTEL_* environment block with a scoped key)
-5. Persist that env block to your shell profile / launch config so it is set BEFORE Codex next starts — OpenTelemetry instruments at launch, not mid-run.
+    codex: `4. effigent install codex --agent ${A}   (writes a scoped [otel] block into ~/.codex/config.toml — Codex reads OTel config only from there; NEVER add global OTEL_* env vars to a shell profile)
+5. Fully restart Codex so it loads the new config — OpenTelemetry initializes at launch, not mid-run.
 
-Report the env block you added and confirm it will load on next launch. Capture begins on your next run.`,
+Report the path the installer wrote and confirm Codex restarted cleanly. Capture begins on your next run.`,
     python: `4. pip install traceloop-sdk   (then run \`effigent install python --agent ${A}\` to get your scoped key)
 5. At startup, before any model call, add:
    from traceloop.sdk import Traceloop
