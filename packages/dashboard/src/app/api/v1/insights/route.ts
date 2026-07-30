@@ -9,6 +9,7 @@ import { replayToolSpec } from '@/lib/engine/replay.ts';
 import { detectDrift } from '@/lib/engine/drift.ts';
 import { buildKnowledgeGraph } from '@/lib/engine/knowledge.ts';
 import { mineSegments, type MinedSegment } from '@/lib/engine/segments.ts';
+import { mineSubtrees, type MinedSubtree } from '@/lib/engine/subtrees.ts';
 import { loadRun } from '@/lib/storage.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
@@ -114,6 +115,44 @@ function wireSegments(segments: MinedSegment[]) {
   }));
 }
 
+
+/**
+ * Trim mined dataflow subtrees for the wire.
+ *
+ * Same honesty rule as segments: structural recurrence is not compilability. The
+ * thresholds below were validated against real interactive traffic rather than
+ * guessed, and on that data they put essentially everything in `review`:
+ * mechanicalRatio has median 0 and p75 0 (these subtrees are mostly generative
+ * steps), and determinism peaks at 0.50, so `compile` cannot fire at all. That
+ * skew is the finding, not a bug — recurring GENERATIVE structure is a
+ * sub-agent-extraction candidate, not something code can replace. Relaxing the
+ * route cut to 0.3 would only manufacture a distinction the data does not support.
+ *
+ * Both branches are kept because a programmatic agent replaying one workflow does
+ * produce mechanical, value-stable subtrees, and should be told to compile them.
+ */
+function wireSubtrees(subtrees: MinedSubtree[]) {
+  return subtrees.map((s) => ({
+    subtreeId: s.subtreeId,
+    rootLabel: s.rootLabel,
+    labels: s.labels,
+    nodes: s.nodes,
+    depth: s.depth,
+    support: s.support,
+    runsTotal: s.runsTotal,
+    occurrences: s.occurrences,
+    totalCostUsd: Number(s.totalCostUsd.toFixed(2)),
+    determinism: Number(s.determinism.toFixed(2)),
+    mechanicalRatio: Number(s.mechanicalRatio.toFixed(2)),
+    action:
+      s.determinism >= 0.9
+        ? 'compile'
+        : s.mechanicalRatio >= 0.5
+          ? 'route'
+          : 'review',
+  }));
+}
+
 /** Stable across windows: the same logical opportunity keeps its id. */
 function stableId(agentId: string, n: NodeAnalysis): string {
   return createHash('sha256')
@@ -202,18 +241,23 @@ export async function GET(req: Request) {
     // question: does the same PATH recur INSIDE otherwise-unique runs? That is
     // where the repetition actually lives, so mine it for every agent.
     const segments = mineSegments(graphs);
+    // Segments read the run as a flat sequence; subtrees read the dataflow graph,
+    // so a motif whose branches interleave differently still matches. Different
+    // structure, genuinely different findings — mine both.
+    const subtrees = mineSubtrees(graphs);
 
     const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
     if (analyses.length === 0) {
       // No whole-run cluster is not "nothing to analyze". Emit the agent whenever
       // repeated sub-paths (or drift) carry signal — otherwise the agents burning
       // the most spend are exactly the ones the view stays silent about.
-      if (segments.length > 0 || drift?.changed) {
+      if (segments.length > 0 || subtrees.length > 0 || drift?.changed) {
         insights.push({
           agentId, runCount: runs.length, window, clusters: 0, coverage: 0,
           steps: Math.max(...runs.map((r) => r.steps.length)), meanScore: 0, meanSim: 0,
           totalEstUsd: 0, opportunities: [], tools: [], drift,
           segments: wireSegments(segments),
+          subtrees: wireSubtrees(subtrees),
         });
       }
       continue;
@@ -304,6 +348,7 @@ export async function GET(req: Request) {
       drift,
       knowledge: buildKnowledgeGraph(analyses).find((k) => k.agentId === agentId) ?? null,
       segments: wireSegments(segments),
+      subtrees: wireSubtrees(subtrees),
     });
     } catch (err) {
       console.error(

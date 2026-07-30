@@ -36,6 +36,25 @@ interface Segment {
   boundaryOutputs: number;
   action: 'compile' | 'route' | 'review';
 }
+/**
+ * A repeated DATAFLOW subtree: a step plus the consumers of its values. Matched
+ * order-invariantly, so it still counts when its branches interleave differently —
+ * which is exactly the recurrence a linear segment miner cannot see.
+ */
+interface Subtree {
+  subtreeId: string;
+  rootLabel: string;
+  labels: string[];
+  nodes: number;
+  depth: number;
+  support: number;
+  runsTotal: number;
+  occurrences: number;
+  totalCostUsd: number;
+  determinism: number;
+  mechanicalRatio: number;
+  action: 'compile' | 'route' | 'review';
+}
 interface AgentInsight {
   agentId: string;
   runCount: number;
@@ -47,6 +66,7 @@ interface AgentInsight {
   totalEstUsd: number;
   opportunities: Opportunity[];
   segments?: Segment[];
+  subtrees?: Subtree[];
   drift?: {
     changed: boolean;
     changedAt?: string;
@@ -112,8 +132,8 @@ export function Insights({ agent }: { agent: string }) {
       {!loading && data.length === 0 && (
         <div className="dag-empty">
           No repetition found yet. Analysis needs either two runs of the same overall shape,
-          or one repeated path recurring inside several runs — agents with a single run, or
-          only long one-off sessions, produce neither.
+          one repeated path inside several runs, or one repeated dataflow subtree — agents
+          with a single run, or only long one-off sessions, produce none of the three.
         </div>
       )}
 
@@ -142,13 +162,13 @@ export function Insights({ agent }: { agent: string }) {
 
           <RouteTest agent={a.agentId} />
 
-          {a.opportunities.length === 0 && (a.segments?.length ?? 0) > 0 && (
+          {a.opportunities.length === 0 && ((a.segments?.length ?? 0) > 0 || (a.subtrees?.length ?? 0) > 0) && (
             <div className="foot-note" style={{ marginTop: 10 }}>
               No two runs share an overall shape, so there are no whole-run patterns —
               but the paths below recur inside them.
             </div>
           )}
-          {a.opportunities.length === 0 && (a.segments?.length ?? 0) === 0 ? (
+          {a.opportunities.length === 0 && (a.segments?.length ?? 0) === 0 && (a.subtrees?.length ?? 0) === 0 ? (
             <div className="foot-note" style={{ marginTop: 10 }}>No deterministic patterns found — this agent’s work varies run to run.</div>
           ) : a.opportunities.length === 0 ? null : (
             <div className="ins-list">
@@ -204,6 +224,45 @@ export function Insights({ agent }: { agent: string }) {
                       </div>
                       <div className="ins-metrics">
                         <span className="ins-score" title="I/O identical across occurrences (low = same shape, different data)">
+                          <b className="tnum">{Math.round(s.determinism * 100)}</b>%
+                        </span>
+                        <span className="ins-conf tnum" title="share of steps needing no intelligence">
+                          mech {Math.round(s.mechanicalRatio * 100)}%
+                        </span>
+                        {s.totalCostUsd > 0 && <span className="ins-usd tnum">{usd(s.totalCostUsd)}</span>}
+                        <span className="ins-runs tnum" title={`${s.occurrences} occurrences across ${s.support} of ${s.runsTotal} runs`}>
+                          {s.support}/{s.runsTotal} runs
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {(a.subtrees?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div className="panel-sub" style={{ marginBottom: 6 }}>
+                Repeated subtrees — a step and the consumers of its values, matched regardless of ordering
+              </div>
+              <div className="ins-list">
+                {a.subtrees!.map((s) => {
+                  const act = SEGMENT_ACTION[s.action];
+                  return (
+                    <div key={s.subtreeId} className="ins-row">
+                      <span className="ins-step tnum" title={`${s.nodes} nodes, depth ${s.depth}`}>{s.nodes}n</span>
+                      <div className="ins-main">
+                        <div className="ins-top">
+                          <span className={`ins-act ${act.cls}`} title={act.hint}>{act.label}</span>
+                          <span className="mono-name" style={{ fontSize: 12 }}>{s.rootLabel}</span>
+                        </div>
+                        <div className="ins-preview" title="distinct steps in the subtree, root first">
+                          {s.labels.join('  ·  ')}
+                        </div>
+                      </div>
+                      <div className="ins-metrics">
+                        <span className="ins-score" title="payload equality across occurrences (low = same shape, different data)">
                           <b className="tnum">{Math.round(s.determinism * 100)}</b>%
                         </span>
                         <span className="ins-conf tnum" title="share of steps needing no intelligence">
