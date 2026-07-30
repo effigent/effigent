@@ -20,6 +20,7 @@ import {
   EFFIGENT_STORE,
   defaultSource,
   defaultSources,
+  classifySession,
   discoverSessions,
   loadAgentMap,
   loadConfig,
@@ -28,6 +29,7 @@ import {
   saveConfig,
   tagSessions,
   CONFIG_PATH,
+  UNATTRIBUTED_AGENT,
 } from './store.js';
 import { uploadSessionFile } from './upload.js';
 
@@ -265,11 +267,14 @@ program
       .flatMap((d: string) => discoverSessions(resolve(d)))
       .filter((s) => s.mtimeMs >= cutoff)
       .filter((s) => (seen.has(s.sessionId) ? false : (seen.add(s.sessionId), true)))
-      .map((s) => ({ ...s, agentId: resolveAgentId(s.sessionId, s.path) }))
+      .map((s) => ({ ...s, ...classifySession(s.sessionId, s.path) }))
+      // excludeRules are a hard veto: unlike the attribution default below, `--all`
+      // does NOT override them. An excluded project never leaves the machine.
+      .filter((s) => !s.excluded)
       // Privacy default: only sessions explicitly claimed by a tag or rule leave
       // this machine. `--all` is the deliberate opt-out.
-      .filter((s) => (opts.all ? true : s.agentId !== undefined))
-      .filter((s) => !opts.agent || (s.agentId ?? '').includes(opts.agent));
+      .filter((s) => (opts.all ? true : s.agent !== undefined))
+      .filter((s) => !opts.agent || (s.agent ?? '').includes(opts.agent));
     if (sessions.length === 0) {
       console.error(
         'Nothing to sync. (Only attributed sessions upload — add an agentRule, use `effigent tag`/`effigent run`, or pass --all.)',
@@ -297,7 +302,7 @@ program
         { server, apiKey },
         s.path,
         s.sessionId,
-        s.agentId,
+        s.agent,
       );
       if (!r.ok) {
         console.error(`  ✗ ${s.sessionId}: HTTP ${r.status} ${r.detail ?? ''}`);
@@ -316,6 +321,10 @@ program
   .description('Check that effigent can capture, attribute, and (optionally) upload on this machine')
   .option('--server <url>', 'effigent server to check (env EFFIGENT_SERVER)')
   .option('--key <apiKey>', 'tenant API key to verify (env EFFIGENT_API_KEY)')
+  .option(
+    '--probe-upload',
+    'also POST a tiny synthetic run to verify the write path end to end. NOT the default: ingest persists what it accepts, so this leaves one `effigent-doctor-probe` run in the workspace.',
+  )
   .action(async (opts) => {
     let failures = 0;
     const ok = (msg: string) => console.log(`  ✓ ${msg}`);
@@ -353,7 +362,45 @@ program
     const tags = Object.keys(loadAgentMap()).length;
     tags > 0
       ? ok(`${tags} session(s) explicitly attributed via effigent run/tag`)
-      : warn('no explicit attributions yet — untagged runs fall back to their directory name');
+      : ok('no explicit tags — each project is attributed by its git repo name');
+
+    // Capture-hook health. Hook groups written by `install claude` carry no matcher,
+    // so EVERY group fires on every session: more than one means each session uploads
+    // once per group, under a different agent name each time. That silently inflated
+    // spend and split one project's runs across agents, so it is a hard failure.
+    const settingsFile = join(homedir(), '.claude', 'settings.json');
+    if (existsSync(settingsFile)) {
+      try {
+        const parsed = JSON.parse(readFileSync(settingsFile, 'utf8')) as {
+          hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
+        };
+        const endHooks = (parsed.hooks?.SessionEnd ?? [])
+          .flatMap((g) => g.hooks ?? [])
+          .map((h) => h.command ?? '')
+          .filter((c) => c.includes('claude-hook'));
+        if (endHooks.length === 0) {
+          warn(`no capture hook in ${settingsFile} — run \`effigent install claude\``);
+        } else if (endHooks.length === 1) {
+          const pinned = /--agent\s+(\S+)/.exec(endHooks[0]);
+          ok(
+            pinned
+              ? `capture hook installed, pinned to '${pinned[1]}' (all projects upload as one agent)`
+              : 'capture hook installed — each project uploads as its own agent',
+          );
+        } else {
+          const names = endHooks.map((c) => /--agent\s+(\S+)/.exec(c)?.[1] ?? '(unpinned)');
+          bad(
+            `${endHooks.length} SessionEnd capture hooks installed (${names.join(', ')}) — every session uploads ` +
+              `${endHooks.length}× under ${endHooks.length} agent names. Run \`effigent install claude\` to collapse them into one.`,
+          );
+        }
+      } catch {
+        warn(`could not parse ${settingsFile} — capture-hook health unknown`);
+      }
+    }
+
+    const excluded = loadConfig().excludeRules?.length ?? 0;
+    if (excluded) ok(`${excluded} excludeRule(s) active — matching projects never upload`);
 
     if (process.env.ANTHROPIC_API_KEY) ok('env auth: ANTHROPIC_API_KEY set (--isolated will work)');
     else if (process.env.CLAUDE_CODE_USE_BEDROCK || process.env.CLAUDE_CODE_USE_VERTEX)
@@ -375,9 +422,74 @@ program
           const auth = await fetch(`${server.replace(/\/$/, '')}/api/v1/reports`, {
             headers: { authorization: `Bearer ${apiKey}` },
           });
-          auth.ok ? ok('API key accepted') : bad(`API key rejected: HTTP ${auth.status}`);
+          auth.ok ? ok('tenant key accepted') : bad(`tenant key rejected: HTTP ${auth.status}`);
         } else {
           warn('no API key provided — skipping auth check (set EFFIGENT_API_KEY)');
+        }
+
+        // The tenant key above is NOT what capture uploads with: the SessionEnd hook
+        // uses each agent's SCOPED key. Checking only the tenant key reported a
+        // healthy "API key accepted" while a revoked scoped key 401'd every session.
+        // Check what the capture path actually presents.
+        const scoped = Object.entries(loadConfig().agents ?? {});
+        let healthyScopedKey: string | undefined;
+        if (scoped.length === 0) {
+          warn('no scoped agent keys yet — they are minted on first capture per project');
+        } else {
+          for (const [name, entry] of scoped) {
+            try {
+              const res = await fetch(`${server.replace(/\/$/, '')}/api/v1/reports`, {
+                headers: { authorization: `Bearer ${entry.key}` },
+              });
+              if (res.ok) {
+                ok(`scoped key '${name}' accepted`);
+                healthyScopedKey ??= entry.key;
+              } else {
+                bad(`scoped key '${name}' REJECTED (HTTP ${res.status}) — capture for this agent is failing silently; re-register it`);
+              }
+            } catch (err) {
+              bad(`scoped key '${name}' unusable: ${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
+
+        // Auth can pass while the write still fails (e.g. a missing migration makes
+        // every insert 500 after the blob is already in S3). Probing the real path is
+        // the only way to catch that — but ingest PERSISTS what it accepts, so an
+        // unconditional probe would have `doctor` write a run (and an S3 blob) into
+        // the workspace on every invocation. A diagnostic must not mutate the thing
+        // it inspects, so this is opt-in; the session id is fixed, so repeated probes
+        // upsert one row rather than accumulating.
+        const probeKey = healthyScopedKey ?? apiKey;
+        if (!opts.probeUpload) {
+          warn('upload path not probed (pass --probe-upload; it writes one synthetic run)');
+        } else if (probeKey) {
+          try {
+            const res = await fetch(`${server.replace(/\/$/, '')}/api/v1/ingest`, {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${probeKey}`,
+                'x-effigent-session-id': 'effigent-doctor-probe',
+                'x-effigent-format': 'run',
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({
+                runId: 'effigent-doctor-probe',
+                steps: [{ kind: 'model_turn', name: 'doctor-probe', payload: 'connectivity probe' }],
+                models: [],
+                usageByModel: {},
+                costUsd: 0,
+              }),
+            });
+            if (res.ok) ok('ingest probe accepted — the upload path works end to end');
+            else if (res.status === 409) bad('ingest refused (409): workspace storage not provisioned — an org admin must configure it');
+            else {
+              const detail = await res.text();
+              bad(`ingest FAILED (HTTP ${res.status}) — captured sessions are being lost. ${detail.slice(0, 300)}`);
+            }
+          } catch (err) {
+            warn(`ingest probe could not run: ${err instanceof Error ? err.message : err}`);
+          }
         }
       } catch (err) {
         bad(`cannot reach ${server}: ${err instanceof Error ? err.message : err}`);
@@ -504,6 +616,50 @@ program
     process.exitCode = res.status ?? 1;
   });
 
+/**
+ * Register an agent and mint its scoped capture key. Shared by `agent add` (explicit)
+ * and the SessionEnd hook (auto-mint on first sight of a project), so both produce
+ * identical config entries and there is one place that knows the wire format.
+ *
+ * Returns the saved entry, or an error string the caller renders in its own voice.
+ * A scoped key is what makes attribution correct rather than merely asserted: the
+ * server derives the agent from the key (`auth.agentName`), so a per-project key
+ * means the run is labeled by a credential, not by a spoofable header.
+ */
+async function registerAgent(
+  server: string,
+  apiKey: string,
+  name: string,
+  harness?: string,
+): Promise<{ entry: { agentId: string; key: string; harness?: string } } | { error: string }> {
+  let res: Response;
+  try {
+    res = await fetch(`${server.replace(/\/$/, '')}/api/v1/agents`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name, harness }),
+    });
+  } catch (err) {
+    return { error: `Cannot reach ${server}: ${err instanceof Error ? err.message : err}` };
+  }
+  if (!res.ok) {
+    const detail = await res.text();
+    return {
+      error:
+        `Agent registration failed (HTTP ${res.status}): ${detail}` +
+        (res.status === 403 ? '\nUse your tenant key (from `effigent login`), not an agent-scoped capture key.' : ''),
+    };
+  }
+  const out = (await res.json()) as { agentId: string; apiKey: string };
+  const entry = { agentId: out.agentId, key: out.apiKey, harness };
+  // Re-read config immediately before writing: the hook can run concurrently with
+  // other sessions ending, and a stale in-memory copy would drop their new agents.
+  const fresh = loadConfig();
+  fresh.agents = { ...(fresh.agents ?? {}), [name]: entry };
+  saveConfig(fresh);
+  return { entry };
+}
+
 const agentCmd = program.command('agent').description('Register agents and mint scoped capture keys');
 agentCmd
   .command('add <name>')
@@ -520,37 +676,23 @@ agentCmd
       process.exitCode = 2;
       return;
     }
-    let res: Response;
-    try {
-      res = await fetch(`${server.replace(/\/$/, '')}/api/v1/agents`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ name, harness: opts.harness }),
-      });
-    } catch (err) {
-      console.error(`Cannot reach ${server}: ${err instanceof Error ? err.message : err}`);
+    const reg = await registerAgent(server, apiKey, name, opts.harness);
+    if ('error' in reg) {
+      console.error(reg.error);
       process.exitCode = 1;
       return;
     }
-    if (!res.ok) {
-      console.error(`Agent registration failed (HTTP ${res.status}): ${await res.text()}`);
-      if (res.status === 403) console.error('Use your tenant key (from `effigent login`), not an agent-scoped capture key.');
-      process.exitCode = 1;
-      return;
-    }
-    const out = (await res.json()) as { agentId: string; apiKey: string };
-    config.agents = { ...(config.agents ?? {}), [name]: { agentId: out.agentId, key: out.apiKey, harness: opts.harness } };
-    saveConfig(config);
     const base = server.replace(/\/$/, '');
     console.log(`✓ registered agent '${name}' — scoped key saved to ${CONFIG_PATH}\n`);
     console.log('Capture options for this agent:');
-    console.log(`  • Claude Code (this machine):  effigent install claude --agent ${name}`);
+    // `install claude` needs no --agent: one hook attributes every project by itself.
+    console.log('  • Claude Code (this machine):  effigent install claude');
     console.log(`  • OpenAI Codex (this machine): effigent install codex --agent ${name}`);
     console.log('  • SDK / OpenLLMetry agent — export before running it:');
     console.log(`      export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${base}/v1/traces`);
     console.log('      export OTEL_EXPORTER_OTLP_PROTOCOL=http/json');
     console.log('      export OTEL_EXPORTER_OTLP_COMPRESSION=none');
-    console.log(`      export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${out.apiKey}"`);
+    console.log(`      export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${reg.entry.key}"`);
   });
 
 agentCmd
@@ -706,10 +848,10 @@ installCmd
 installCmd
   .command('claude')
   .description('Install a Claude Code SessionEnd hook that uploads each finished session (event-driven; no polling)')
-  .requiredOption('--agent <name>', 'registered agent name (from `effigent agent add`)')
+  .option('--agent <name>', 'pin every session to one registered agent (CI/single-purpose machines). Omit to attribute each project separately — the default.')
   .action((opts) => {
     const config = loadConfig();
-    if (!config.agents?.[opts.agent]) {
+    if (opts.agent && !config.agents?.[opts.agent]) {
       console.error(`Agent '${opts.agent}' not found in config — run \`effigent agent add ${opts.agent}\` first.`);
       process.exitCode = 2;
       return;
@@ -730,40 +872,64 @@ installCmd
     const bin = `${process.execPath} ${resolve(process.argv[1])}`;
     const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
     type HookGroup = { hooks?: Array<{ type?: string; command?: string }> };
-    const addHook = (event: string, command: string, marker: string): boolean => {
+
+    /**
+     * Drop every effigent-owned group for an event, returning how many went. Hook
+     * groups installed here carry no matcher, so they fire on EVERY session — two
+     * of them meant every session uploaded twice, under two different agent names.
+     * Install is therefore replace-then-add, never append: one command, one hook.
+     * Groups we don't own (the user's own hooks) are untouched.
+     */
+    const dropOurs = (event: string, verb: string): number => {
       const groups = (Array.isArray(hooks[event]) ? hooks[event] : []) as HookGroup[];
-      const already = groups.some((g) => (g.hooks ?? []).some((h) => typeof h.command === 'string' && h.command.includes(marker)));
-      if (!already) {
-        groups.push({ hooks: [{ type: 'command', command }] });
-        hooks[event] = groups;
-      }
-      return !already;
+      const kept = groups.filter((g) => !(g.hooks ?? []).some((h) => typeof h.command === 'string' && h.command.includes(verb)));
+      const removed = groups.length - kept.length;
+      if (kept.length) hooks[event] = kept;
+      else delete hooks[event];
+      return removed;
     };
-    const addedEnd = addHook('SessionEnd', `${bin} claude-hook --agent ${opts.agent}`, `claude-hook --agent ${opts.agent}`);
+
+    const staleEnd = dropOurs('SessionEnd', 'claude-hook');
+    const staleStart = dropOurs('SessionStart', 'claude-refresh');
+
+    // No --agent: the hook resolves the agent per session from the transcript's cwd,
+    // so one hook covers every project on the machine and each lands under its own
+    // agent. --agent pins all of them to one, for CI/single-purpose machines.
+    const endCmd = opts.agent ? `${bin} claude-hook --agent ${opts.agent}` : `${bin} claude-hook`;
+    ((hooks.SessionEnd ??= []) as HookGroup[]).push({ hooks: [{ type: 'command', command: endCmd }] });
     // Auto-injection: every session start refreshes the optimization bundle +
     // skill (throttled + fail-open inside claude-refresh — never blocks work).
-    // OFF by default (insights-only POC) — capture must never also inject.
-    const addedStart = INJECTION_ENABLED
-      ? addHook('SessionStart', `${bin} claude-refresh --agent ${opts.agent}`, `claude-refresh --agent ${opts.agent}`)
-      : false;
-    if (!addedEnd && !addedStart) {
-      console.log(`✓ hooks for '${opts.agent}' already present in ${settingsPath}`);
-      return;
+    // OFF by default (insights-only POC) — capture must never also inject. When off
+    // we leave SessionStart dropped, which also prunes hooks left by older installs
+    // (claude-refresh is a no-op today, so they were dead weight).
+    if (INJECTION_ENABLED) {
+      const startCmd = opts.agent ? `${bin} claude-refresh --agent ${opts.agent}` : `${bin} claude-refresh`;
+      ((hooks.SessionStart ??= []) as HookGroup[]).push({ hooks: [{ type: 'command', command: startCmd }] });
     }
+
     mkdirSync(dirname(settingsPath), { recursive: true });
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    console.log(`✓ installed capture hook for '${opts.agent}' in ${settingsPath}`);
+
+    console.log(`✓ installed capture hook in ${settingsPath}`);
+    if (staleEnd > 1) {
+      console.log(`  removed ${staleEnd} stacked SessionEnd hooks — each session had been uploading ${staleEnd}× (once per agent).`);
+    } else if (staleEnd === 1) {
+      console.log('  replaced the previous SessionEnd hook.');
+    }
+    if (staleStart && !INJECTION_ENABLED) console.log(`  pruned ${staleStart} dead SessionStart hook(s) — injection is off.`);
     console.log(
-      INJECTION_ENABLED
-        ? '  SessionEnd → uploads each finished session · SessionStart → keeps the optimization bundle fresh (auto-injection).'
-        : '  SessionEnd → uploads each finished session. Capture only — no changes to how the agent runs.',
+      opts.agent
+        ? `  Every session uploads as '${opts.agent}' (pinned).`
+        : '  Each project uploads as its own agent (agentRules → git repo name; excludeRules veto).',
     );
+    if (INJECTION_ENABLED) console.log('  SessionStart → keeps the optimization bundle fresh (auto-injection).');
+    else console.log('  Capture only — no changes to how the agent runs.');
   });
 
 program
   .command('claude-refresh')
   .description('(internal) Claude Code SessionStart hook — refreshes the optimization bundle + skill; throttled and fail-open')
-  .requiredOption('--agent <name>', 'registered agent name')
+  .option('--agent <name>', 'registered agent name (omitted when the hook is agent-agnostic)')
   .action(async (opts) => {
     // Injection disabled (insights-only POC): the SessionStart hook is not
     // installed, but no-op defensively in case an old hook lingers.
@@ -811,17 +977,18 @@ program
 
 program
   .command('claude-hook')
-  .description('(internal) Claude Code SessionEnd hook — uploads the finished session for a scoped agent')
-  .requiredOption('--agent <name>', 'registered agent name')
+  .description('(internal) Claude Code SessionEnd hook — uploads the finished session, attributed per project')
+  .option('--agent <name>', 'pin attribution to one registered agent; omit to resolve per session from the transcript cwd')
   .action(async (opts) => {
     const config = loadConfig();
-    const entry = config.agents?.[opts.agent];
     const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
-    if (!entry || !server) {
-      console.error(`[effigent] claude-hook: agent '${opts.agent}' or server not configured`);
+    if (!server) {
+      console.error('[effigent] claude-hook: no server configured — run `effigent login`');
       process.exitCode = 2;
       return;
     }
+    // stdin first: attribution is derived from the transcript's cwd, so nothing about
+    // the agent can be decided before the payload is in hand.
     let payload: { session_id?: string; transcript_path?: string };
     try {
       payload = JSON.parse(readFileSync(0, 'utf8')) as { session_id?: string; transcript_path?: string };
@@ -836,10 +1003,45 @@ program
       process.exitCode = 1;
       return;
     }
-    const r = await uploadSessionFile({ server, apiKey: entry.key }, transcriptPath, sessionId, opts.agent);
+
+    // One hook serves every project: resolve which agent this session belongs to.
+    // --agent pins (CI); otherwise agentRules → git repo name, and no repo means
+    // UNATTRIBUTED_AGENT rather than silently borrowing another project's identity.
+    // excludeRules veto outright — checked even when pinned, so an excluded project
+    // cannot be captured by any configuration.
+    const { agent: resolved, excluded } = classifySession(sessionId, transcriptPath);
+    if (excluded) {
+      console.error(`[effigent] session ${sessionId} skipped — project matches excludeRules`);
+      return;
+    }
+    const agent = opts.agent ?? resolved ?? UNATTRIBUTED_AGENT;
+
+    // Scoped key per agent: the server derives attribution from the key
+    // (`auth.agentName`), so a project without one yet gets registered on first
+    // sight. Minting needs the tenant key; without it we cannot attribute this
+    // session correctly, and uploading under the wrong agent is worse than not
+    // uploading — the run would silently pollute another project's analysis.
+    let entry = config.agents?.[agent];
+    if (!entry) {
+      if (!config.apiKey) {
+        console.error(`[effigent] claude-hook: agent '${agent}' is not registered and no tenant key is available to register it — run \`effigent login\``);
+        process.exitCode = 2;
+        return;
+      }
+      const reg = await registerAgent(server, config.apiKey, agent, 'claude-code');
+      if ('error' in reg) {
+        console.error(`[effigent] claude-hook: could not register agent '${agent}': ${reg.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      entry = reg.entry;
+      console.error(`[effigent] registered new agent '${agent}'`);
+    }
+
+    const r = await uploadSessionFile({ server, apiKey: entry.key }, transcriptPath, sessionId, agent);
     console.error(
       r.ok
-        ? `[effigent] uploaded session ${sessionId} as ${opts.agent}`
+        ? `[effigent] uploaded session ${sessionId} as ${agent}`
         : `[effigent] upload failed (HTTP ${r.status}) ${r.detail ?? ''}`,
     );
     process.exitCode = r.ok ? 0 : 1;
