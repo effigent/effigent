@@ -49,7 +49,9 @@ interface SubtreeNode {
   structLabel: string;
   class: 'mechanical' | 'cacheable' | 'generative' | 'side_effect';
   determinism: number;
+  confidence: number;
   distinctValues: number;
+  samples: number;
 }
 interface Subtree {
   subtreeId: string;
@@ -192,11 +194,95 @@ const OPP_COLS = [
   { label: 'removable', title: 'Estimated spend this change would remove.' },
 ];
 
-/** Per-node stability → colour. Green constant, gold partly stable, red volatile. */
-function detColor(d: number): string {
-  if (d >= 0.9) return 'var(--green)';
-  if (d >= 0.34) return 'var(--gold)';
-  return 'var(--red, #e5484d)';
+/**
+ * Per-node colour, gated on CONFIDENCE rather than raw stability.
+ *
+ * A subtree seen twice makes every node read "100% stable · 1 value" and paints the
+ * whole tree green — which said "perfectly deterministic, compile it" directly beside
+ * a verdict of "extract as sub-agent, 34% confidence". The picture contradicted the
+ * recommendation. Insufficient evidence now renders as its own muted state instead of
+ * borrowing the colour of a proven constant.
+ */
+type Stability = 'proven' | 'partial' | 'volatile' | 'unproven';
+
+function stabilityOf(n: { determinism: number; confidence: number }): Stability {
+  if (n.confidence < 0.6) return 'unproven';
+  if (n.determinism >= 0.9) return 'proven';
+  if (n.determinism >= 0.34) return 'partial';
+  return 'volatile';
+}
+
+const STABILITY: Record<Stability, { color: string; note: string; legend: string }> = {
+  proven: { color: 'var(--green)', note: 'constant', legend: 'constant — same payload every time, on enough samples to trust' },
+  partial: { color: 'var(--gold)', note: 'partly stable', legend: 'partly stable' },
+  volatile: { color: 'var(--red, #e5484d)', note: 'varies', legend: 'volatile — differs every run' },
+  unproven: { color: 'var(--txt-4)', note: 'too few samples', legend: 'not enough evidence — too few occurrences to call' },
+};
+
+
+/**
+ * AI explanation of one subtree. Sends STRUCTURE only — labels, counts, stability
+ * figures — never payloads, so run content never leaves the org's storage to produce
+ * a caption. The server prompt forbids upgrading the verdict when confidence is low.
+ */
+function ExplainPanel({ agentId, subtree }: { agentId: string; subtree: Subtree }) {
+  const [text, setText] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const ask = () => {
+    setBusy(true);
+    setErr(null);
+    fetch('/api/v1/explain', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agentId,
+        rootLabel: subtree.rootLabel,
+        nodes: subtree.nodes,
+        span: subtree.span,
+        support: subtree.support,
+        runsTotal: subtree.runsTotal,
+        occurrences: subtree.occurrences,
+        totalCostUsd: subtree.totalCostUsd,
+        determinism: subtree.determinism,
+        confidence: subtree.confidence,
+        mechanicalRatio: subtree.mechanicalRatio,
+        action: subtree.action,
+        tree: subtree.tree,
+      }),
+    })
+      .then(async (r) => {
+        const d = (await r.json()) as { explanation?: string; error?: string };
+        if (!r.ok || !d.explanation) throw new Error(d.error ?? `HTTP ${r.status}`);
+        setText(d.explanation);
+      })
+      .catch((e: Error) => setErr(e.message))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      {!text && (
+        <button type="button" className="chip" style={{ cursor: busy ? 'default' : 'pointer' }}
+          onClick={ask} disabled={busy}
+          title="Explain what this chain does, why the verdict is what it is, and what to change. Only step labels and metrics are sent — never payloads.">
+          {busy ? 'Explaining…' : 'Explain this subtree'}
+        </button>
+      )}
+      {err && <div className="foot-note" style={{ marginTop: 6 }}>Could not explain: {err}</div>}
+      {text && (
+        <div className="foot-note" style={{ marginTop: 6, whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
+          {text}
+          <div style={{ marginTop: 8 }}>
+            <button type="button" className="chip" style={{ cursor: 'pointer' }} onClick={ask} disabled={busy}>
+              {busy ? 'Explaining…' : 'regenerate'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -216,27 +302,33 @@ function SubtreeMap({ tree }: { tree: SubtreeNode[] }) {
             <div
               key={n.position}
               className={`node ${n.class === 'generative' ? 'llm' : 'tool'}`}
-              style={{ borderColor: detColor(n.determinism), maxWidth: 210 }}
-              title={`${n.structLabel}\n${n.class} · ${n.distinctValues} distinct payload(s) across occurrences · ${Math.round(n.determinism * 100)}% stable`}
+              style={{
+                borderColor: STABILITY[stabilityOf(n)].color,
+                borderStyle: stabilityOf(n) === 'unproven' ? 'dashed' : 'solid',
+                maxWidth: 210,
+              }}
+              title={`${n.structLabel}\n${n.class}\n${n.distinctValues} distinct payload(s) over ${n.samples} occurrence(s)\nstability ${Math.round(n.determinism * 100)}%, confidence ${Math.round(n.confidence * 100)}%`}
             >
               <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {n.structLabel.replace(/^(tool:|result:|llm:)/, '')}
               </span>
-              <small style={{ color: detColor(n.determinism) }}>
-                {Math.round(n.determinism * 100)}% stable · {n.distinctValues} value{n.distinctValues === 1 ? '' : 's'}
+              <small style={{ color: STABILITY[stabilityOf(n)].color }}>
+                {STABILITY[stabilityOf(n)].note} · {n.distinctValues}/{n.samples}
               </small>
             </div>
           ))}
         </div>
       ))}
       <div style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 10, color: 'var(--txt-3)' }}>
-        {[['var(--green)', 'constant — same payload every time'],
-          ['var(--gold)', 'partly stable'],
-          ['var(--red, #e5484d)', 'volatile — differs every run']].map(([c, t]) => (
-          <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, border: `2px solid ${c}` }} />{t}
+        {(['proven', 'partial', 'volatile', 'unproven'] as Stability[]).map((k) => (
+          <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: 2,
+              border: `2px ${k === 'unproven' ? 'dashed' : 'solid'} ${STABILITY[k].color}`,
+            }} />{STABILITY[k].legend}
           </span>
         ))}
+        <span style={{ marginLeft: 'auto' }}>x/y = distinct payloads over occurrences</span>
       </div>
     </div>
   );
@@ -464,7 +556,12 @@ export function Insights({ agent }: { agent: string }) {
                         <Metric value={usd(s.totalCostUsd)}
                           title="Measured spend attributed to this subtree across all its occurrences" />
                       </div>
-                      {isOpen && <div style={{ flexBasis: '100%' }}><SubtreeMap tree={s.tree} /></div>}
+                      {isOpen && (
+                        <div style={{ flexBasis: '100%' }}>
+                          <SubtreeMap tree={s.tree} />
+                          <ExplainPanel agentId={a.agentId} subtree={s} />
+                        </div>
+                      )}
                     </div>
                   );
                 })}

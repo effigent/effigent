@@ -76,8 +76,20 @@ export interface SubtreeNode {
   class: StepClass;
   /** 1 = this step carried byte-identical payloads in every occurrence. */
   determinism: number;
+  /**
+   * Wilson lower bound on this node's determinism at n = occurrences.
+   *
+   * Needed because raw per-node determinism is as untrustworthy on small samples as
+   * the aggregate was: a subtree seen twice paints EVERY node "100% stable, 1 value",
+   * which reads as "perfectly deterministic, compile it" while the verdict says
+   * extract-as-sub-agent at 34% confidence. The picture and the recommendation
+   * contradicted each other. Renderers must colour on this, not on `determinism`.
+   */
+  confidence: number;
   /** Distinct payloads seen across occurrences. 1 = constant. */
   distinctValues: number;
+  /** Occurrences this node's stability was measured over — the sample size. */
+  samples: number;
 }
 
 export interface MinedSubtree {
@@ -382,11 +394,18 @@ export function mineSubtrees(graphs: RunGraph[], opts: MineSubtreeOptions = {}):
             structLabel: r.shapeLabels[i] ?? '',
             class: r.shapeClasses[i] ?? 'side_effect',
             determinism: distinct > 0 ? Math.round((1 / distinct) * 100) / 100 : 0,
+            confidence:
+              r.occurrences > 0
+                ? Math.round(
+                    wilsonLower(Math.round(r.occurrences / Math.max(1, distinct)), r.occurrences) * 100,
+                  ) / 100
+                : 0,
             distinctValues: distinct,
+            samples: r.occurrences,
           };
         }),
       };
     })
-    .sort((a, b) => b.totalCostUsd - a.totalCostUsd)
+    .sort((a, b) => b.totalCostUsd * b.confidence - a.totalCostUsd * a.confidence)
     .slice(0, opts.maxSubtrees ?? MAX_SUBTREES);
 }

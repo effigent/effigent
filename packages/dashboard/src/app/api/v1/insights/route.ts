@@ -33,7 +33,14 @@ export const dynamic = 'force-dynamic';
  * See packages/core/src/determinism.ts + docs/determinism-v3.md.
  */
 
-const DEFAULT_WINDOW = 20;
+/**
+ * 40, not 20 — both this file's docstring and CLAUDE.md §5 already documented 40 while
+ * the constant said 20. Beyond fixing that mismatch, the window IS the evidence base:
+ * at 20 runs every mined subtree for a real agent had just 2 occurrences and a Wilson
+ * confidence of 34%, so every finding rendered as "not enough evidence". Widening the
+ * window is the only lever that turns those into calls worth acting on.
+ */
+const DEFAULT_WINDOW = 40;
 const MIN_WINDOW = 5;
 const MAX_WINDOW = 100;
 
@@ -148,7 +155,9 @@ function wireSubtrees(subtrees: MinedSubtree[]) {
       structLabel: t.structLabel,
       class: t.class,
       determinism: t.determinism,
+      confidence: t.confidence,
       distinctValues: t.distinctValues,
+      samples: t.samples,
     })),
     support: s.support,
     runsTotal: s.runsTotal,
