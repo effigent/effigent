@@ -14,11 +14,12 @@ const HARNESSES = [
     name: 'Claude Code',
     tag: 'Hook · zero-touch',
     blurb:
-      'One command installs a SessionEnd hook. Every finished session uploads automatically — event-driven, no polling, no changes to your agent. The scoped key stays in ~/.effigent and is never written into your agent configuration.',
-    code: `effigent install claude --agent billing-agent
+      'One command installs a SessionEnd hook. Every finished session uploads automatically — event-driven, no polling, no changes to your agent. Each repo is captured as its own agent, registered on first sight; scoped keys stay in ~/.effigent and are never written into your agent configuration.',
+    code: `effigent install claude
 
 # ✓ SessionEnd hook installed in ~/.claude/settings.json
-#   Every finished session now uploads under 'billing-agent'.`,
+#   Each project uploads as its own agent (repo name, or your agentRules).
+#   Add --agent <name> to pin every session to one agent instead (CI).`,
     title: 'zsh — claude code',
   },
   {

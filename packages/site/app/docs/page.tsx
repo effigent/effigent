@@ -14,6 +14,7 @@ const SECTIONS = [
   ['Insights & the engine', '/docs/insights', 'How runs become graphs, how determinism is scored, and what each action means.'],
   ['Tools & knowledge graph', '/docs/tools', 'Synthesized tools, replay validation, the knowledge graph, and injecting them with effigent optimize.'],
   ['Privacy & redaction', '/docs/redaction', 'Built-in filters, workspace rules, and what is (and is not) stored.'],
+  ['Run storage', '/docs/storage', 'Effigent-managed storage, or a bucket in your own AWS account — one CloudFormation command.'],
   ['Machine API', '/docs/api', 'The collector endpoints the CLI and your agents talk to.'],
 ] as const;
 

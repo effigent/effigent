@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentFromRules, gitRepoName } from '../src/store.js';
+import { agentFromRules, gitRepoName, isExcludedCwd } from '../src/store.js';
 
 // Isolated temp tree: two separately-named repos, each with a `src/` subdir,
 // plus a plain dir outside any repo.
@@ -59,5 +59,42 @@ describe('agentFromRules — explicit cwd rules still win', () => {
   });
   it('skips invalid regex without throwing', () => {
     expect(agentFromRules('/x', [{ pattern: '(', agent: 'bad' }])).toBeUndefined();
+  });
+});
+
+describe('isExcludedCwd — the hard veto', () => {
+  const rules = [{ pattern: '/hayde(/|$)', note: 'client work' }, { pattern: '/razgaz(/|$)' }];
+
+  it('excludes a matching project and its subdirectories', () => {
+    expect(isExcludedCwd('/work/hayde', rules)).toBe(true);
+    expect(isExcludedCwd('/work/hayde/packages/api', rules)).toBe(true);
+    expect(isExcludedCwd('/work/razgaz', rules)).toBe(true);
+  });
+
+  it('leaves unrelated projects capturable', () => {
+    expect(isExcludedCwd('/work/apollo', rules)).toBe(false);
+    // Substring-but-not-segment: `/haydex` must not inherit `/hayde`'s exclusion,
+    // otherwise anchoring is meaningless.
+    expect(isExcludedCwd('/work/haydex', rules)).toBe(false);
+  });
+
+  it('treats an unknown cwd as NOT excluded', () => {
+    // Exclusion requires a positive match: a failed cwd sniff must not silently
+    // suppress capture (that would look like exclusion working when it isn't).
+    expect(isExcludedCwd(undefined, rules)).toBe(false);
+  });
+
+  it('is a no-op when no rules are configured', () => {
+    expect(isExcludedCwd('/work/hayde', undefined)).toBe(false);
+    expect(isExcludedCwd('/work/hayde', [])).toBe(false);
+  });
+
+  it('skips invalid regex without excluding everything', () => {
+    // A typo must not take capture down, and must not accidentally veto all runs.
+    expect(isExcludedCwd('/work/apollo', [{ pattern: '(' }])).toBe(false);
+  });
+
+  it('still excludes via a later rule when an earlier one is invalid', () => {
+    expect(isExcludedCwd('/work/hayde', [{ pattern: '(' }, { pattern: '/hayde' }])).toBe(true);
   });
 });

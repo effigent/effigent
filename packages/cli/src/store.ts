@@ -34,11 +34,28 @@ export interface AgentRule {
   agent: string;
 }
 
+/**
+ * A project that must never be captured. Unlike `agentRules` (which only *renames*),
+ * a match here is a hard veto: the session does not upload from any code path, and
+ * `sync --all` does not override it. For client work under NDA and the like.
+ */
+export interface ExcludeRule {
+  /** Regex tested against the run's cwd. Any match excludes. */
+  pattern: string;
+  /** Optional human note — why this project is excluded. */
+  note?: string;
+}
+
+/** Reserved agent name for sessions that belong to no git repo (home dir, /tmp). */
+export const UNATTRIBUTED_AGENT = 'unattributed';
+
 export interface CcoptConfig {
   server?: string;
   apiKey?: string;
   /** cwd-based attribution for agents that run in unpredictable dirs (temp clones, daemons). */
   agentRules?: AgentRule[];
+  /** Projects that must never upload. Hard veto — see {@link ExcludeRule}. */
+  excludeRules?: ExcludeRule[];
   /** Registered agents and their scoped capture keys (from `effigent agent add`). */
   agents?: Record<string, { agentId: string; key: string; harness?: string }>;
 }
@@ -67,6 +84,24 @@ export function agentFromRules(cwd: string | undefined, rules: AgentRule[] | und
     }
   }
   return undefined;
+}
+
+/**
+ * Whether a cwd is vetoed by `excludeRules`. An unknown cwd (nothing sniffed) is NOT
+ * excluded — exclusion must be a positive match, so a failed sniff can't silently
+ * suppress capture. Invalid patterns are skipped rather than throwing, matching
+ * `agentFromRules`; a typo must not take capture down.
+ */
+export function isExcludedCwd(cwd: string | undefined, rules: ExcludeRule[] | undefined): boolean {
+  if (!cwd || !rules?.length) return false;
+  for (const rule of rules) {
+    try {
+      if (new RegExp(rule.pattern).test(cwd)) return true;
+    } catch {
+      /* invalid pattern — skip */
+    }
+  }
+  return false;
 }
 
 /** Sniff the cwd of a session by scanning its first lines (cheap, no full parse). */
@@ -122,10 +157,31 @@ export function gitRepoName(cwd: string | undefined): string | undefined {
  * distinct agents no longer merge just because attribution wasn't configured.
  */
 export function resolveAgentId(sessionId: string, path: string): string | undefined {
-  const map = loadAgentMap();
-  if (map[sessionId]) return map[sessionId];
+  return classifySession(sessionId, path).agent;
+}
+
+/**
+ * One decision about a session, sniffing its cwd exactly once (callers previously
+ * paid a second file read to check exclusion separately).
+ *
+ *   `excluded` — vetoed by `excludeRules`. Never uploads, from any path, and
+ *                `sync --all` must not override it.
+ *   `agent`    — the resolved agent name, or undefined when the session belongs to
+ *                no git repo. Undefined is *unattributed*, which is a different
+ *                thing from excluded: the SessionEnd hook uploads it under
+ *                {@link UNATTRIBUTED_AGENT}, while `sync` keeps its stricter
+ *                default of skipping it unless `--all` is passed.
+ *
+ * An explicit tag (`effigent run`/`effigent tag`) wins over the cwd rules, but NOT
+ * over exclusion — a tagged session inside an excluded project stays excluded.
+ */
+export function classifySession(sessionId: string, path: string): { agent?: string; excluded: boolean } {
   const cwd = sniffCwd(path);
-  return agentFromRules(cwd, loadConfig().agentRules) ?? gitRepoName(cwd);
+  const config = loadConfig();
+  if (isExcludedCwd(cwd, config.excludeRules)) return { excluded: true };
+  const map = loadAgentMap();
+  if (map[sessionId]) return { agent: map[sessionId], excluded: false };
+  return { agent: agentFromRules(cwd, config.agentRules) ?? gitRepoName(cwd), excluded: false };
 }
 
 export function loadAgentMap(): Record<string, string> {
@@ -195,8 +251,6 @@ export interface LoadOptions {
 
 export function loadRuns(sourceDirs: string | string[], options: LoadOptions = {}): Run[] {
   const dirs = Array.isArray(sourceDirs) ? sourceDirs : [sourceDirs];
-  const agentMap = loadAgentMap();
-  const config = loadConfig();
   const cutoff =
     options.sinceDays !== undefined ? Date.now() - options.sinceDays * 86_400_000 : undefined;
   const runs: Run[] = [];
@@ -211,13 +265,15 @@ export function loadRuns(sourceDirs: string | string[], options: LoadOptions = {
     } catch {
       continue;
     }
-    const cwd = sniffCwd(session.path);
-    const run = parseTranscript(jsonl, {
-      agentId:
-        agentMap[session.sessionId] ??
-        agentFromRules(cwd, config.agentRules) ??
-        gitRepoName(cwd),
-    });
+    // One source of truth for attribution. This used to re-implement the
+    // tag > agentRules > gitRepoName chain inline, which drifted from the upload
+    // path: excludeRules were never consulted, so an excluded project still
+    // appeared in local reports, and a session with no repo fell through to
+    // parseTranscript's cwd-LEAF fallback — naming agents `erelbi` or `private`
+    // after a home/parent directory rather than treating them as unattributed.
+    const { agent, excluded } = classifySession(session.sessionId, session.path);
+    if (excluded) continue;
+    const run = parseTranscript(jsonl, { agentId: agent ?? UNATTRIBUTED_AGENT });
     if (!run) continue;
     if (options.minSteps !== undefined && run.steps.length < options.minSteps) continue;
     if (options.agentFilter && !run.agentId.includes(options.agentFilter)) continue;

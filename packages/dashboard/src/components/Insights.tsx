@@ -16,6 +16,26 @@ interface Opportunity {
   estTokens: number;
   estUsd: number;
 }
+/**
+ * A repeated sub-PATH inside otherwise-unique runs. Long interactive sessions
+ * never match end-to-end, so whole-run clusters are empty while these are not —
+ * this is where the recurrence in real agent traffic actually lives.
+ */
+interface Segment {
+  segmentId: string;
+  labels: string[];
+  length: number;
+  support: number;
+  runsTotal: number;
+  occurrences: number;
+  totalCostUsd: number;
+  determinism: number;
+  mechanicalRatio: number;
+  separability: 'clean' | 'moderate' | 'entangled';
+  boundaryInputs: number;
+  boundaryOutputs: number;
+  action: 'compile' | 'route' | 'review';
+}
 interface AgentInsight {
   agentId: string;
   runCount: number;
@@ -26,6 +46,7 @@ interface AgentInsight {
   meanScore: number;
   totalEstUsd: number;
   opportunities: Opportunity[];
+  segments?: Segment[];
   drift?: {
     changed: boolean;
     changedAt?: string;
@@ -43,6 +64,18 @@ const ACTION: Record<string, { label: string; cls: string; hint: string }> = {
   template: { label: 'Synthesize template', cls: 'act-template', hint: 'Fixed structure with volatile data slots — generate a parameterized tool.' },
   route: { label: 'Route to smaller model', cls: 'act-route', hint: 'Moderately stable LLM step — a cheaper model can handle it.' },
   cache: { label: 'Cache', cls: 'act-cache', hint: 'Mostly stable — cache with validation.' },
+};
+
+/**
+ * Segment verdicts are deliberately weaker than the whole-run ones. A path can
+ * recur in most runs and still have near-zero determinism (same shape, different
+ * data every time) — that is a routing/extraction candidate, never a compile, and
+ * promising otherwise would fail replay validation.
+ */
+const SEGMENT_ACTION: Record<string, { label: string; cls: string; hint: string }> = {
+  compile: { label: 'Compile to code', cls: 'act-replace', hint: 'This path produced identical I/O in nearly every occurrence and has a clean boundary — code can run it without the LLM.' },
+  route: { label: 'Route to smaller model', cls: 'act-route', hint: 'Mostly mechanical steps (reads, lookups) wrapped around a little reasoning — a cheaper model can carry it.' },
+  review: { label: 'Extract as sub-agent', cls: 'act-cache', hint: 'Recurs often but its data differs every time, or it is entangled with surrounding steps — worth extracting behind a narrow interface rather than compiling.' },
 };
 
 export function Insights({ agent }: { agent: string }) {
@@ -77,7 +110,11 @@ export function Insights({ agent }: { agent: string }) {
 
       {loading && <div className="dag-empty">Analyzing the last {windowN} sessions per agent…</div>}
       {!loading && data.length === 0 && (
-        <div className="dag-empty">Not enough runs to analyze yet — determinism needs at least 2 runs of the same shape per agent.</div>
+        <div className="dag-empty">
+          No repetition found yet. Analysis needs either two runs of the same overall shape,
+          or one repeated path recurring inside several runs — agents with a single run, or
+          only long one-off sessions, produce neither.
+        </div>
       )}
 
       {!loading && data.map((a) => (
@@ -105,9 +142,15 @@ export function Insights({ agent }: { agent: string }) {
 
           <RouteTest agent={a.agentId} />
 
-          {a.opportunities.length === 0 ? (
+          {a.opportunities.length === 0 && (a.segments?.length ?? 0) > 0 && (
+            <div className="foot-note" style={{ marginTop: 10 }}>
+              No two runs share an overall shape, so there are no whole-run patterns —
+              but the paths below recur inside them.
+            </div>
+          )}
+          {a.opportunities.length === 0 && (a.segments?.length ?? 0) === 0 ? (
             <div className="foot-note" style={{ marginTop: 10 }}>No deterministic patterns found — this agent’s work varies run to run.</div>
-          ) : (
+          ) : a.opportunities.length === 0 ? null : (
             <div className="ins-list">
               {a.opportunities.map((o) => {
                 const act = ACTION[o.action] ?? ACTION.cache;
@@ -135,6 +178,46 @@ export function Insights({ agent }: { agent: string }) {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {(a.segments?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div className="panel-sub" style={{ marginBottom: 6 }}>
+                Repeated paths — sub-sequences recurring inside runs that never match end to end
+              </div>
+              <div className="ins-list">
+                {a.segments!.map((s) => {
+                  const act = SEGMENT_ACTION[s.action];
+                  return (
+                    <div key={s.segmentId} className="ins-row">
+                      <span className="ins-step tnum">{s.length}×</span>
+                      <div className="ins-main">
+                        <div className="ins-top">
+                          <span className={`ins-act ${act.cls}`} title={act.hint}>{act.label}</span>
+                          <span className="ins-kind">{s.separability}</span>
+                          <span className="ins-kind" title="values crossing the segment boundary — few means a clean contract">
+                            in {s.boundaryInputs} / out {s.boundaryOutputs}
+                          </span>
+                        </div>
+                        <div className="ins-preview">{s.labels.join('  →  ')}</div>
+                      </div>
+                      <div className="ins-metrics">
+                        <span className="ins-score" title="I/O identical across occurrences (low = same shape, different data)">
+                          <b className="tnum">{Math.round(s.determinism * 100)}</b>%
+                        </span>
+                        <span className="ins-conf tnum" title="share of steps needing no intelligence">
+                          mech {Math.round(s.mechanicalRatio * 100)}%
+                        </span>
+                        {s.totalCostUsd > 0 && <span className="ins-usd tnum">{usd(s.totalCostUsd)}</span>}
+                        <span className="ins-runs tnum" title={`${s.occurrences} occurrences across ${s.support} of ${s.runsTotal} runs`}>
+                          {s.support}/{s.runsTotal} runs
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </section>

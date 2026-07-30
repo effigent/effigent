@@ -33,6 +33,11 @@ const PILLARS = [
     title: 'Minimal retention, easy deletion',
     body: 'Analysis stores trimmed, redacted step payloads — raw transcripts are compressed and kept only as blobs for replay validation. Delete any agent’s runs, or an entire workspace, at any time.',
   },
+  {
+    hue: '200',
+    title: 'Run data can live in your own AWS account',
+    body: 'Every workspace’s run content lives in its own S3 bucket. By default that is a dedicated per-org bucket in Effigent’s account; enterprises can point capture at a bucket they own instead — provisioned with one CloudFormation command — with access through a least-privilege cross-account role they can revoke instantly. Effigent’s database keeps only metadata and a pointer.',
+  },
 ];
 
 export default function SecurityPage() {
@@ -80,6 +85,7 @@ contact: [REDACTED:EMAIL]   token: [REDACTED:BEARER]`}</CodeBlock>
           ['Do you store our provider API keys?', 'No. Capture is passive — your agents talk to OpenAI/Anthropic directly. The only credential Effigent holds is its own scoped capture key, stored hashed.'],
           ['Can one agent’s key read another agent’s data?', 'No. Capture keys are write-only and bound to a single agent. Dashboard access is a separate, user-level authentication through your identity provider.'],
           ['What happens if the collector is down?', 'Nothing, for your agents — capture is out of the request path. Hook-based uploads retry on the next session; OTel exporters buffer and flush.'],
+          ['Can our run data stay in our AWS account?', 'Yes. Point capture at a bucket you own — one CloudFormation deploy creates the bucket and a cross-account role scoped to PutObject/GetObject on it. You keep encryption (your KMS key), retention, and audit, and revoking the role cuts our access instantly. See the run storage docs.'],
         ].map(([q, a]) => (
           <div key={q} style={{ padding: '18px 0', borderTop: '1px solid var(--line)' }}>
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>{q}</div>

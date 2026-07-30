@@ -8,6 +8,7 @@ import { synthesizeTools } from '@/lib/engine/synthesize.ts';
 import { replayToolSpec } from '@/lib/engine/replay.ts';
 import { detectDrift } from '@/lib/engine/drift.ts';
 import { buildKnowledgeGraph } from '@/lib/engine/knowledge.ts';
+import { mineSegments, type MinedSegment } from '@/lib/engine/segments.ts';
 import { loadRun } from '@/lib/storage.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
@@ -35,6 +36,23 @@ const DEFAULT_WINDOW = 20;
 const MIN_WINDOW = 5;
 const MAX_WINDOW = 100;
 
+/**
+ * Whole-run clustering similarity (see align.ts: 0.7·sequence + 0.3·dataflow).
+ *
+ * Exposed as `?threshold=` because the right value is workload-dependent: a
+ * programmatic agent replaying one workflow clusters tightly, while long
+ * interactive sessions never do. Measured on real interactive traffic, max
+ * pairwise similarity per agent peaks ~0.58, and lowering the threshold does NOT
+ * help — at 0.40 you get 17 clusters, ~11k analyzed nodes, and ZERO actionable
+ * ones, because aligning runs that share under two-thirds of their structure
+ * yields columns with no constant, template, or pure value to find. The floor is
+ * therefore a guard against paying that cost for nothing, not a tuning range.
+ * Repetition in that kind of traffic lives in segments, not whole runs.
+ */
+const DEFAULT_THRESHOLD = 0.75;
+const MIN_THRESHOLD = 0.4;
+const MAX_THRESHOLD = 0.95;
+
 interface RunRow {
   session_id: string;
   agent_id: string;
@@ -56,6 +74,44 @@ function displayName(structLabel: string): string {
   if (structLabel.startsWith('result:')) return structLabel.slice(7).split(':')[0];
   if (structLabel.startsWith('llm:')) return structLabel.slice(4);
   return structLabel;
+}
+
+/**
+ * Trim mined segments for the wire and label what each one is actually good for.
+ *
+ * The distinction matters: a segment can recur in most runs and still carry
+ * near-zero `determinism` (its inputs/outputs differ every time), which means it
+ * is NOT compilable into a deterministic tool. Real data shows exactly that —
+ * structurally identical Read→result→thinking paths with determinism ~0.02–0.17.
+ * Those are routing/caching candidates, not replacements, and saying so prevents
+ * the view from promising a compile that would fail replay validation.
+ *
+ * `examples` is dropped (run ids + offsets are only useful server-side) and costs
+ * are rounded, so a 12-segment payload stays small.
+ */
+function wireSegments(segments: MinedSegment[]) {
+  return segments.map((s) => ({
+    segmentId: s.segmentId,
+    labels: s.labels,
+    length: s.length,
+    support: s.support,
+    runsTotal: s.runsTotal,
+    occurrences: s.occurrences,
+    totalCostUsd: Number(s.totalCostUsd.toFixed(2)),
+    avgCostPerOccurrenceUsd: Number(s.avgCostPerOccurrenceUsd.toFixed(4)),
+    determinism: Number(s.determinism.toFixed(2)),
+    mechanicalRatio: Number(s.mechanicalRatio.toFixed(2)),
+    separability: s.separability,
+    boundaryInputs: s.boundaryInputs,
+    boundaryOutputs: s.boundaryOutputs,
+    // What to DO with it, gated on the evidence rather than on structure alone.
+    action:
+      s.determinism >= 0.9 && s.separability === 'clean'
+        ? 'compile'
+        : s.mechanicalRatio >= 0.5 && s.separability !== 'entangled'
+          ? 'route'
+          : 'review',
+  }));
 }
 
 /** Stable across windows: the same logical opportunity keeps its id. */
@@ -89,6 +145,10 @@ export async function GET(req: Request) {
   const tenantId = await resolveTenant({ userId, orgId: orgId ?? null });
   const url = new URL(req.url);
   const agentFilter = url.searchParams.get('agent') || undefined;
+  const threshold = Math.max(
+    MIN_THRESHOLD,
+    Math.min(MAX_THRESHOLD, Number(url.searchParams.get('threshold')) || DEFAULT_THRESHOLD),
+  );
   const window = Math.max(
     MIN_WINDOW,
     Math.min(MAX_WINDOW, Number(url.searchParams.get('window')) || DEFAULT_WINDOW),
@@ -135,13 +195,25 @@ export async function GET(req: Request) {
     // window's baseline. On drift, validated tools should be re-shadowed.
     const drift = detectDrift(graphs);
 
-    const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs);
+    // Whole-run clustering asks "are two runs the same shape?". Long interactive
+    // sessions never are — measured on real data, max pairwise similarity per agent
+    // tops out ~0.58 against the 0.75 threshold, so every agent scored 0 clusters
+    // and the view rendered empty. Segment mining asks the weaker, more useful
+    // question: does the same PATH recur INSIDE otherwise-unique runs? That is
+    // where the repetition actually lives, so mine it for every agent.
+    const segments = mineSegments(graphs);
+
+    const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
     if (analyses.length === 0) {
-      if (drift?.changed) {
+      // No whole-run cluster is not "nothing to analyze". Emit the agent whenever
+      // repeated sub-paths (or drift) carry signal — otherwise the agents burning
+      // the most spend are exactly the ones the view stays silent about.
+      if (segments.length > 0 || drift?.changed) {
         insights.push({
           agentId, runCount: runs.length, window, clusters: 0, coverage: 0,
           steps: Math.max(...runs.map((r) => r.steps.length)), meanScore: 0, meanSim: 0,
           totalEstUsd: 0, opportunities: [], tools: [], drift,
+          segments: wireSegments(segments),
         });
       }
       continue;
@@ -231,6 +303,7 @@ export async function GET(req: Request) {
       tools,
       drift,
       knowledge: buildKnowledgeGraph(analyses).find((k) => k.agentId === agentId) ?? null,
+      segments: wireSegments(segments),
     });
     } catch (err) {
       console.error(
@@ -240,5 +313,5 @@ export async function GET(req: Request) {
     }
   }
   insights.sort((a, b) => b.totalEstUsd - a.totalEstUsd);
-  return Response.json({ insights, window });
+  return Response.json({ insights, window, threshold });
 }

@@ -17,11 +17,12 @@ import { KnowledgeView } from '@/components/KnowledgeView.tsx';
 import { Insights } from '@/components/Insights.tsx';
 import { OverviewLive } from '@/components/OverviewLive.tsx';
 import { Privacy } from '@/components/Privacy.tsx';
+import { Storage } from '@/components/Storage.tsx';
 import { ThemeToggle } from '@/components/ThemeToggle.tsx';
 import { Ic } from '@/icons.tsx';
 import { ALL_AGENTS } from '@/data.ts';
 
-type View = 'overview' | 'sessions' | 'tools' | 'kg' | 'insights' | 'privacy' | 'install' | 'session-detail';
+type View = 'overview' | 'sessions' | 'tools' | 'kg' | 'insights' | 'privacy' | 'storage' | 'install' | 'session-detail';
 interface AgentInfo { agent_id: string; optimized: boolean; n_runs: number; total_cost_usd: string | number }
 
 const clerkAppearance = {
@@ -79,6 +80,7 @@ export function Dashboard() {
     kg: { title: 'Knowledge Graph', sub: 'What Effigent knows about your agents’ world' },
     insights: { title: 'Optimization Insights', sub: 'Deterministic steps we can replace, cache, or keep' },
     privacy: { title: 'Privacy & Redaction', sub: 'What never leaves raw — built-in filters plus your workspace rules' },
+    storage: { title: 'Run Storage', sub: 'Where your run data lives — Effigent-managed, or a bucket in your own AWS account' },
   };
   const head = heads[view] ?? heads.overview;
   const showToolbar = view === 'overview' || view === 'sessions' || view === 'kg' || view === 'insights' || view === 'tools';
@@ -148,6 +150,7 @@ export function Dashboard() {
               {view === 'kg' && (demo ? <KnowledgeGraph agent={agent} /> : <KnowledgeView agent={agent} />)}
               {view === 'insights' && <Insights agent={agent} />}
               {view === 'privacy' && <Privacy />}
+              {view === 'storage' && <Storage />}
               {view === 'overview' && (demo ? (
                 <>
                   <div className="demo-note">Sample data — demo workspace</div>

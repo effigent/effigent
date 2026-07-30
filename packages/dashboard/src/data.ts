@@ -37,6 +37,7 @@ export const nav = [
   ] },
   { group: 'Workspace', items: [
     ['Privacy', 'shield', 'privacy'],
+    ['Storage', 'database', 'storage'],
   ] },
 ] as const;
 
