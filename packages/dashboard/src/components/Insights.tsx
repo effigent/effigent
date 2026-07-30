@@ -120,20 +120,77 @@ const SEGMENT_ACTION: Record<string, { label: string; cls: string; hint: string 
 const CACHE = new Map<string, { insights: AgentInsight[]; window: number; at: number }>();
 
 
-/** A metric with its name attached. Bare numbers in a row are unreadable. */
-function Metric({ label, value, title }: { label: string; value: string; title?: string }) {
+/**
+ * Fixed-width metric cell. The width is the whole point: cells only line up into
+ * COLUMNS if every row reserves the same space, so this must not size to content.
+ * The name lives once in `MetricHead`, not repeated on every row.
+ */
+const METRIC_W = 82;
+
+function Metric({ value, title }: { value: string; title?: string }) {
   return (
     <span
       title={title}
-      style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.25 }}
+      className="tnum"
+      style={{ width: METRIC_W, flex: 'none', textAlign: 'right', fontSize: 12.5, fontWeight: 600 }}
     >
-      <b className="tnum" style={{ fontSize: 12.5 }}>{value}</b>
-      <span style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--txt-3)' }}>
-        {label}
-      </span>
+      {value}
     </span>
   );
 }
+
+/**
+ * The single header row for a metric table. Mirrors the row layout exactly — same
+ * left gutter, same flexible middle, same fixed cells — so the labels sit above the
+ * values they describe.
+ */
+function MetricHead({ cols }: { cols: { label: string; title: string }[] }) {
+  return (
+    <div className="ins-row" style={{ paddingTop: 0, paddingBottom: 6, borderTop: 'none' }}>
+      <span className="ins-step" />
+      <div className="ins-main" />
+      <div className="ins-metrics">
+        {cols.map((c) => (
+          <span
+            key={c.label}
+            title={c.title}
+            style={{
+              width: METRIC_W, flex: 'none', textAlign: 'right', fontSize: 9.5,
+              textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--txt-3)',
+              cursor: 'help',
+            }}
+          >
+            {c.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const SEGMENT_COLS = [
+  { label: 'stable', title: 'How often this path carried byte-identical I/O. Low means same shape, different data.' },
+  { label: 'mechanical', title: 'Share of steps needing no intelligence (reads, lookups) rather than generation.' },
+  { label: 'in runs', title: 'How many of the analysed runs contained it.' },
+  { label: 'times', title: 'Total occurrences across those runs.' },
+  { label: 'cost', title: 'Measured spend attributed to this path.' },
+];
+
+const SUBTREE_COLS = [
+  { label: 'stable', title: 'How often the whole subtree carried byte-identical payloads.' },
+  { label: 'confidence', title: 'Wilson lower bound on stability at this sample size. Two identical occurrences are not evidence, so a low figure here blocks the compile recommendation.' },
+  { label: 'mechanical', title: 'Share of steps needing no intelligence rather than generation.' },
+  { label: 'in runs', title: 'How many of the analysed runs contained it.' },
+  { label: 'times', title: 'Total occurrences across those runs.' },
+  { label: 'cost', title: 'Measured spend attributed to this subtree.' },
+];
+
+const OPP_COLS = [
+  { label: 'stability', title: 'How consistent this step was across the runs in the cluster.' },
+  { label: 'confidence', title: 'Wilson lower bound at this sample size — how far the stability figure can be trusted.' },
+  { label: 'in runs', title: 'Runs exhibiting this pattern.' },
+  { label: 'removable', title: 'Estimated spend this change would remove.' },
+];
 
 /** Per-node stability → colour. Green constant, gold partly stable, red volatile. */
 function detColor(d: number): string {
@@ -185,6 +242,28 @@ function SubtreeMap({ tree }: { tree: SubtreeNode[] }) {
   );
 }
 
+
+/**
+ * Sections are capped by default. Twelve segment rows pushed the subtree section —
+ * the more valuable finding, and the one with the tree map explaining WHY — clean off
+ * the screen, which read as "the feature is missing".
+ */
+const ROW_CAP = 5;
+
+function MoreRows({ shown, total, onClick }: { shown: number; total: number; onClick: () => void }) {
+  if (total <= shown) return null;
+  return (
+    <button
+      type="button"
+      className="chip"
+      style={{ cursor: 'pointer', alignSelf: 'flex-start', marginTop: 8 }}
+      onClick={onClick}
+    >
+      show all {total}
+    </button>
+  );
+}
+
 export function Insights({ agent }: { agent: string }) {
   const key = agent || ALL_AGENTS;
   const cached = CACHE.get(key);
@@ -194,6 +273,8 @@ export function Insights({ agent }: { agent: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  // Which section lists are expanded, keyed `${agentId}:${section}`.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   // Show whatever was already computed for this agent; never fetch on mount.
   useEffect(() => {
@@ -303,6 +384,7 @@ export function Insights({ agent }: { agent: string }) {
             <div className="foot-note" style={{ marginTop: 10 }}>No deterministic patterns found — this agent’s work varies run to run.</div>
           ) : a.opportunities.length === 0 ? null : (
             <div className="ins-list">
+              <MetricHead cols={OPP_COLS} />
               {a.opportunities.map((o) => {
                 const act = ACTION[o.action] ?? ACTION.cache;
                 return (
@@ -321,56 +403,17 @@ export function Insights({ agent }: { agent: string }) {
                       )}
                     </div>
                     <div className="ins-metrics" style={{ gap: 14 }}>
-                      <Metric label="stability" value={`${o.score}%`}
+                      <Metric value={`${o.score}%`}
                         title="How consistent this step was across the runs in the cluster" />
-                      <Metric label="confidence" value={`±${o.confidence}`}
+                      <Metric value={`±${o.confidence}`}
                         title="Wilson lower bound at this sample size — how much the stability figure can be trusted" />
-                      <Metric label="in runs" value={`${o.runs}`} title="Runs exhibiting this pattern" />
-                      <Metric label="removable" value={usd(o.estUsd)}
+                      <Metric value={`${o.runs}`} title="Runs exhibiting this pattern" />
+                      <Metric value={usd(o.estUsd)}
                         title="Estimated spend this change would remove" />
                     </div>
                   </div>
                 );
               })}
-            </div>
-          )}
-
-          {(a.segments?.length ?? 0) > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div className="panel-sub" style={{ marginBottom: 6 }}>
-                Repeated paths — sub-sequences recurring inside runs that never match end to end
-              </div>
-              <div className="ins-list">
-                {a.segments!.map((s) => {
-                  const act = SEGMENT_ACTION[s.action];
-                  return (
-                    <div key={s.segmentId} className="ins-row">
-                      <span className="ins-step tnum">{s.length}×</span>
-                      <div className="ins-main">
-                        <div className="ins-top">
-                          <span className={`ins-act ${act.cls}`} title={act.hint}>{act.label}</span>
-                          <span className="ins-kind">{s.separability}</span>
-                          <span className="ins-kind" title="values crossing the segment boundary — few means a clean contract">
-                            in {s.boundaryInputs} / out {s.boundaryOutputs}
-                          </span>
-                        </div>
-                        <div className="ins-preview">{s.labels.join('  →  ')}</div>
-                      </div>
-                      <div className="ins-metrics" style={{ gap: 14 }}>
-                        <Metric label="stable" value={`${Math.round(s.determinism * 100)}%`}
-                          title="How often this path carried byte-identical I/O. Low means same shape, different data." />
-                        <Metric label="mechanical" value={`${Math.round(s.mechanicalRatio * 100)}%`}
-                          title="Share of steps needing no intelligence rather than generation." />
-                        <Metric label="in runs" value={`${s.support}/${s.runsTotal}`}
-                          title={`Appeared in ${s.support} of the ${s.runsTotal} runs analysed`} />
-                        <Metric label="times" value={String(s.occurrences)} title="Total occurrences" />
-                        <Metric label="cost" value={usd(s.totalCostUsd)}
-                          title="Measured spend attributed to this path" />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </div>
           )}
 
@@ -380,7 +423,8 @@ export function Insights({ agent }: { agent: string }) {
                 Repeated subtrees — a step and the consumers of its values, matched regardless of ordering
               </div>
               <div className="ins-list">
-                {a.subtrees!.map((s) => {
+                <MetricHead cols={SUBTREE_COLS} />
+                {(expanded[`${a.agentId}:sub`] ? a.subtrees! : a.subtrees!.slice(0, ROW_CAP)).map((s) => {
                   const act = SEGMENT_ACTION[s.action];
                   const isOpen = open === s.subtreeId;
                   return (
@@ -407,17 +451,17 @@ export function Insights({ agent }: { agent: string }) {
                         </div>
                       </div>
                       <div className="ins-metrics" style={{ gap: 14 }}>
-                        <Metric label="stable" value={`${Math.round(s.determinism * 100)}%`}
+                        <Metric value={`${Math.round(s.determinism * 100)}%`}
                           title="How often the whole subtree carried byte-identical payloads. Low means same shape, different data." />
-                        <Metric label="confidence" value={`${Math.round(s.confidence * 100)}%`}
+                        <Metric value={`${Math.round(s.confidence * 100)}%`}
                           title="Wilson lower bound on stability at this sample size. Two identical occurrences are not evidence of determinism, so a low figure here blocks the compile recommendation." />
-                        <Metric label="mechanical" value={`${Math.round(s.mechanicalRatio * 100)}%`}
+                        <Metric value={`${Math.round(s.mechanicalRatio * 100)}%`}
                           title="Share of steps needing no intelligence (reads, lookups) rather than generation." />
-                        <Metric label="in runs" value={`${s.support}/${s.runsTotal}`}
+                        <Metric value={`${s.support}/${s.runsTotal}`}
                           title={`Appeared in ${s.support} of the ${s.runsTotal} runs analysed`} />
-                        <Metric label="times" value={String(s.occurrences)}
+                        <Metric value={String(s.occurrences)}
                           title="Total occurrences across those runs" />
-                        <Metric label="cost" value={usd(s.totalCostUsd)}
+                        <Metric value={usd(s.totalCostUsd)}
                           title="Measured spend attributed to this subtree across all its occurrences" />
                       </div>
                       {isOpen && <div style={{ flexBasis: '100%' }}><SubtreeMap tree={s.tree} /></div>}
@@ -425,6 +469,54 @@ export function Insights({ agent }: { agent: string }) {
                   );
                 })}
               </div>
+              {!expanded[`${a.agentId}:sub`] && (
+                <MoreRows shown={ROW_CAP} total={a.subtrees!.length}
+                  onClick={() => setExpanded((e) => ({ ...e, [`${a.agentId}:sub`]: true }))} />
+              )}
+            </div>
+          )}
+
+          {(a.segments?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div className="panel-sub" style={{ marginBottom: 6 }}>
+                Repeated paths — contiguous sub-sequences recurring inside runs that never match end to end
+              </div>
+              <div className="ins-list">
+                <MetricHead cols={SEGMENT_COLS} />
+                {(expanded[`${a.agentId}:seg`] ? a.segments! : a.segments!.slice(0, ROW_CAP)).map((s) => {
+                  const act = SEGMENT_ACTION[s.action];
+                  return (
+                    <div key={s.segmentId} className="ins-row">
+                      <span className="ins-step tnum">{s.length}×</span>
+                      <div className="ins-main">
+                        <div className="ins-top">
+                          <span className={`ins-act ${act.cls}`} title={act.hint}>{act.label}</span>
+                          <span className="ins-kind">{s.separability}</span>
+                          <span className="ins-kind" title="values crossing the segment boundary — few means a clean contract">
+                            in {s.boundaryInputs} / out {s.boundaryOutputs}
+                          </span>
+                        </div>
+                        <div className="ins-preview">{s.labels.join('  →  ')}</div>
+                      </div>
+                      <div className="ins-metrics" style={{ gap: 14 }}>
+                        <Metric value={`${Math.round(s.determinism * 100)}%`}
+                          title="How often this path carried byte-identical I/O. Low means same shape, different data." />
+                        <Metric value={`${Math.round(s.mechanicalRatio * 100)}%`}
+                          title="Share of steps needing no intelligence rather than generation." />
+                        <Metric value={`${s.support}/${s.runsTotal}`}
+                          title={`Appeared in ${s.support} of the ${s.runsTotal} runs analysed`} />
+                        <Metric value={String(s.occurrences)} title="Total occurrences" />
+                        <Metric value={usd(s.totalCostUsd)}
+                          title="Measured spend attributed to this path" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {!expanded[`${a.agentId}:seg`] && (
+                <MoreRows shown={ROW_CAP} total={a.segments!.length}
+                  onClick={() => setExpanded((e) => ({ ...e, [`${a.agentId}:seg`]: true }))} />
+              )}
             </div>
           )}
         </section>
