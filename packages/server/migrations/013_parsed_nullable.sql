@@ -1,0 +1,12 @@
+-- S3-only residency (migration 012 / commit 4392305) moved run content OUT of
+-- Neon: `persistRun` writes the blob to the org's bucket and inserts the metadata
+-- row with `parsed = NULL`. But `runs.parsed` was declared `jsonb not null` back in
+-- 001_init.sql and nothing ever relaxed it, so EVERY ingest since that feature
+-- shipped failed with 23502 (not-null violation) — a bare HTTP 500 to the client,
+-- while the S3 blob had already been written. Result: run content in the bucket,
+-- no row pointing at it, an empty dashboard.
+--
+-- `parsed` is now legacy: non-null only on pre-S3 rows (read via `loadRun`'s inline
+-- fallback). New rows are always NULL and their content lives at `blob_path`.
+-- Idempotent: `drop not null` on an already-nullable column is a no-op.
+alter table runs alter column parsed drop not null;

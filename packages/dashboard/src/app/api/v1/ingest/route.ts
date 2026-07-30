@@ -9,6 +9,39 @@ const notProvisioned = () =>
     { status: 409 },
   );
 
+/**
+ * Translate a persist failure into a response the CLI can actually act on.
+ *
+ * A bare `throw` here becomes a 500 with an EMPTY body, which is what let a 100%
+ * ingest failure rate (the `runs.parsed` not-null violation, migration 013) look
+ * indistinguishable from a network blip for weeks: the hook logged
+ * "upload failed (HTTP 500)" with no detail, and nobody could tell why. The blob
+ * is already in S3 by the time we get here, so a failure at this point means an
+ * orphaned object — say so loudly, and echo the Postgres specifics.
+ */
+const persistFailed = (err: unknown, sessionId: string) => {
+  if (err instanceof StorageNotProvisioned) return notProvisioned();
+  const pgErr = err as { code?: string; table?: string; column?: string; constraint?: string; message?: string };
+  console.error(
+    `[ingest] persist FAILED for session ${sessionId} — blob may be orphaned in S3.`,
+    JSON.stringify({ code: pgErr?.code, table: pgErr?.table, column: pgErr?.column, constraint: pgErr?.constraint, message: pgErr?.message }),
+  );
+  return Response.json(
+    {
+      error: 'could not persist run',
+      // Enough for the operator to diagnose from the CLI output alone; no row data.
+      dbCode: pgErr?.code,
+      dbTable: pgErr?.table,
+      dbColumn: pgErr?.column,
+      hint:
+        pgErr?.code === '23502'
+          ? 'not-null violation — a schema migration is missing on this database (see migration 013)'
+          : 'the run blob was written to S3 but its metadata row failed; retrying the upload is safe (upsert)',
+    },
+    { status: 500 },
+  );
+};
+
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
@@ -75,8 +108,7 @@ export async function POST(req: Request) {
     try {
       await persistRun(auth, sessionId, full as Parameters<typeof persistRun>[2]);
     } catch (err) {
-      if (err instanceof StorageNotProvisioned) return notProvisioned();
-      throw err;
+      return persistFailed(err, sessionId);
     }
     return Response.json({ parsed: true, agentId: effectiveAgentId, costUsd: full.costUsd, preparsed: true });
   }
@@ -103,8 +135,7 @@ export async function POST(req: Request) {
   try {
     await persistRun(auth, sessionId, run);
   } catch (err) {
-    if (err instanceof StorageNotProvisioned) return notProvisioned();
-    throw err;
+    return persistFailed(err, sessionId);
   }
   return Response.json({ parsed: true, agentId: run.agentId, costUsd: run.costUsd });
 }
