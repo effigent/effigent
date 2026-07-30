@@ -20,9 +20,9 @@ npm workspaces (`packages/*`). TypeScript throughout; ESM (`.js` import specifie
 |---|---|---|
 | `@effigent/core` | Pure TS engine: transcript/OTel → `Run` → `RunGraph` (DAG), clustering, cost, taxonomy, **determinism scoring**. No I/O. | library |
 | `@effigent/server` | Fastify API: ingest, agents/keys, insights (LLM), analyze, reports, viewers. **Being retired** (see §6). | Node (Render) |
-| `@effigent/cli` | `effigent` CLI (npm: `effigent`): `login`, `agent add/list`, `run` (wrap ANY agent command), `install claude` (SessionEnd hook) + `install otel/codex/python/node` (key-filled OTel recipes per harness — table-driven, one entry per new harness), `claude-hook`, upload. | Node |
+| `@effigent/cli` | `effigent` CLI (npm: `effigent`): `login`, `agent add/list`, `run` (wrap ANY agent command), `install claude` (**one** agent-agnostic SessionEnd hook — see §4.1) + `install otel/codex/python/node` (key-filled OTel recipes per harness — table-driven, one entry per new harness), `claude-hook`, upload. | Node |
 | `@effigent/dashboard` | Next.js App Router dashboard + its own API routes. The product UI. | Vercel |
-| `@effigent/site` | Marketing site, Next.js **static export** (`output: 'export'`). Pages: `/` (landing), `/docs` (+6 doc pages), `/developers` (full per-harness install guide), `/about`, `/pricing`, `/security` (redaction + posture), `/terms`, `/privacy`. Endpoints are env-driven: `NEXT_PUBLIC_COLLECTOR_URL` / `NEXT_PUBLIC_DASHBOARD_URL` (set as GitHub `prod` environment Variables `COLLECTOR_URL`/`DASHBOARD_URL`, injected in the deploy workflow; unset → explicit `<placeholder>`) — never hardcode domains. | S3 + CloudFront |
+| `@effigent/site` | Marketing site, Next.js **static export** (`output: 'export'`). Pages: `/` (landing), `/docs` (+7 doc pages incl. `/docs/storage` — managed vs customer-S3 residency), `/developers` (full per-harness install guide), `/about`, `/pricing`, `/security` (redaction + posture), `/terms`, `/privacy`. Endpoints are env-driven: `NEXT_PUBLIC_COLLECTOR_URL` / `NEXT_PUBLIC_DASHBOARD_URL` (set as GitHub `prod` environment Variables `COLLECTOR_URL`/`DASHBOARD_URL`, injected in the deploy workflow; unset → explicit `<placeholder>`) — never hardcode domains. | S3 + CloudFront |
 
 The engine (`core`) is deliberately I/O-free so both capture paths (Claude transcripts
 and OTLP spans) produce the **same `Run`**, and everything downstream is unchanged.
@@ -142,6 +142,37 @@ binds credentials only.
 Secrets live in `.env.local` (gitignored) and in Vercel — **never commit them**. The Clerk
 secret key stays server-only (no `NEXT_PUBLIC_` prefix).
 
+### 4.1 Agent attribution — why the capture hook takes no `--agent`
+
+Both ingest paths resolve the agent as **`auth.agentName ?? agentIdHeader`**
+(`ingest/route.ts`), and `auth.agentName` comes from a *scoped* key. A scoped key
+therefore **pins** attribution server-side and the header is ignored. That makes
+per-project separation unreachable for any hook that uploads with one agent's scoped
+key — every session lands under that agent no matter what the CLI resolved.
+
+So capture on a dev machine is **one agent-agnostic hook**, and the agent is decided
+per session, in the CLI, from the transcript's `cwd`:
+
+- `install claude` writes exactly **one** `SessionEnd` hook (`claude-hook`, no
+  `--agent`) and **replaces** any it previously wrote. Hook groups carry no matcher,
+  so they all fire on every session — two of them meant every session uploaded twice
+  under two different agent names. Install is replace-then-add, never append.
+- `claude-hook` calls `classifySession()` (`cli/src/store.ts`, one cwd sniff):
+  `excludeRules` veto → explicit tag → `agentRules` → git repo name →
+  `UNATTRIBUTED_AGENT`.
+- A project with no scoped key yet is **auto-registered on first sight** (shared
+  `registerAgent()`), so `auth.agentName` ends up equal to the resolved name and
+  attribution stays credential-derived rather than header-asserted. The tenant key is
+  used only for that one minting call.
+- **`excludeRules`** is a hard veto: it is checked even when `--agent` pins, and
+  unlike the attribution default it is **not** overridable by `sync --all`. An
+  unknown cwd is *not* excluded — exclusion requires a positive match, so a failed
+  sniff can never silently suppress capture.
+- `--agent` remains, as an explicit pin for CI/single-purpose machines.
+
+Because `runs.agent_id` stores the agent **name** (§3) and `agents` rows bind
+credentials only, none of this needs a schema change.
+
 ---
 
 ## 5. Dashboard (`packages/dashboard/src`)
@@ -186,6 +217,9 @@ Reads Neon directly via a pooled `pg` client (`lib/db.ts`).
   duration, click-to-expand payloads).
 - **Insights** (`Insights.tsx`) — the determinism brain's output: per-agent
   optimization opportunities (replace/cache) scored over the real runs. **Live.**
+- **Storage** (`Storage.tsx`) — per-org run storage: managed (Effigent-account
+  bucket) vs customer S3 (BYO via CloudFormation/Terraform), switch modes,
+  access probe. **Live** (see §6).
 - **Tool Synthesis** / **Knowledge Graph** (per-agent) — currently demo-backed.
 - **Install** — how to put Optimizer on an agent (see §6 for real vs aspirational).
 
@@ -232,8 +266,19 @@ via `lib/storage.ts` (`putRunBlob`; BYO cross-account buckets via STS AssumeRole
 storing only the `s3://` `blob_path` + metadata in Neon (`parsed` null). Reads
 (`sessions/[id]`, `insights`, `optimize`) fetch blobs with `loadRun` (parallel;
 legacy `parsed` rows still work). No bucket configured ⇒ ingest returns **409**
-(the onboarding gate). Org-admin `GET/PUT /api/v1/storage` sets BYO config with a
-write→read probe. See `docs/onboarding.md`.
+(the onboarding gate). Org-admin `GET/PUT /api/v1/storage` manages both modes:
+PUT with bucket/roleArn sets BYO config (write→read probe; externalId defaults to
+the server-generated one), PUT `{mode:'managed'}` clears BYO and (re)provisions an
+Effigent-account bucket. GET also returns `effigentAccountId`
+(`EFFIGENT_AWS_ACCOUNT_ID` env) + `suggestedExternalId` (HMAC of tenant id with
+`EFFIGENT_EXTERNAL_ID_SECRET` — deterministic, no DB column; see
+`lib/byo-template.ts`). `GET /api/v1/storage/template` serves the BYO
+CloudFormation template pre-filled with both (one `aws cloudformation deploy`,
+no typed parameters); raw copies for partners live in
+`infra/aws/effigent-byo-storage.yaml` + `infra/aws/terraform/` (keep in sync with
+`lib/byo-template.ts`). The dashboard **Storage** view (Workspace nav) is the UI
+for all of it: mode cards, provision/switch, template download, BYO form, live
+probe. See `docs/onboarding.md`.
 The CLI is published to npm as **`effigent`** (bin: `effigent`; config `~/.effigent`; keys minted `eff_`, legacy `cck_` accepted) (single-file esbuild CJS bundle, core
 inlined — no workspace dep). `packages/server` remains as reference/self-host only.
 

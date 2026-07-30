@@ -175,10 +175,9 @@ export default function Page() {
                   <div style={{ margin: '0 auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'oklch(0.55 0.012 260)', transform: 'translateX(-18px)' }}>zsh — effigent install</div>
                 </div>
                 <div style={{ padding: '14px 16px', fontFamily: 'var(--mono)', fontSize: 13, lineHeight: 1.9 }}>
-                  <div style={{ color: 'oklch(0.85 0.01 150)' }}><span style={{ color: 'oklch(0.55 0.14 150)' }}>&#10142;</span> effigent agent add billing-agent</div>
-                  <div style={{ color: 'oklch(0.55 0.012 260)' }}>&gt; ✓ registered — scoped capture key saved</div>
-                  <div style={{ color: 'oklch(0.85 0.01 150)' }}><span style={{ color: 'oklch(0.55 0.14 150)' }}>&#10142;</span> effigent install claude --agent billing-agent</div>
-                  <div style={{ color: 'oklch(0.55 0.012 260)', display: 'flex', alignItems: 'center', gap: 6 }}>&gt; ✓ every finished session now uploads<span style={{ display: 'inline-block', width: 7, height: 14, background: 'oklch(0.75 0.01 150)', animation: 'glowPulse 1s step-end infinite' }} /></div>
+                  <div style={{ color: 'oklch(0.85 0.01 150)' }}><span style={{ color: 'oklch(0.55 0.14 150)' }}>&#10142;</span> effigent install claude</div>
+                  <div style={{ color: 'oklch(0.55 0.012 260)' }}>&gt; ✓ SessionEnd hook installed — scoped keys stay local</div>
+                  <div style={{ color: 'oklch(0.55 0.012 260)', display: 'flex', alignItems: 'center', gap: 6 }}>&gt; ✓ every session uploads, each project its own agent<span style={{ display: 'inline-block', width: 7, height: 14, background: 'oklch(0.75 0.01 150)', animation: 'glowPulse 1s step-end infinite' }} /></div>
                 </div>
               </div>
             </div>

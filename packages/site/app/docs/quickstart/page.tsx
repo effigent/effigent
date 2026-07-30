@@ -34,8 +34,8 @@ effigent agent add billing-agent`}</CodeBlock>
           Claude Code gets an event-driven session hook; SDK agents and Codex export OpenTelemetry. Details per harness in{' '}
           <Link href="/docs/capture" style={{ fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>Capture</Link>.
         </p>
-        <CodeBlock title="zsh — pick your harness">{`# Claude Code (hook — zero polling):
-effigent install claude --agent billing-agent
+        <CodeBlock title="zsh — pick your harness">{`# Claude Code (hook — zero polling, each project its own agent):
+effigent install claude
 
 # Python / Node / Codex (OpenTelemetry) — prints a ready-to-paste block:
 effigent install otel --agent billing-agent --harness python`}</CodeBlock>

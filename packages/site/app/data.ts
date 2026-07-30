@@ -52,7 +52,7 @@ import { TRACES_URL } from './config';
 
 export const INSTALL_CODE: Record<string, string> = {
   claude:
-    'npm i -g effigent\n\n# register once, then install the session hook — zero code changes\neffigent agent add billing-agent\neffigent install claude --agent billing-agent\n\n# ✓ every finished session now uploads automatically',
+    'npm i -g effigent\n\n# one hook, zero code changes — no agent registration needed\neffigent login --key eff_…\neffigent install claude\n\n# ✓ every finished session now uploads, each project as its own agent',
   codex:
     `# Codex emits OpenTelemetry natively — point it at the collector\neffigent install codex --agent billing-agent\n\nexport OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${TRACES_URL}\nexport OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <scoped-key>"\ncodex "fix the failing checkout test"`,
   python:
