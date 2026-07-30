@@ -137,15 +137,32 @@ function wireSubtrees(subtrees: MinedSubtree[]) {
     rootLabel: s.rootLabel,
     labels: s.labels,
     nodes: s.nodes,
+    span: s.span,
     depth: s.depth,
+    // The drawable tree: per-node stability is what justifies the recommendation,
+    // and an aggregate score cannot say WHICH steps were stable.
+    tree: s.tree.map((t) => ({
+      position: t.position,
+      parent: t.parent,
+      level: t.level,
+      structLabel: t.structLabel,
+      class: t.class,
+      determinism: t.determinism,
+      distinctValues: t.distinctValues,
+    })),
     support: s.support,
     runsTotal: s.runsTotal,
     occurrences: s.occurrences,
     totalCostUsd: Number(s.totalCostUsd.toFixed(2)),
     determinism: Number(s.determinism.toFixed(2)),
+    confidence: Number(s.confidence.toFixed(2)),
     mechanicalRatio: Number(s.mechanicalRatio.toFixed(2)),
+    // Gate on CONFIDENCE, never raw determinism. Two identical occurrences score
+    // determinism 1.0 and would otherwise be told to "compile" — that produced a real
+    // false positive here (a 10-node llm:assistant subtree calling AskUserQuestion,
+    // seen twice). The Wilson bound at n=2 lands near 0.34 and correctly refuses.
     action:
-      s.determinism >= 0.9
+      s.confidence >= 0.6 && s.determinism >= 0.9
         ? 'compile'
         : s.mechanicalRatio >= 0.5
           ? 'route'
