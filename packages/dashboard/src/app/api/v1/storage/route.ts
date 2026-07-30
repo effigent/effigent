@@ -2,6 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { pool } from '@/lib/db.ts';
 import { resolveTenant } from '@/lib/tenant.ts';
 import { invalidateStorage, putRunBlob, getRunBlob, provisionOrgBucket } from '@/lib/storage.ts';
+import { externalIdFor, effigentAccountId } from '@/lib/byo-template.ts';
 
 /** Classify a raw AWS error into an actionable hint. */
 function classifyAwsError(msg: string): string {
@@ -123,6 +124,11 @@ export async function GET(req: Request) {
     roleArn: r.storage_role_arn ?? null,
     externalId: r.storage_external_id ?? null,
     provisionedAt: r.storage_provisioned_at ?? null,
+    // What a partner's cloud team needs BEFORE anything is configured: the
+    // account they trust and the per-org external id (both baked into the
+    // CloudFormation template served at /api/v1/storage/template).
+    effigentAccountId: effigentAccountId(),
+    suggestedExternalId: externalIdFor(tenantId),
     canEdit,
     ...(provision ? { provision } : {}),
     ...(probe ? { probe } : {}),
@@ -141,6 +147,7 @@ export async function PUT(req: Request) {
   const tenantId = await resolveTenant({ userId, orgId: orgId ?? null });
 
   let body: {
+    mode?: 'managed' | 'byo';
     bucket?: string; region?: string; prefix?: string; kmsKey?: string;
     roleArn?: string; externalId?: string;
   };
@@ -149,10 +156,33 @@ export async function PUT(req: Request) {
   } catch {
     return Response.json({ error: 'invalid JSON body' }, { status: 400 });
   }
+
+  // mode:'managed' — (re)point the org at an Effigent-account bucket. Clears any
+  // BYO config first so a partner can switch back without touching the DB.
+  if (body.mode === 'managed') {
+    await pool.query(
+      `update tenants set storage_bucket=null, storage_region=null, storage_prefix=null,
+              storage_kms_key=null, storage_role_arn=null, storage_external_id=null,
+              storage_provisioned_at=null
+         where id=$1`,
+      [tenantId],
+    );
+    invalidateStorage(tenantId);
+    const provision = await tryProvision(tenantId);
+    if (!provision.ok) return Response.json({ ok: false, mode: 'managed', provision }, { status: 502 });
+    const probe = await probeStorage(tenantId);
+    if (!probe.ok) return Response.json({ ok: false, mode: 'managed', probe }, { status: 502 });
+    return Response.json({ ok: true, mode: 'managed', provisioned: true, probe: 'passed' });
+  }
+
   const bucket = (body.bucket ?? '').trim();
   if (!bucket || !/^[a-z0-9.\-]{3,63}$/.test(bucket)) {
     return Response.json({ error: 'a valid S3 bucket name is required' }, { status: 400 });
   }
+  const roleArn = (body.roleArn ?? '').trim() || null;
+  // BYO with no external id typed → the generated per-org one (it's what the
+  // served CloudFormation template baked into the role's trust condition).
+  const externalId = (body.externalId ?? '').trim() || (roleArn ? externalIdFor(tenantId) : null);
 
   await pool.query(
     `update tenants set storage_bucket=$2, storage_region=$3, storage_prefix=$4,
@@ -165,8 +195,8 @@ export async function PUT(req: Request) {
       (body.region ?? '').trim() || null,
       (body.prefix ?? '').trim() || null,
       (body.kmsKey ?? '').trim() || null,
-      (body.roleArn ?? '').trim() || null,
-      (body.externalId ?? '').trim() || null,
+      roleArn,
+      externalId,
     ],
   );
   invalidateStorage(tenantId);

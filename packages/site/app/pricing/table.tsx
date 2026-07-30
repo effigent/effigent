@@ -58,7 +58,7 @@ const TIERS: Tier[] = [
     tagline: 'Your scale, your controls.',
     agents: 'Unlimited agents',
     storage: 'Custom storage & retention',
-    features: ['Everything in Pro', 'SSO / SAML', 'Self-hosted collector option', 'Custom DPA & SLA', 'Dedicated support'],
+    features: ['Everything in Pro', 'SSO / SAML', 'Run data in your own S3 bucket (your KMS, your retention)', 'Self-hosted collector option', 'Custom DPA & SLA', 'Dedicated support'],
     cta: 'Talk to us',
     href: `mailto:${CONTACT_EMAIL}?subject=Effigent%20Enterprise`,
   },

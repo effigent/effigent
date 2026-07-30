@@ -17,7 +17,41 @@ This guide is for the partner's cloud/security team. Placeholders:
 | `<YOUR_REGION>` | The bucket's region, e.g. `us-east-1` | You |
 | `<YOUR_KMS_KEY_ARN>` | *Optional* — your CMK if you want KMS encryption | You |
 
-Ask Effigent for `<EFFIGENT_AWS_ACCOUNT_ID>` and `<EXTERNAL_ID>` before you start.
+Ask Effigent for `<EFFIGENT_AWS_ACCOUNT_ID>` and `<EXTERNAL_ID>` before you start —
+or skip the asking entirely with the quickstart below (both values are baked into
+the template the dashboard serves).
+
+---
+
+## Quickstart — one command (recommended)
+
+An Effigent org admin downloads the CloudFormation template from the dashboard
+(**Storage → Customer S3 → Download the CloudFormation template** — it comes
+pre-filled with your workspace's external id and Effigent's account id) and your
+cloud team deploys it:
+
+```bash
+aws cloudformation deploy \
+  --stack-name effigent-storage \
+  --template-file effigent-byo-storage.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+That creates everything in Steps 1–2 below (private encrypted bucket +
+least-privilege cross-account role). Then paste the stack **Outputs**
+(bucket / region / role ARN) into the dashboard's **Storage** view — it saves and
+immediately verifies access with a write→read probe. Optional parameters:
+`BucketName=…` (else AWS generates one), `KmsKeyArn=…` (else SSE-S3).
+
+Prefer Terraform? Use the module at `infra/aws/terraform/` with the same two
+inputs (`effigent_account_id`, `external_id`). A raw copy of the CloudFormation
+template lives at `infra/aws/effigent-byo-storage.yaml`.
+
+To revoke Effigent's access at any time: delete the stack (or just the role).
+Capture then fails closed.
+
+The rest of this guide is the manual path — for teams that want to review or
+hand-build each resource.
 
 ---
 
