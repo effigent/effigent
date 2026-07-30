@@ -251,8 +251,6 @@ export interface LoadOptions {
 
 export function loadRuns(sourceDirs: string | string[], options: LoadOptions = {}): Run[] {
   const dirs = Array.isArray(sourceDirs) ? sourceDirs : [sourceDirs];
-  const agentMap = loadAgentMap();
-  const config = loadConfig();
   const cutoff =
     options.sinceDays !== undefined ? Date.now() - options.sinceDays * 86_400_000 : undefined;
   const runs: Run[] = [];
@@ -267,13 +265,15 @@ export function loadRuns(sourceDirs: string | string[], options: LoadOptions = {
     } catch {
       continue;
     }
-    const cwd = sniffCwd(session.path);
-    const run = parseTranscript(jsonl, {
-      agentId:
-        agentMap[session.sessionId] ??
-        agentFromRules(cwd, config.agentRules) ??
-        gitRepoName(cwd),
-    });
+    // One source of truth for attribution. This used to re-implement the
+    // tag > agentRules > gitRepoName chain inline, which drifted from the upload
+    // path: excludeRules were never consulted, so an excluded project still
+    // appeared in local reports, and a session with no repo fell through to
+    // parseTranscript's cwd-LEAF fallback — naming agents `erelbi` or `private`
+    // after a home/parent directory rather than treating them as unattributed.
+    const { agent, excluded } = classifySession(session.sessionId, session.path);
+    if (excluded) continue;
+    const run = parseTranscript(jsonl, { agentId: agent ?? UNATTRIBUTED_AGENT });
     if (!run) continue;
     if (options.minSteps !== undefined && run.steps.length < options.minSteps) continue;
     if (options.agentFilter && !run.agentId.includes(options.agentFilter)) continue;
