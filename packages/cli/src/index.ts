@@ -8,8 +8,8 @@
  */
 
 import { Command } from 'commander';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { homedir, tmpdir } from 'node:os';
@@ -29,6 +29,7 @@ import {
   saveConfig,
   tagSessions,
   CONFIG_PATH,
+  PENDING_DIR,
   UNATTRIBUTED_AGENT,
 } from './store.js';
 import { uploadSessionFile } from './upload.js';
@@ -975,10 +976,82 @@ program
     }
   });
 
+
+/**
+ * Upload one queued session and clear its queue entry on success.
+ *
+ * Returns false when the entry should stay queued for a later attempt. A missing
+ * transcript is NOT retryable — the file is gone, so the entry is dropped rather than
+ * retried forever.
+ */
+async function drainOne(server: string, sessionId: string, transcriptPath: string): Promise<boolean> {
+  const entryPath = join(PENDING_DIR, sessionId);
+  const done = () => {
+    try {
+      unlinkSync(entryPath);
+    } catch {
+      /* already drained by a concurrent hook — fine */
+    }
+  };
+  if (!existsSync(transcriptPath)) {
+    console.error(`[effigent] ${sessionId}: transcript gone, dropping from queue`);
+    done();
+    return true;
+  }
+  const config = loadConfig();
+  const { agent: resolved, excluded } = classifySession(sessionId, transcriptPath);
+  if (excluded) {
+    console.error(`[effigent] ${sessionId} skipped — project matches excludeRules`);
+    done();
+    return true;
+  }
+  const agent = resolved ?? UNATTRIBUTED_AGENT;
+  let entry = config.agents?.[agent];
+  if (!entry) {
+    if (!config.apiKey) {
+      console.error(`[effigent] ${sessionId}: agent '${agent}' unregistered and no tenant key — run \`effigent login\``);
+      return false;
+    }
+    const reg = await registerAgent(server, config.apiKey, agent, 'claude-code');
+    if ('error' in reg) {
+      console.error(`[effigent] ${sessionId}: could not register '${agent}': ${reg.error}`);
+      return false;
+    }
+    entry = reg.entry;
+    console.error(`[effigent] registered new agent '${agent}'`);
+  }
+  const r = await uploadSessionFile({ server, apiKey: entry.key }, transcriptPath, sessionId, agent);
+  if (r.ok) {
+    console.error(`[effigent] uploaded session ${sessionId} as ${agent}`);
+    done();
+    return true;
+  }
+  console.error(`[effigent] upload failed for ${sessionId} (HTTP ${r.status}) ${r.detail ?? ''} — staying queued`);
+  return false;
+}
+
+/** Every queued session, oldest first. */
+function readQueue(): { sessionId: string; transcriptPath: string }[] {
+  try {
+    return readdirSync(PENDING_DIR)
+      .map((sessionId) => {
+        try {
+          return { sessionId, transcriptPath: readFileSync(join(PENDING_DIR, sessionId), 'utf8').trim() };
+        } catch {
+          return null;
+        }
+      })
+      .filter((v): v is { sessionId: string; transcriptPath: string } => !!v && !!v.transcriptPath);
+  } catch {
+    return [];
+  }
+}
+
 program
   .command('claude-hook')
-  .description('(internal) Claude Code SessionEnd hook — uploads the finished session, attributed per project')
+  .description('(internal) Claude Code SessionEnd hook — queues the finished session and uploads out-of-band')
   .option('--agent <name>', 'pin attribution to one registered agent; omit to resolve per session from the transcript cwd')
+  .option('--drain', 'internal: upload everything queued, then exit (run detached by the hook)')
   .action(async (opts) => {
     const config = loadConfig();
     const server: string | undefined = process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
@@ -987,8 +1060,16 @@ program
       process.exitCode = 2;
       return;
     }
-    // stdin first: attribution is derived from the transcript's cwd, so nothing about
-    // the agent can be decided before the payload is in hand.
+
+    // --drain is the out-of-band uploader. It must never spawn another child, or a
+    // killed upload would fork forever.
+    if (opts.drain) {
+      for (const { sessionId, transcriptPath } of readQueue()) {
+        await drainOne(server, sessionId, transcriptPath);
+      }
+      return;
+    }
+
     let payload: { session_id?: string; transcript_path?: string };
     try {
       payload = JSON.parse(readFileSync(0, 'utf8')) as { session_id?: string; transcript_path?: string };
@@ -1004,47 +1085,35 @@ program
       return;
     }
 
-    // One hook serves every project: resolve which agent this session belongs to.
-    // --agent pins (CI); otherwise agentRules → git repo name, and no repo means
-    // UNATTRIBUTED_AGENT rather than silently borrowing another project's identity.
-    // excludeRules veto outright — checked even when pinned, so an excluded project
-    // cannot be captured by any configuration.
-    const { agent: resolved, excluded } = classifySession(sessionId, transcriptPath);
-    if (excluded) {
-      console.error(`[effigent] session ${sessionId} skipped — project matches excludeRules`);
+    // Enqueue FIRST, and only then hand off. Uploading in this process is what lost
+    // sessions: gzip+POST of a large transcript takes seconds (5.9s for 7.1 MB) and the
+    // hook is killed as the session tears down, so the quick agent-registration POST
+    // landed while the slow upload died. Writing one small file is effectively
+    // instant and cannot be interrupted meaningfully.
+    try {
+      mkdirSync(PENDING_DIR, { recursive: true });
+      writeFileSync(join(PENDING_DIR, sessionId), transcriptPath);
+    } catch (err) {
+      console.error(`[effigent] claude-hook: could not queue session: ${err instanceof Error ? err.message : err}`);
+      process.exitCode = 1;
       return;
     }
-    const agent = opts.agent ?? resolved ?? UNATTRIBUTED_AGENT;
 
-    // Scoped key per agent: the server derives attribution from the key
-    // (`auth.agentName`), so a project without one yet gets registered on first
-    // sight. Minting needs the tenant key; without it we cannot attribute this
-    // session correctly, and uploading under the wrong agent is worse than not
-    // uploading — the run would silently pollute another project's analysis.
-    let entry = config.agents?.[agent];
-    if (!entry) {
-      if (!config.apiKey) {
-        console.error(`[effigent] claude-hook: agent '${agent}' is not registered and no tenant key is available to register it — run \`effigent login\``);
-        process.exitCode = 2;
-        return;
-      }
-      const reg = await registerAgent(server, config.apiKey, agent, 'claude-code');
-      if ('error' in reg) {
-        console.error(`[effigent] claude-hook: could not register agent '${agent}': ${reg.error}`);
-        process.exitCode = 1;
-        return;
-      }
-      entry = reg.entry;
-      console.error(`[effigent] registered new agent '${agent}'`);
+    // Hand the queue to a DETACHED child in its own process group, so killing this
+    // hook (or its group) does not kill the upload. stdio is fully ignored: an
+    // inherited pipe would keep the parent alive and defeat the point.
+    const args = [resolve(process.argv[1]), 'claude-hook', '--drain'];
+    if (opts.agent) args.push('--agent', String(opts.agent));
+    try {
+      const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore' });
+      child.unref();
+      console.error(`[effigent] queued session ${sessionId}; uploading in the background`);
+    } catch (err) {
+      // Could not detach — fall back to uploading inline. Slower and killable, but a
+      // queued session that never uploads is worse than one that might.
+      console.error(`[effigent] could not detach uploader (${err instanceof Error ? err.message : err}); uploading inline`);
+      for (const q of readQueue()) await drainOne(server, q.sessionId, q.transcriptPath);
     }
-
-    const r = await uploadSessionFile({ server, apiKey: entry.key }, transcriptPath, sessionId, agent);
-    console.error(
-      r.ok
-        ? `[effigent] uploaded session ${sessionId} as ${agent}`
-        : `[effigent] upload failed (HTTP ${r.status}) ${r.detail ?? ''}`,
-    );
-    process.exitCode = r.ok ? 0 : 1;
   });
 
 /* ----------------------------------------------------------------------------

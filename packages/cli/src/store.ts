@@ -26,6 +26,17 @@ export function defaultSources(): string[] {
 /** Per-session tag files — one file per sessionId so concurrent `effigent run`
  *  wrappers never race on a shared JSON (last-writer-wins clobbering). */
 export const AGENT_TAGS_DIR = join(EFFIGENT_HOME, 'agent-map.d');
+/**
+ * Sessions awaiting upload, one file per session (`<sessionId>` -> transcript path).
+ *
+ * The SessionEnd hook cannot upload in its own foreground: gzipping and POSTing a
+ * large transcript takes seconds (measured: 5.9s for 7.1 MB) and the hook is killed
+ * when the session tears down. The fast agent-registration POST completed while the
+ * slow upload died, which is exactly the failure this queue exists to survive —
+ * enqueue first, upload out-of-band, and drain again on the next hook run so a killed
+ * uploader loses nothing.
+ */
+export const PENDING_DIR = join(EFFIGENT_HOME, 'pending');
 export const CONFIG_PATH = join(EFFIGENT_HOME, 'config.json');
 
 export interface AgentRule {
