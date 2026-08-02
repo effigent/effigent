@@ -1,7 +1,7 @@
 {
   "name": "effigent",
   "version": "0.7.0",
-  "description": "effigent — the Optimizer CLI: capture AI-agent runs (Claude Code, Codex, any OTel agent) and send them to your Optimizer workspace.",
+  "description": "effigent \u2014 the Optimizer CLI: capture AI-agent runs (Claude Code, Codex, any OTel agent) and send them to your Optimizer workspace.",
   "type": "module",
   "bin": {
     "effigent": "dist/index.cjs"
@@ -27,7 +27,7 @@
     "directory": "packages/cli"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --target=node18 --outfile=dist/index.cjs && node check-bundle.mjs",
+    "build": "rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=cjs --target=node18 --outfile=dist/index.cjs && node check-bundle.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "prepublishOnly": "npm run build"
