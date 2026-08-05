@@ -88,21 +88,25 @@ interface Ledger {
   topRedundant: { runId: string; structLabel: string; occurrences: number; wastedUsd: number; preview: string }[];
 }
 
-interface Suggestion {
+interface DeterminismInsight {
   id: string;
-  name: string;
   actions: string[];
-  steps: { position: number; action: string; distinctArgs: number; argTemplate: string | null }[];
-  params: { name: string; type: string; examples: string[] }[];
   support: number;
   runsTotal: number;
   occurrences: number;
   confidence: number;
   totalCostUsd: number;
-  avgCostPerOccurrenceUsd: number;
   avgGlueSteps: number;
+  glueCostUsd: number;
   intents: string[];
   exampleAsks: string[];
+}
+
+interface TaskMixEntry {
+  intent: string;
+  episodes: number;
+  costUsd: number;
+  share: number;
 }
 
 interface AgentInsight {
@@ -116,7 +120,8 @@ interface AgentInsight {
   totalEstUsd: number;
   opportunities: Opportunity[];
   ledger?: Ledger;
-  suggestions?: Suggestion[];
+  determinism?: DeterminismInsight[];
+  taskMix?: TaskMixEntry[];
   segments?: Segment[];
   subtrees?: Subtree[];
   drift?: {
@@ -426,39 +431,53 @@ function LedgerPanel({ ledger }: { ledger: Ledger }) {
   );
 }
 
+/** "What this agent does" — the episode intent mix with measured cost share. */
+function TaskMixLine({ taskMix }: { taskMix: TaskMixEntry[] }) {
+  const shown = taskMix.filter((t) => t.share >= 0.03).slice(0, 6);
+  if (shown.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '10px 0' }}>
+      {shown.map((t) => (
+        <span key={t.intent} className="chip" title={`${t.episodes} episodes · ${usd(t.costUsd)}`}>
+          {t.intent}: <span className="tnum" style={{ fontWeight: 700 }}>{Math.round(t.share * 100)}%</span>
+          <span style={{ color: 'var(--txt-3)' }}> of spend</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /**
- * Suggested tools — recurring cross-run workflows mined over the semantic
- * action alphabet inside episodes. Analysis output only: each row is a
- * proposition ("this workflow recurs; it could be one tool") with its
- * evidence, not something that gets synthesized or installed from here.
+ * Determinism insights — the token-saving story, not tool blueprints. Each row
+ * names a workflow the model performs step-by-step over and over, and prices
+ * the interleaved LLM reasoning ("glue") that deterministic execution would
+ * eliminate. The header totals the claim across all recurring workflows.
  */
-function SuggestionsPanel({ suggestions }: { suggestions: Suggestion[] }) {
+function DeterminismPanel({ insights }: { insights: DeterminismInsight[] }) {
+  const totalGlue = insights.reduce((s, d) => s + d.glueCostUsd, 0);
   return (
     <div style={{ margin: '14px 0' }}>
-      <div className="mono-name" style={{ fontSize: 13, marginBottom: 4 }}>Suggested tools</div>
+      <div className="mono-name" style={{ fontSize: 13, marginBottom: 4 }}>Deterministic savings</div>
       <div className="panel-sub" style={{ marginBottom: 8 }}>
-        Workflows that recur across runs — each could be one deterministic tool call instead of
-        several LLM-mediated steps. Ranked by measured cost of all occurrences.
+        Workflows this agent repeats step-by-step through the LLM. The reasoning between those steps
+        is mechanical — running them deterministically would save{' '}
+        <strong className="tnum">{usd(totalGlue)}</strong> of LLM usage in this window, plus the
+        context those turns carry.
       </div>
-      {suggestions.map((s) => (
-        <div key={s.id} className="ins-row" style={{ alignItems: 'flex-start' }}>
+      {insights.map((d) => (
+        <div key={d.id} className="ins-row" style={{ alignItems: 'flex-start' }}>
           <div className="ins-main" style={{ width: '100%' }}>
-            <div className="ins-top" style={{ flexWrap: 'wrap', gap: 6 }}>
-              <span className="ins-act act-template" title="A recurring workflow this agent performs step by step today — candidate for a single tool.">
-                {s.name}
-              </span>
-              <code style={{ fontSize: 11.5, opacity: 0.85 }}>{s.actions.join(' → ')}</code>
+            <div style={{ fontSize: 13, lineHeight: 1.55 }}>
+              In <strong>{d.support} of {d.runsTotal}</strong> runs ({d.occurrences}× total) the model walks{' '}
+              <code style={{ fontSize: 11.5 }}>{d.actions.join(' → ')}</code> one LLM turn at a time —{' '}
+              ~{d.avgGlueSteps} reasoning turns per pass whose only job is deciding the next step it has
+              already performed identically before.
             </div>
-            <div className="panel-sub" style={{ marginTop: 4 }}>
-              seen in <strong>{s.support}/{s.runsTotal}</strong> runs · {s.occurrences} occurrences ·{' '}
-              {usd(s.totalCostUsd)} total · ~{s.avgGlueSteps} LLM turns of glue per occurrence
-              {s.params.length > 0 && (
-                <> · params: {s.params.map((p) => `${p.name}:${p.type}`).join(', ')}</>
-              )}
+            <div className="panel-sub" style={{ marginTop: 3 }}>
+              deterministic execution saves ≈ <strong className="tnum">{usd(d.glueCostUsd)}</strong> of{' '}
+              {usd(d.totalCostUsd)} spent on this workflow
+              {d.exampleAsks[0] && <> · triggered by asks like “{d.exampleAsks[0].slice(0, 70)}”</>}
             </div>
-            {s.exampleAsks[0] && (
-              <div className="foot-note" style={{ marginTop: 2 }}>e.g. “{s.exampleAsks[0]}”</div>
-            )}
           </div>
         </div>
       ))}
@@ -637,11 +656,13 @@ export function Insights({ agent }: { agent: string }) {
 
           <RouteTest agent={a.agentId} />
 
+          {(a.taskMix?.length ?? 0) > 0 && <TaskMixLine taskMix={a.taskMix!} />}
+
           {a.ledger && <LedgerPanel ledger={a.ledger} />}
 
           <AnalystPanel agentId={a.agentId} />
 
-          {(a.suggestions?.length ?? 0) > 0 && <SuggestionsPanel suggestions={a.suggestions!} />}
+          {(a.determinism?.length ?? 0) > 0 && <DeterminismPanel insights={a.determinism!} />}
 
           {a.opportunities.length === 0 && ((a.segments?.length ?? 0) > 0 || (a.subtrees?.length ?? 0) > 0) && (
             <div className="foot-note" style={{ marginTop: 10 }}>

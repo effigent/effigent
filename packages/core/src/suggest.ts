@@ -99,6 +99,9 @@ export interface ToolSuggestion {
   avgCostPerOccurrenceUsd: number;
   /** Avg LLM turns interleaved inside the workflow per occurrence — what a tool would elide. */
   avgGlueSteps: number;
+  /** Measured cost of that interleaved LLM glue across all occurrences — the
+   *  token spend deterministic execution would eliminate. */
+  glueCostUsd: number;
   /** Episode intents the workflow appeared under, most common first. */
   intents: string[];
   /** Up to 3 example asks that led to it. */
@@ -203,6 +206,7 @@ export function suggestTools(graphs: RunGraph[], maxSuggestions = MAX_SUGGESTION
     // Cost: motif tool steps + their results + interleaved LLM glue.
     let cost = 0;
     let glue = 0;
+    let glueCost = 0;
     for (const o of m.occ) {
       const costs = costsByRun.get(o.graph.runId)!;
       const first = o.nodes[0];
@@ -210,7 +214,10 @@ export function suggestTools(graphs: RunGraph[], maxSuggestions = MAX_SUGGESTION
       for (let i = first; i <= last; i++) {
         cost += costs[i];
         const k = o.graph.nodes[i].kind;
-        if (k === 'model_turn' || k === 'thinking') glue++;
+        // The glue: LLM turns interleaved INSIDE the workflow. This is the spend
+        // deterministic execution actually eliminates — the model deciding "now
+        // run git push" between steps it has performed identically many times.
+        if (k === 'model_turn' || k === 'thinking') { glue++; glueCost += costs[i]; }
       }
     }
 
@@ -262,6 +269,7 @@ export function suggestTools(graphs: RunGraph[], maxSuggestions = MAX_SUGGESTION
       totalCostUsd: cost,
       avgCostPerOccurrenceUsd: cost / Math.max(1, m.occ.length),
       avgGlueSteps: Math.round((glue / Math.max(1, m.occ.length)) * 10) / 10,
+      glueCostUsd: glueCost,
       intents: [...intentCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k),
       exampleAsks: [...new Set(m.occ.map((o) => o.episode.ask).filter(Boolean))].slice(0, 3),
     };

@@ -12,6 +12,7 @@ import { mineSegments, type MinedSegment } from '@/lib/engine/segments.ts';
 import { mineSubtrees, type MinedSubtree } from '@/lib/engine/subtrees.ts';
 import { computeRunLedger, aggregateLedgers, type AgentLedger } from '@/lib/engine/ledger.ts';
 import { suggestTools, type ToolSuggestion } from '@/lib/engine/suggest.ts';
+import { segmentEpisodes } from '@/lib/engine/episodes.ts';
 import { loadRun } from '@/lib/storage.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
@@ -217,27 +218,47 @@ function wireLedger(a: AgentLedger) {
   };
 }
 
-/** Trim tool suggestions for the wire (analysis output — not activation). */
-function wireSuggestions(suggestions: ToolSuggestion[]) {
+/**
+ * Recurring workflows reframed as DETERMINISM INSIGHTS, not tool blueprints:
+ * each row states what the model does mechanically and what the interleaved
+ * LLM glue costs — the spend deterministic execution would eliminate.
+ */
+function wireDeterminism(suggestions: ToolSuggestion[]) {
   return suggestions.map((s) => ({
     id: s.id,
-    name: s.name,
     actions: s.actions,
-    steps: s.steps.map((st) => ({
-      position: st.position, action: st.action, distinctArgs: st.distinctArgs,
-      argTemplate: st.argTemplate ? st.argTemplate.slice(0, 140) : null,
-    })),
-    params: s.params.map((p) => ({ name: p.name, type: p.type, examples: p.examples.map((e) => e.slice(0, 40)) })),
     support: s.support,
     runsTotal: s.runsTotal,
     occurrences: s.occurrences,
     confidence: s.confidence,
     totalCostUsd: Number(s.totalCostUsd.toFixed(2)),
-    avgCostPerOccurrenceUsd: Number(s.avgCostPerOccurrenceUsd.toFixed(3)),
     avgGlueSteps: s.avgGlueSteps,
+    /** The savings claim: LLM-glue spend inside this workflow across the window. */
+    glueCostUsd: Number(s.glueCostUsd.toFixed(2)),
     intents: s.intents.slice(0, 3),
     exampleAsks: s.exampleAsks.map((a) => a.slice(0, 120)),
   }));
+}
+
+/** What the agent actually does: episode intent mix with measured cost share. */
+function taskMixOf(graphs: Parameters<typeof segmentEpisodes>[0][]) {
+  const mix = new Map<string, { episodes: number; costUsd: number }>();
+  let total = 0;
+  for (const g of graphs) {
+    for (const e of segmentEpisodes(g)) {
+      const m = mix.get(e.intent) ?? { episodes: 0, costUsd: 0 };
+      m.episodes++; m.costUsd += e.costUsd; total += e.costUsd;
+      mix.set(e.intent, m);
+    }
+  }
+  return [...mix.entries()]
+    .sort((a, b) => b[1].costUsd - a[1].costUsd)
+    .map(([intent, m]) => ({
+      intent,
+      episodes: m.episodes,
+      costUsd: Number(m.costUsd.toFixed(2)),
+      share: total > 0 ? Number((m.costUsd / total).toFixed(3)) : 0,
+    }));
 }
 
 function stableId(agentId: string, n: NodeAnalysis): string {
@@ -337,10 +358,11 @@ export async function GET(req: Request) {
     // below is ever silent again.
     const ledger = wireLedger(aggregateLedgers(runs.map((r, i) => computeRunLedger(r, graphs[i]))));
 
-    // Workflow mining over the semantic action alphabet (episodes, not sessions) —
-    // recurring cross-run workflows proposed as tools, with evidence. Analysis
-    // only: nothing is synthesized or activated from these.
-    const suggestions = wireSuggestions(suggestTools(graphs));
+    // Workflow mining over the semantic action alphabet (episodes, not sessions),
+    // reframed as determinism insights: what the model does mechanically, and the
+    // LLM-glue spend deterministic execution would save. Analysis only.
+    const determinism = wireDeterminism(suggestTools(graphs));
+    const taskMix = taskMixOf(graphs);
 
     const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
     if (analyses.length === 0) {
@@ -349,7 +371,8 @@ export async function GET(req: Request) {
         steps: Math.max(...runs.map((r) => r.steps.length)), meanScore: 0, meanSim: 0,
         totalEstUsd: 0, opportunities: [], tools: [], drift,
         ledger,
-        suggestions,
+        determinism,
+        taskMix,
         segments: wireSegments(segments),
         subtrees: wireSubtrees(subtrees),
       });
@@ -440,7 +463,8 @@ export async function GET(req: Request) {
       tools,
       drift,
       ledger,
-      suggestions,
+      determinism,
+      taskMix,
       knowledge: buildKnowledgeGraph(analyses).find((k) => k.agentId === agentId) ?? null,
       segments: wireSegments(segments),
       subtrees: wireSubtrees(subtrees),

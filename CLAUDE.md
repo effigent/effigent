@@ -113,8 +113,13 @@ The data contract everything else depends on.
   slots → proposed typed params), support/occurrences, measured cost, LLM-glue
   count, intents, example asks. Validated on real traffic: the create-PR macro
   (`git:commit → git:push → gh:pr:create`) emerges from apollo's 40 runs with
-  a `deliver` intent; heterogeneous traffic yields an honest zero. Surfaced as
-  `suggestions` in `/api/v1/insights` + the Insights "Suggested tools" panel.
+  a `deliver` intent; heterogeneous traffic yields an honest zero. Surfaced in
+  `/api/v1/insights` as **`determinism`** (high-level insight framing: each
+  recurring workflow + its measured `glueCostUsd` — the interleaved LLM-turn
+  spend deterministic execution would eliminate; NOT tool blueprints) and
+  **`taskMix`** (episode intent mix with cost share — "what this agent does").
+  Insights view renders these as the task-mix chips + "Deterministic savings"
+  panel.
 - **`brief.ts`** — **the run brief (session understanding).** Deterministic
   compact digest of one run: episode storyline (ask → intent → action summary →
   cost → errors → interrupted), outcome signals (final assistant tail, detected
