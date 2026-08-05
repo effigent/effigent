@@ -70,6 +70,41 @@ interface Subtree {
   tree: SubtreeNode[];
   action: 'compile' | 'route' | 'review';
 }
+interface Ledger {
+  runCount: number;
+  totalUsd: number;
+  slices: {
+    deadContextUsd: number;
+    carriedUsd: number;
+    cacheMissUsd: number;
+    errorRecoveryUsd: number;
+    redundantUsd: number;
+  };
+  cacheHitRate: number;
+  cacheApparentlyDisabledRuns: number;
+  errorCount: number;
+  topDeadContext: { runId: string; tool: string; estTokens: number; deadCalls: number; wastedUsd: number; preview: string }[];
+  topErrorLoops: { runId: string; tool: string; recoverySteps: number; recoveryUsd: number; preview: string }[];
+  topRedundant: { runId: string; structLabel: string; occurrences: number; wastedUsd: number; preview: string }[];
+}
+
+interface Suggestion {
+  id: string;
+  name: string;
+  actions: string[];
+  steps: { position: number; action: string; distinctArgs: number; argTemplate: string | null }[];
+  params: { name: string; type: string; examples: string[] }[];
+  support: number;
+  runsTotal: number;
+  occurrences: number;
+  confidence: number;
+  totalCostUsd: number;
+  avgCostPerOccurrenceUsd: number;
+  avgGlueSteps: number;
+  intents: string[];
+  exampleAsks: string[];
+}
+
 interface AgentInsight {
   agentId: string;
   runCount: number;
@@ -80,6 +115,8 @@ interface AgentInsight {
   meanScore: number;
   totalEstUsd: number;
   opportunities: Opportunity[];
+  ledger?: Ledger;
+  suggestions?: Suggestion[];
   segments?: Segment[];
   subtrees?: Subtree[];
   drift?: {
@@ -342,6 +379,142 @@ function SubtreeMap({ tree }: { tree: SubtreeNode[] }) {
  */
 const ROW_CAP = 5;
 
+/**
+ * The waste ledger — spend decomposition that exists for EVERY agent from run
+ * one (within-run detectors; no clustering precondition). Slices are
+ * independent per-class estimates and are deliberately shown side by side,
+ * never summed: each answers "how much would fixing THIS class save?".
+ */
+function LedgerPanel({ ledger }: { ledger: Ledger }) {
+  const pct = (v: number) => (ledger.totalUsd > 0 ? ` · ${((v / ledger.totalUsd) * 100).toFixed(1)}%` : '');
+  const SLICES: { label: string; value: number; hint: string }[] = [
+    { label: 'Cache misses', value: ledger.slices.cacheMissUsd, hint: 'Input tokens re-billed at full price that a stable prompt prefix would have served at the 0.1× cache-read rate. Upper bound: context compaction legitimately cold-starts the cache.' },
+    { label: 'Error recovery', value: ledger.slices.errorRecoveryUsd, hint: `Spend on the recovery tail after failed tool calls (${ledger.errorCount} errors in the window).` },
+    { label: 'Dead context', value: ledger.slices.deadContextUsd, hint: 'Large tool results carried through later LLM calls after the last step that referenced their content. Priced at the run’s measured cache-blended input rate — good caching makes this cheap in dollars, but it still bloats the context window.' },
+    { label: 'Redundant calls', value: ledger.slices.redundantUsd, hint: 'Identical read-only calls repeated within one run with identical answers — the repeats bought nothing.' },
+  ];
+  return (
+    <div style={{ margin: '12px 0' }}>
+      <div className="panel-sub" style={{ marginBottom: 6 }}>
+        Where the spend goes — {usd(ledger.totalUsd)} over {ledger.runCount} runs · cache hit rate{' '}
+        <span className="tnum">{(ledger.cacheHitRate * 100).toFixed(1)}%</span>
+        {ledger.cacheApparentlyDisabledRuns > 0 && (
+          <span style={{ color: 'var(--warn, #eb6834)' }}> · caching looks OFF in {ledger.cacheApparentlyDisabledRuns} run{ledger.cacheApparentlyDisabledRuns === 1 ? '' : 's'}</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {SLICES.map((s) => (
+          <span key={s.label} className="chip" title={s.hint} style={{ cursor: 'help' }}>
+            {s.label}: <span className="tnum" style={{ fontWeight: 700 }}>{usd(s.value)}</span>
+            <span style={{ color: 'var(--txt-3)' }}>{pct(s.value)}</span>
+          </span>
+        ))}
+      </div>
+      {ledger.topErrorLoops[0] && (
+        <div className="foot-note" style={{ marginTop: 6 }}>
+          Worst error loop: {usd(ledger.topErrorLoops[0].recoveryUsd)} recovering a failed{' '}
+          <code>{ledger.topErrorLoops[0].tool}</code> — “{ledger.topErrorLoops[0].preview.slice(0, 70)}…”
+        </div>
+      )}
+      {ledger.topDeadContext[0] && (
+        <div className="foot-note" style={{ marginTop: 2 }}>
+          Biggest dead result: a <code>{ledger.topDeadContext[0].tool}</code> output (~{ledger.topDeadContext[0].estTokens.toLocaleString()} tokens)
+          carried through {ledger.topDeadContext[0].deadCalls} calls after its last use.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Suggested tools — recurring cross-run workflows mined over the semantic
+ * action alphabet inside episodes. Analysis output only: each row is a
+ * proposition ("this workflow recurs; it could be one tool") with its
+ * evidence, not something that gets synthesized or installed from here.
+ */
+function SuggestionsPanel({ suggestions }: { suggestions: Suggestion[] }) {
+  return (
+    <div style={{ margin: '14px 0' }}>
+      <div className="mono-name" style={{ fontSize: 13, marginBottom: 4 }}>Suggested tools</div>
+      <div className="panel-sub" style={{ marginBottom: 8 }}>
+        Workflows that recur across runs — each could be one deterministic tool call instead of
+        several LLM-mediated steps. Ranked by measured cost of all occurrences.
+      </div>
+      {suggestions.map((s) => (
+        <div key={s.id} className="ins-row" style={{ alignItems: 'flex-start' }}>
+          <div className="ins-main" style={{ width: '100%' }}>
+            <div className="ins-top" style={{ flexWrap: 'wrap', gap: 6 }}>
+              <span className="ins-act act-template" title="A recurring workflow this agent performs step by step today — candidate for a single tool.">
+                {s.name}
+              </span>
+              <code style={{ fontSize: 11.5, opacity: 0.85 }}>{s.actions.join(' → ')}</code>
+            </div>
+            <div className="panel-sub" style={{ marginTop: 4 }}>
+              seen in <strong>{s.support}/{s.runsTotal}</strong> runs · {s.occurrences} occurrences ·{' '}
+              {usd(s.totalCostUsd)} total · ~{s.avgGlueSteps} LLM turns of glue per occurrence
+              {s.params.length > 0 && (
+                <> · params: {s.params.map((p) => `${p.name}:${p.type}`).join(', ')}</>
+              )}
+            </div>
+            {s.exampleAsks[0] && (
+              <div className="foot-note" style={{ marginTop: 2 }}>e.g. “{s.exampleAsks[0]}”</div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The AI analyst — on request, a model reads the agent's last sessions (as
+ * redacted briefs) plus the deterministic measurements and writes the agent
+ * story: what it does, where the money goes, what recurs, top changes.
+ */
+function AnalystPanel({ agentId }: { agentId: string }) {
+  const [text, setText] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = () => {
+    setBusy(true); setErr(null);
+    fetch(`/api/v1/insights/analyst?agent=${encodeURIComponent(agentId)}`)
+      .then(async (r) => {
+        const d = (await r.json()) as { analysis?: string; error?: string };
+        if (d.analysis) setText(d.analysis);
+        else setErr(d.error ?? 'analysis failed');
+      })
+      .catch(() => setErr('network error'))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div style={{ margin: '12px 0' }}>
+      {!text && (
+        <button className="btn-ghost" disabled={busy} onClick={run}
+          title="An AI model reads this agent's recent sessions (redacted briefs + measurements) and writes the agent story: what it does, where the money goes, what recurs, and the top changes.">
+          {busy ? 'Reading the runs…' : '✦ AI analysis of this agent'}
+        </button>
+      )}
+      {err && <div className="foot-note" style={{ color: 'var(--warn, #eb6834)', marginTop: 6 }}>{err}</div>}
+      {text && (
+        <div className="panel" style={{ padding: '14px 16px', marginTop: 4 }}>
+          {text.split('\n').map((line, i) => {
+            const h = /^#{1,4}\s+(.*)$/.exec(line.trim());
+            if (h) return <div key={i} className="mono-name" style={{ fontSize: 13, margin: '10px 0 4px' }}>{h[1]}</div>;
+            if (!line.trim()) return null;
+            return (
+              <div key={i} style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--txt-2)' }}>
+                {line.replace(/\*\*/g, '')}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MoreRows({ shown, total, onClick }: { shown: number; total: number; onClick: () => void }) {
   if (total <= shown) return null;
   return (
@@ -435,9 +608,7 @@ export function Insights({ agent }: { agent: string }) {
       )}
       {!loading && !error && ranAt !== null && data.length === 0 && (
         <div className="dag-empty">
-          No repetition found yet. Analysis needs either two runs of the same overall shape,
-          one repeated path inside several runs, or one repeated dataflow subtree — agents
-          with a single run, or only long one-off sessions, produce none of the three.
+          No runs to analyze in this window yet — capture a session first, then re-run.
         </div>
       )}
 
@@ -465,6 +636,12 @@ export function Insights({ agent }: { agent: string }) {
           </div>
 
           <RouteTest agent={a.agentId} />
+
+          {a.ledger && <LedgerPanel ledger={a.ledger} />}
+
+          <AnalystPanel agentId={a.agentId} />
+
+          {(a.suggestions?.length ?? 0) > 0 && <SuggestionsPanel suggestions={a.suggestions!} />}
 
           {a.opportunities.length === 0 && ((a.segments?.length ?? 0) > 0 || (a.subtrees?.length ?? 0) > 0) && (
             <div className="foot-note" style={{ marginTop: 10 }}>

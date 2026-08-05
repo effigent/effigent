@@ -47,6 +47,124 @@ const modelCost = (m: string, u: Usage) => {
   return (u.inputTokens * p.in + u.outputTokens * p.out + u.cacheReadInputTokens * p.in * 0.1) / 1e6;
 };
 
+interface EpisodeBrief {
+  index: number; ask: string; intent: string; actionSummary: string;
+  toolCalls: number; costUsd: number; errors: number; interrupted: boolean;
+}
+interface DigestBrief {
+  episodes: EpisodeBrief[]; artifacts: string[]; errorCount: number; interruptions: number;
+}
+interface AiDigest {
+  title: string; tldr: string; outcome: string; outcomeNote: string;
+  chapters: { episode: number; note: string }[]; friction: string[];
+}
+
+const OUTCOME_TONE: Record<string, string> = {
+  delivered: 'var(--ok, #3fb26f)', partial: 'var(--warn, #eb6834)',
+  abandoned: 'var(--warn, #eb6834)', unclear: 'var(--txt-3)',
+};
+
+/**
+ * The "what was this session about?" layer: instant deterministic storyline
+ * (episodes as chapters), plus an on-request AI digest that reads the redacted
+ * brief and narrates title / tl;dr / outcome / friction.
+ */
+function SessionDigest({ sessionId }: { sessionId: string }) {
+  const [brief, setBrief] = useState<DigestBrief | null>(null);
+  const [ai, setAi] = useState<AiDigest | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [aiErr, setAiErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBrief(null); setAi(null); setAiErr(null);
+    fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/digest`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { brief?: DigestBrief; ai?: AiDigest | null } | null) => {
+        if (d?.brief) setBrief(d.brief);
+        if (d?.ai) setAi(d.ai);
+      })
+      .catch(() => {});
+  }, [sessionId]);
+
+  const summarize = () => {
+    setBusy(true); setAiErr(null);
+    fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/digest?ai=1`)
+      .then(async (r) => {
+        const d = (await r.json()) as { ai?: AiDigest | null; error?: string };
+        if (d.ai) setAi(d.ai);
+        else setAiErr(d.error ?? 'digest failed');
+      })
+      .catch(() => setAiErr('network error'))
+      .finally(() => setBusy(false));
+  };
+
+  if (!brief || brief.episodes.length === 0) return null;
+  const noteFor = (i: number) => ai?.chapters.find((c) => c.episode === i)?.note;
+
+  return (
+    <div className="usage-panel" style={{ marginTop: 10 }}>
+      <div className="usage-head" style={{ alignItems: 'flex-start' }}>
+        <div>
+          <span className="panel-title" style={{ fontSize: 14 }}>
+            {ai ? ai.title : 'Session storyline'}
+          </span>
+          {ai && (
+            <div className="sub" style={{ marginTop: 4, maxWidth: 720 }}>
+              {ai.tldr}{' '}
+              <span style={{ color: OUTCOME_TONE[ai.outcome] ?? 'var(--txt-3)', fontWeight: 700 }}>
+                {ai.outcome.toUpperCase()}
+              </span>
+              {ai.outcomeNote && <span style={{ color: 'var(--txt-3)' }}> — {ai.outcomeNote}</span>}
+            </div>
+          )}
+        </div>
+        {!ai && (
+          <button className="btn-ghost" disabled={busy} onClick={summarize} title="An AI model reads this session's redacted brief (episode skeleton + short excerpts) and writes the narrative.">
+            {busy ? 'Reading the run…' : '✦ Summarize with AI'}
+          </button>
+        )}
+      </div>
+      {aiErr && <div className="foot-note" style={{ color: 'var(--warn, #eb6834)' }}>{aiErr}</div>}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+        {brief.episodes.map((e) => (
+          <div key={e.index} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+            <span className="tnum" style={{ color: 'var(--txt-3)', fontSize: 12, minWidth: 18 }}>{e.index}</span>
+            <span className="opt-badge" style={{ minWidth: 74, justifyContent: 'center' }}>{e.intent}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {e.ask || <em style={{ color: 'var(--txt-3)' }}>(continuation)</em>}
+              </div>
+              <div className="foot-note">
+                {noteFor(e.index) ?? e.actionSummary}
+                {' · '}<span className="tnum">${e.costUsd.toFixed(2)}</span>
+                {e.errors > 0 && <span style={{ color: 'var(--warn, #eb6834)' }}> · {e.errors} error{e.errors === 1 ? '' : 's'}</span>}
+                {e.interrupted && <span style={{ color: 'var(--warn, #eb6834)' }}> · interrupted</span>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {ai && ai.friction.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div className="panel-sub" style={{ fontWeight: 700 }}>Friction</div>
+          {ai.friction.map((f, i) => (
+            <div key={i} className="foot-note" style={{ marginTop: 2 }}>• {f}</div>
+          ))}
+        </div>
+      )}
+      {brief.artifacts.length > 0 && (
+        <div className="foot-note" style={{ marginTop: 8 }}>
+          Delivered: {brief.artifacts.map((a) => (
+            <a key={a} href={a} target="_blank" rel="noreferrer" className="link" style={{ marginRight: 8 }}>{a.replace(/^https?:\/\//, '').slice(0, 60)}</a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SessionDetail({ sessionId, optimized, onBack }: { sessionId: string; optimized: boolean; onBack: () => void }) {
   const [run, setRun] = useState<RunRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +222,9 @@ export function SessionDetail({ sessionId, optimized, onBack }: { sessionId: str
           <div className="stat"><span className="v tnum">{cost}</span><span className="k">Cost</span></div>
         </div>
       </div>
+
+      {/* what the session was ABOUT — storyline + on-request AI digest */}
+      <SessionDigest sessionId={sessionId} />
 
       {/* per-model usage — the real "agent usage" breakdown */}
       {Object.keys(usage).length > 0 && (

@@ -10,6 +10,8 @@ import { detectDrift } from '@/lib/engine/drift.ts';
 import { buildKnowledgeGraph } from '@/lib/engine/knowledge.ts';
 import { mineSegments, type MinedSegment } from '@/lib/engine/segments.ts';
 import { mineSubtrees, type MinedSubtree } from '@/lib/engine/subtrees.ts';
+import { computeRunLedger, aggregateLedgers, type AgentLedger } from '@/lib/engine/ledger.ts';
+import { suggestTools, type ToolSuggestion } from '@/lib/engine/suggest.ts';
 import { loadRun } from '@/lib/storage.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
@@ -180,6 +182,64 @@ function wireSubtrees(subtrees: MinedSubtree[]) {
 }
 
 /** Stable across windows: the same logical opportunity keeps its id. */
+/**
+ * Trim the waste ledger for the wire. Slices are independent per-class
+ * estimates (see engine/ledger.ts) — the UI must present them side by side,
+ * never summed into one "total waste" number.
+ */
+function wireLedger(a: AgentLedger) {
+  const usd = (v: number) => Number(v.toFixed(2));
+  return {
+    runCount: a.runCount,
+    totalUsd: usd(a.totalUsd),
+    slices: {
+      deadContextUsd: usd(a.slices.deadContextUsd),
+      carriedUsd: usd(a.slices.carriedUsd),
+      cacheMissUsd: usd(a.slices.cacheMissUsd),
+      errorRecoveryUsd: usd(a.slices.errorRecoveryUsd),
+      redundantUsd: usd(a.slices.redundantUsd),
+    },
+    cacheHitRate: Number(a.cacheHitRate.toFixed(3)),
+    cacheApparentlyDisabledRuns: a.cacheApparentlyDisabledRuns,
+    errorCount: a.errorCount,
+    topDeadContext: a.topDeadContext.slice(0, 5).map((f) => ({
+      runId: f.runId, tool: f.tool, estTokens: f.estTokens, deadCalls: f.deadCalls,
+      wastedUsd: Number(f.wastedUsd.toFixed(3)), preview: f.preview.slice(0, 100),
+    })),
+    topErrorLoops: a.topErrorLoops.slice(0, 5).map((f) => ({
+      runId: f.runId, tool: f.tool, recoverySteps: f.recoverySteps,
+      recoveryUsd: Number(f.recoveryUsd.toFixed(3)), preview: f.preview.slice(0, 100),
+    })),
+    topRedundant: a.topRedundant.slice(0, 5).map((f) => ({
+      runId: f.runId, structLabel: f.structLabel, occurrences: f.occurrences,
+      wastedUsd: Number(f.wastedUsd.toFixed(3)), preview: f.preview.slice(0, 100),
+    })),
+  };
+}
+
+/** Trim tool suggestions for the wire (analysis output — not activation). */
+function wireSuggestions(suggestions: ToolSuggestion[]) {
+  return suggestions.map((s) => ({
+    id: s.id,
+    name: s.name,
+    actions: s.actions,
+    steps: s.steps.map((st) => ({
+      position: st.position, action: st.action, distinctArgs: st.distinctArgs,
+      argTemplate: st.argTemplate ? st.argTemplate.slice(0, 140) : null,
+    })),
+    params: s.params.map((p) => ({ name: p.name, type: p.type, examples: p.examples.map((e) => e.slice(0, 40)) })),
+    support: s.support,
+    runsTotal: s.runsTotal,
+    occurrences: s.occurrences,
+    confidence: s.confidence,
+    totalCostUsd: Number(s.totalCostUsd.toFixed(2)),
+    avgCostPerOccurrenceUsd: Number(s.avgCostPerOccurrenceUsd.toFixed(3)),
+    avgGlueSteps: s.avgGlueSteps,
+    intents: s.intents.slice(0, 3),
+    exampleAsks: s.exampleAsks.map((a) => a.slice(0, 120)),
+  }));
+}
+
 function stableId(agentId: string, n: NodeAnalysis): string {
   return createHash('sha256')
     .update(`${agentId}|${n.action}|${n.structLabel}|${n.template ?? ''}`)
@@ -272,20 +332,27 @@ export async function GET(req: Request) {
     // structure, genuinely different findings — mine both.
     const subtrees = mineSubtrees(graphs);
 
+    // The waste ledger is within-run and deterministic — it has something
+    // quantified to say for EVERY agent from the very first run, so no branch
+    // below is ever silent again.
+    const ledger = wireLedger(aggregateLedgers(runs.map((r, i) => computeRunLedger(r, graphs[i]))));
+
+    // Workflow mining over the semantic action alphabet (episodes, not sessions) —
+    // recurring cross-run workflows proposed as tools, with evidence. Analysis
+    // only: nothing is synthesized or activated from these.
+    const suggestions = wireSuggestions(suggestTools(graphs));
+
     const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
     if (analyses.length === 0) {
-      // No whole-run cluster is not "nothing to analyze". Emit the agent whenever
-      // repeated sub-paths (or drift) carry signal — otherwise the agents burning
-      // the most spend are exactly the ones the view stays silent about.
-      if (segments.length > 0 || subtrees.length > 0 || drift?.changed) {
-        insights.push({
-          agentId, runCount: runs.length, window, clusters: 0, coverage: 0,
-          steps: Math.max(...runs.map((r) => r.steps.length)), meanScore: 0, meanSim: 0,
-          totalEstUsd: 0, opportunities: [], tools: [], drift,
-          segments: wireSegments(segments),
-          subtrees: wireSubtrees(subtrees),
-        });
-      }
+      insights.push({
+        agentId, runCount: runs.length, window, clusters: 0, coverage: 0,
+        steps: Math.max(...runs.map((r) => r.steps.length)), meanScore: 0, meanSim: 0,
+        totalEstUsd: 0, opportunities: [], tools: [], drift,
+        ledger,
+        suggestions,
+        segments: wireSegments(segments),
+        subtrees: wireSubtrees(subtrees),
+      });
       continue;
     }
 
@@ -372,6 +439,8 @@ export async function GET(req: Request) {
       opportunities,
       tools,
       drift,
+      ledger,
+      suggestions,
       knowledge: buildKnowledgeGraph(analyses).find((k) => k.agentId === agentId) ?? null,
       segments: wireSegments(segments),
       subtrees: wireSubtrees(subtrees),

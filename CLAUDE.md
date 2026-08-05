@@ -84,6 +84,53 @@ The data contract everything else depends on.
   `changedAt` (the "agent was modified" signal; on drift, validated tools
   should be re-shadowed). Surfaced as `drift` per agent in `/api/v1/insights`
   and a "⚠ behavior changed" badge in the Insights view.
+- **`ledger.ts`** — **the waste ledger.** Per-run spend decomposition into
+  addressable waste classes, all within-run and deterministic (never empty, no
+  clustering precondition): dead context (large tool_results carried past their
+  last content reference, priced at the run's measured cache-blended input
+  rate), cache misses (input re-billed at full price that a stable prefix would
+  have served at 0.1× — an upper bound; compaction cold-starts are invisible),
+  error-recovery tails, and redundant read-only calls (same question AND same
+  answer within one run). Conservative by construction — unsure ⇒ claim
+  nothing; slices are independent estimates, never a partition (don't sum
+  them). Verified on 65 runs across 3 unrelated agents + ground-truth unit
+  tests; sensitivity documented in the file header. Surfaced as `ledger` per
+  agent in `/api/v1/insights` and the Insights view's "Where the spend goes"
+  strip.
+- **`actions.ts` + `episodes.ts` + `suggest.ts`** — **the semantic run IR + tool
+  suggester.** The missing middle zoom level: structLabels collapse ~70% of a
+  dev agent's calls into one opaque Bash label while raw values almost never
+  repeat, so nothing mined at either level. `actions.ts` canonicalizes every
+  call to an action token (`git:add+git:commit`, `pnpm:test`, `gh:pr:create` —
+  Bash commands parsed across newlines/`&&`/pipes, heredoc bodies dropped, cd/
+  export noise stripped); `episodes.ts` splits runs at user turns into the
+  comparable unit (ask + deterministic intent + action string + cost + errors);
+  `suggest.ts` mines recurring action n-grams across episodes (vocabulary floor:
+  rare tokens collapse to program family; specificity gate: motifs made only of
+  read/edit primitives are the inner coding loop, never suggested; Wilson
+  confidence; overlap + dominance dedupe) and emits ranked **ToolSuggestions** —
+  analysis only, NOT activation: name, per-step arg templates (columnTemplate
+  slots → proposed typed params), support/occurrences, measured cost, LLM-glue
+  count, intents, example asks. Validated on real traffic: the create-PR macro
+  (`git:commit → git:push → gh:pr:create`) emerges from apollo's 40 runs with
+  a `deliver` intent; heterogeneous traffic yields an honest zero. Surfaced as
+  `suggestions` in `/api/v1/insights` + the Insights "Suggested tools" panel.
+- **`brief.ts`** — **the run brief (session understanding).** Deterministic
+  compact digest of one run: episode storyline (ask → intent → action summary →
+  cost → errors → interrupted), outcome signals (final assistant tail, detected
+  artifact URLs like PRs), bounded error previews. Feeds two consumers: the
+  dashboard's Session storyline card, and `renderBriefText()` — the ~3KB
+  LLM-readable block behind the AI layers. **AI on runs (posture):** unlike
+  `/api/v1/explain` (structure-only), the digest/analyst endpoints DO send
+  redacted run content (the brief) to the model via OpenRouter —
+  `GET /api/v1/sessions/[id]/digest[?ai=1]` (typed JSON: title/tldr/outcome/
+  chapters/friction, module-cached) and `GET /api/v1/insights/analyst?agent=`
+  (agent story over the last 12 runs' briefs + ledger + suggestions; 10-min
+  cache). Models via `EFFIGENT_DIGEST_MODEL`/`EFFIGENT_ANALYST_MODEL`/
+  `EFFIGENT_EXPLAIN_MODEL` (default anthropic/claude-sonnet-4.5). Validated
+  E2E on real runs: digest correctly reconstructed a session's PR + scope
+  churn; analyst found the migration ritual / PR finalization / edit-churn
+  patterns.
 - **`knowledge.ts`** — **the knowledge graph.** Mines stable exploration lookups
   (mechanical/cacheable calls whose question AND answer agree across runs) into typed
   facts — file / search / listing / fetch / value — with support, Wilson confidence and
@@ -256,7 +303,7 @@ auth inside the handlers):
 - `GET /api/v1/reports` — key validation (`effigent login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
 (types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb
@@ -319,8 +366,11 @@ The "brain" turns observed runs into activated optimizations. Sequenced:
    (`core/synthesize.ts` + `core/replay.ts`; surfaced as `tools[]` in the insights
    response). NOT yet shipped: the delivery vehicle — emitting an actual skill/MCP tool
    file + PR, persistence of specs, accept/dismiss state on stable ids.
-3. **AI analyst** — an LLM pass over ~30 runs + the determinism signal → prioritized,
-   human-readable action items with estimated savings.
+3. **AI analyst** — ✅ **shipped, v1** (`core/brief.ts` + the digest/analyst
+   endpoints, see §2): per-session AI digest (title/tldr/outcome/chapters/
+   friction) + per-agent story over the last 12 runs' briefs + measurements.
+   Not yet: persistence of digests (module cache only), batch digest of the
+   sessions list, estimated-savings line items.
 4. **DAG diff** — compare runs before vs after `optimized_at` to prove the compiled
    columns disappeared and $/run dropped (the real "original vs optimized" for the
    Execution Graph; also closes the loop on replay-validated tools).
