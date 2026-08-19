@@ -13,6 +13,7 @@ import { mineSubtrees, type MinedSubtree } from '@/lib/engine/subtrees.ts';
 import { computeRunLedger, aggregateLedgers, type AgentLedger } from '@/lib/engine/ledger.ts';
 import { suggestTools, type ToolSuggestion } from '@/lib/engine/suggest.ts';
 import { segmentEpisodes } from '@/lib/engine/episodes.ts';
+import { analyzePredictability } from '@/lib/engine/entropy.ts';
 import { loadRun } from '@/lib/storage.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
@@ -363,6 +364,21 @@ export async function GET(req: Request) {
     // LLM-glue spend deterministic execution would save. Analysis only.
     const determinism = wireDeterminism(suggestTools(graphs));
     const taskMix = taskMixOf(graphs);
+    // Leave-one-out entropy model: how much of the agent's decision glue was
+    // information-free? Honest hierarchy for the UI — total decision glue is
+    // the ceiling, workflow glue the actionable middle, this the strict floor.
+    const p9 = analyzePredictability(graphs);
+    const predictability = {
+      transitions: p9.transitions,
+      predictable: p9.predictable,
+      sharePredictable: Number(p9.sharePredictable.toFixed(4)),
+      decisionGlueUsd: Number(p9.totalGlueUsd.toFixed(2)),
+      mechanicalGlueUsd: Number(p9.mechanicalGlueUsd.toFixed(2)),
+      topPredictable: p9.topPredictable.slice(0, 5).map((t) => ({
+        context: t.context, action: t.action, p: Number(t.p.toFixed(2)),
+        support: t.support, occurrences: t.occurrences, glueUsd: Number(t.glueUsd.toFixed(2)),
+      })),
+    };
 
     const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
     if (analyses.length === 0) {
@@ -373,6 +389,7 @@ export async function GET(req: Request) {
         ledger,
         determinism,
         taskMix,
+        predictability,
         segments: wireSegments(segments),
         subtrees: wireSubtrees(subtrees),
       });
@@ -465,6 +482,7 @@ export async function GET(req: Request) {
       ledger,
       determinism,
       taskMix,
+      predictability,
       knowledge: buildKnowledgeGraph(analyses).find((k) => k.agentId === agentId) ?? null,
       segments: wireSegments(segments),
       subtrees: wireSubtrees(subtrees),

@@ -17,6 +17,7 @@ export * from './actions.js';
 export * from './episodes.js';
 export * from './suggest.js';
 export * from './brief.js';
+export * from './entropy.js';
 export * from './otel.js';
 export * from './determinism.js';
 export * from './align.js';

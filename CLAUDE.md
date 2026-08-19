@@ -136,6 +136,17 @@ The data contract everything else depends on.
   E2E on real runs: digest correctly reconstructed a session's PR + scope
   churn; analyst found the migration ritual / PR finalization / edit-churn
   patterns.
+- **`entropy.ts`** — **predictability scoring (determinism as information).**
+  Variable-order Markov model (orders 0–3, PPM-style backoff) over the shared
+  action alphabet, scored LEAVE-ONE-RUN-OUT so a workflow can never predict
+  itself. Prices the honest hierarchy the Insights panel shows: total decision
+  glue (all LLM turns between tool calls — the ceiling), workflow-conditioned
+  glue (suggest.ts `glueCostUsd` — the actionable middle), and fully-predictable
+  decisions (p≥0.9 at order≥1, support≥5 — the strict floor; order-0 base rates
+  never count). Measured on real traffic: ~0.2% of decisions are fully
+  predictable — interactive agent work is genuinely high-entropy at next-action
+  granularity, which is WHY savings claims must be workflow-conditioned.
+  Surfaced as `predictability` in `/api/v1/insights`.
 - **`knowledge.ts`** — **the knowledge graph.** Mines stable exploration lookups
   (mechanical/cacheable calls whose question AND answer agree across runs) into typed
   facts — file / search / listing / fetch / value — with support, Wilson confidence and
@@ -308,7 +319,7 @@ auth inside the handlers):
 - `GET /api/v1/reports` — key validation (`effigent login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
 (types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb

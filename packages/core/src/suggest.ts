@@ -21,6 +21,7 @@
 
 import { createHash } from 'node:crypto';
 import type { RunGraph } from './types.js';
+import { familyOf, makeVocabCanon } from './actions.js';
 import { segmentEpisodes, type Episode } from './episodes.js';
 import { attributeStepCosts } from './segments.js';
 import { columnTemplate, wilsonLower } from './determinism.js';
@@ -54,11 +55,6 @@ const PRIMITIVE = new Set([
   'find', 'echo', 'bash', 'python3', 'python', 'node', 'say', 'think',
   'askuserquestion', 'todowrite', 'toolsearch', 'taskcreate', 'taskupdate', 'tasklist', 'taskget',
 ]);
-
-/** Program family of a token: first stage's program (`git:add+git:commit` → `git`). */
-function familyOf(token: string): string {
-  return token.split('+')[0].split(':')[0];
-}
 
 function isSpecific(token: string): boolean {
   return !PRIMITIVE.has(token) && !PRIMITIVE.has(familyOf(token));
@@ -145,9 +141,7 @@ export function suggestTools(graphs: RunGraph[], maxSuggestions = MAX_SUGGESTION
   const graphById = new Map(graphs.map((g) => [g.runId, g]));
 
   // ---- vocabulary floor: collapse rare tokens to their family -------------------
-  const freq = new Map<string, number>();
-  for (const ep of episodes) for (const a of ep.actions) freq.set(a, (freq.get(a) ?? 0) + 1);
-  const canon = (a: string) => ((freq.get(a) ?? 0) >= MIN_TOKEN_FREQ ? a : familyOf(a));
+  const canon = makeVocabCanon(episodes.map((e) => e.actions), MIN_TOKEN_FREQ);
   const epActions = new Map<Episode, string[]>(episodes.map((ep) => [ep, ep.actions.map(canon)]));
 
   // ---- count n-grams (non-overlapping within an episode) ----------------------

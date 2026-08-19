@@ -22,6 +22,22 @@
 
 import type { GraphNode, RawStep } from './types.ts';
 
+/** Program family of a token: first stage's program (`git:add+git:commit` → `git`). */
+export function familyOf(token: string): string {
+  return token.split('+')[0].split(':')[0];
+}
+
+/**
+ * Min-count vocabulary canonicalizer over a token corpus: tokens seen fewer
+ * than `minFreq` times collapse to their program family. Shared by the
+ * suggester and the predictability model so both mine the same alphabet.
+ */
+export function makeVocabCanon(sequences: string[][], minFreq = 3): (a: string) => string {
+  const freq = new Map<string, number>();
+  for (const seq of sequences) for (const a of seq) freq.set(a, (freq.get(a) ?? 0) + 1);
+  return (a) => ((freq.get(a) ?? 0) >= minFreq ? a : familyOf(a));
+}
+
 /** Programs whose first subcommand is part of the verb (git commit ≠ git push). */
 const SUBCOMMAND_PROGRAMS = new Set([
   'git', 'gh', 'npm', 'pnpm', 'yarn', 'bun', 'docker', 'kubectl', 'aws', 'terraform',

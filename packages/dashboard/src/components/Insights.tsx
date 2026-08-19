@@ -102,6 +102,15 @@ interface DeterminismInsight {
   exampleAsks: string[];
 }
 
+interface Predictability {
+  transitions: number;
+  predictable: number;
+  sharePredictable: number;
+  decisionGlueUsd: number;
+  mechanicalGlueUsd: number;
+  topPredictable: { context: string[]; action: string; p: number; support: number; occurrences: number; glueUsd: number }[];
+}
+
 interface TaskMixEntry {
   intent: string;
   episodes: number;
@@ -122,6 +131,7 @@ interface AgentInsight {
   ledger?: Ledger;
   determinism?: DeterminismInsight[];
   taskMix?: TaskMixEntry[];
+  predictability?: Predictability;
   segments?: Segment[];
   subtrees?: Subtree[];
   drift?: {
@@ -453,11 +463,21 @@ function TaskMixLine({ taskMix }: { taskMix: TaskMixEntry[] }) {
  * the interleaved LLM reasoning ("glue") that deterministic execution would
  * eliminate. The header totals the claim across all recurring workflows.
  */
-function DeterminismPanel({ insights }: { insights: DeterminismInsight[] }) {
+function DeterminismPanel({ insights, predictability }: { insights: DeterminismInsight[]; predictability?: Predictability }) {
   const totalGlue = insights.reduce((s, d) => s + d.glueCostUsd, 0);
   return (
     <div style={{ margin: '14px 0' }}>
       <div className="mono-name" style={{ fontSize: 13, marginBottom: 4 }}>Deterministic savings</div>
+      {predictability && (
+        <div className="panel-sub" style={{ marginBottom: 4 }}>
+          Deciding next steps cost <strong className="tnum">{usd(predictability.decisionGlueUsd)}</strong> of
+          LLM usage in this window ({predictability.transitions.toLocaleString()} tool decisions). A
+          leave-one-out entropy model finds only{' '}
+          <span className="tnum">{(predictability.sharePredictable * 100).toFixed(1)}%</span> of them fully
+          predictable from history — this agent's work genuinely varies, so blind compilation would fail.
+          The savings that ARE defensible live in the recurring workflows below.
+        </div>
+      )}
       <div className="panel-sub" style={{ marginBottom: 8 }}>
         Workflows this agent repeats step-by-step through the LLM. The reasoning between those steps
         is mechanical — running them deterministically would save{' '}
@@ -662,7 +682,7 @@ export function Insights({ agent }: { agent: string }) {
 
           <AnalystPanel agentId={a.agentId} />
 
-          {(a.determinism?.length ?? 0) > 0 && <DeterminismPanel insights={a.determinism!} />}
+          {(a.determinism?.length ?? 0) > 0 && <DeterminismPanel insights={a.determinism!} predictability={a.predictability} />}
 
           {a.opportunities.length === 0 && ((a.segments?.length ?? 0) > 0 || (a.subtrees?.length ?? 0) > 0) && (
             <div className="foot-note" style={{ marginTop: 10 }}>
