@@ -113,7 +113,14 @@ export async function persistRun(auth: AgentAuth, sessionId: string, run: Run): 
     ...run,
     firstPrompt: run.firstPrompt ? scrub(run.firstPrompt) : run.firstPrompt,
     finalOutput: run.finalOutput ? scrub(run.finalOutput) : run.finalOutput,
-    steps: run.steps.map((s) => ({ ...s, payload: scrub(s.payload.slice(0, 8000)) })),
+    // the harness's session title is model-written from the conversation — scrub it like content
+    title: run.title ? scrub(run.title) : run.title,
+    // keep the REAL size when trimming: rent attribution prices what entered context, not what we store
+    steps: run.steps.map((s) => ({
+      ...s,
+      payload: scrub(s.payload.slice(0, 8000)),
+      ...(s.fullChars != null || s.payload.length > 8000 ? { fullChars: s.fullChars ?? s.payload.length } : {}),
+    })),
   });
   const safe = (s: string) => s.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 200);
   const blobPath = await putRunBlob(auth.tenantId, `${safe(run.agentId)}/${safe(sessionId)}.json.gz`, JSON.stringify(trimmed));

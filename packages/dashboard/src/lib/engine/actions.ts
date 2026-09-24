@@ -1,4 +1,4 @@
-// VENDORED from packages/core/src/actions.ts — re-vendor after core changes (see CLAUDE.md §6)
+// VENDORED from packages/core|server (dashboard can't take workspace deps on Vercel).
 /**
  * The semantic action alphabet — the missing middle zoom level of the run IR.
  *
@@ -135,4 +135,24 @@ export function actionToken(step: Pick<RawStep, 'kind' | 'name' | 'payload'> | P
     verb = lower;
   }
   return kind === 'tool_result' ? `${verb}✓` : verb;
+}
+
+/** Verbs that only READ state — navigation/plumbing already stripped by bashAction. */
+const READ_VERBS = /^(read|grep|glob|ls|cat|sed|head|tail|find|rg|wc|awk|jq|sort|uniq|cut|tr|diff|stat|file|du|tree|toolsearch|notebookread|git:(log|show|diff|status|branch|blame|ls-files|rev-parse|remote)|gh:(pr:view|pr:list|pr:diff|run:view|run:list|issue:view|api)|npm:(ls|view)|which|type)$/;
+
+/**
+ * True when a tool call only reads state (an exploration step). Works on the
+ * action token, so `cd repo && sed -n 1,80p f.ts | head` counts as a read —
+ * the taxonomy's stage classifier treats the leading `cd` as unknown and says
+ * side effect, which hid ~all exploration bursts. `sed -i`/redirects are writes.
+ */
+export function isReadOnlyCall(step: Pick<RawStep, 'kind' | 'name' | 'payload'>): boolean {
+  if (step.kind !== 'tool_use') return false;
+  if (step.name === 'Bash') {
+    let cmd = '';
+    try { cmd = String((JSON.parse(step.payload) as { command?: string }).command ?? ''); } catch { return false; }
+    if (/\bsed\s+-i|(^|[^>&0-9])>(?!&)|\btee\b|\brm\b|\bmv\b/.test(cmd.split('<<')[0])) return false;
+  }
+  const tok = actionToken(step);
+  return tok !== 'bash' && tok.split('+').every((v) => READ_VERBS.test(v));
 }

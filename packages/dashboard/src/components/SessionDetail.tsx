@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Ic } from '../icons.tsx';
+import { runCostUsd, usageCostUsd } from '@/lib/engine/cost.ts';
+import { computeRentLedger, simulateCompaction, REACQUISITION_SCENARIOS } from '@/lib/engine/rent.ts';
+import { contextSkylineSvg, SKYLINE_LAYERS } from '@/lib/engine/graph-svg.ts';
+import type { Run } from '@/lib/engine/types.ts';
 
 interface Usage { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }
 interface Step {
@@ -9,7 +13,7 @@ interface Step {
   isError?: boolean;
   toolUseId?: string;
   model?: string;
-  tokens?: { input: number; output: number };
+  tokens?: { input: number; output: number; cacheCreation?: number; cacheCreation1h?: number; cacheRead?: number; thinking?: number; context?: number };
   ms?: number;
 }
 interface Parsed {
@@ -37,15 +41,10 @@ const KIND: Record<Step['kind'], { label: string; icon: string; cls: string }> =
   thinking: { label: 'Reasoning', icon: 'bulb', cls: 'k-think' },
 };
 
-const PRICE: Record<string, { in: number; out: number }> = {
-  'claude-opus-4': { in: 15, out: 75 }, 'claude-sonnet-4': { in: 3, out: 15 }, 'claude-haiku-4': { in: 0.8, out: 4 },
-  'gpt-4o': { in: 2.5, out: 10 }, 'gpt-4o-mini': { in: 0.15, out: 0.6 },
-};
 const nfmt = (n: number) => n.toLocaleString('en-US');
-const modelCost = (m: string, u: Usage) => {
-  const p = PRICE[m] ?? PRICE['claude-sonnet-4'];
-  return (u.inputTokens * p.in + u.outputTokens * p.out + u.cacheReadInputTokens * p.in * 0.1) / 1e6;
-};
+/** One pricing source for the whole product: the engine's table (verified against Claude Code's own totals). */
+const modelCost = (m: string, u: Usage) =>
+  usageCostUsd(m, { ...u, cacheCreationInputTokens: u.cacheCreationInputTokens ?? 0 });
 
 interface EpisodeBrief {
   index: number; ask: string; intent: string; actionSummary: string;
@@ -165,6 +164,37 @@ function SessionDigest({ sessionId }: { sessionId: string }) {
   );
 }
 
+/** The context skyline: area under the curve × read price is this session's re-reading bill. */
+const SKYLINE_POLICY = 400_000;
+function ContextSkyline({ parsed }: { parsed: Parsed }) {
+  const run = { runId: 's', agentId: 'a', models: parsed.models ?? [], usageByModel: parsed.usageByModel ?? {}, costUsd: runCostUsd(parsed) || parsed.costUsd || 0, steps: parsed.steps ?? [], cwd: (parsed as { cwd?: string }).cwd } as unknown as Run;
+  const ledger = computeRentLedger(run, { series: true });
+  const series = ledger.series ?? [];
+  if (series.length < 3) return null;
+  const peak = ledger.peakContext;
+  const trace: number[] = [];
+  const sim = peak > SKYLINE_POLICY ? simulateCompaction(run, SKYLINE_POLICY, REACQUISITION_SCENARIOS[1], trace) : null;
+  const reads = ledger.spend.cacheReadUsd;
+  const svg = contextSkylineSvg(series, sim ? { counterfactual: trace, threshold: SKYLINE_POLICY } : {});
+  return (
+    <div className="usage-panel">
+      <div className="usage-head">
+        <span className="panel-title" style={{ fontSize: 14 }}>Context over the session</span>
+        <span className="dag-models-note">
+          peak {Math.round(peak / 1000)}k tokens · re-reading cost ${reads.toFixed(2)} of ${ledger.costUsd.toFixed(2)}
+          {sim && <> · compact at {SKYLINE_POLICY / 1000}k (dashed): ${(ledger.costUsd - sim.costUsd).toFixed(2)} {ledger.costUsd - sim.costUsd >= 0 ? 'saved' : 'more'}</>}
+        </span>
+      </div>
+      <div style={{ color: 'var(--txt-2)' }} dangerouslySetInnerHTML={{ __html: svg }} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 11, marginTop: 4 }}>
+        {SKYLINE_LAYERS.map((l) => (
+          <span key={l.key}><span style={{ display: 'inline-block', width: 8, height: 8, background: l.color, borderRadius: 2, marginRight: 4 }} />{l.label}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function SessionDetail({ sessionId, optimized, onBack }: { sessionId: string; optimized: boolean; onBack: () => void }) {
   const [run, setRun] = useState<RunRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -197,7 +227,8 @@ export function SessionDetail({ sessionId, optimized, onBack }: { sessionId: str
     run?.started_at && run?.ended_at
       ? `${Math.max(1, Math.round((new Date(run.ended_at).getTime() - new Date(run.started_at).getTime()) / 1000))}s`
       : '—';
-  const cost = run ? `$${Number(run.cost_usd).toFixed(4)}` : '—';
+  // Re-priced from the run's own usage (stored cost_usd predates the pricing fix).
+  const cost = run ? `$${(runCostUsd(run.parsed ?? {}) || Number(run.cost_usd)).toFixed(4)}` : '—';
 
   return (
     <section className="dag">
@@ -225,6 +256,9 @@ export function SessionDetail({ sessionId, optimized, onBack }: { sessionId: str
 
       {/* what the session was ABOUT — storyline + on-request AI digest */}
       <SessionDigest sessionId={sessionId} />
+
+      {/* where this session's money went: context over time, stacked by content */}
+      {steps.length > 0 && <ContextSkyline parsed={run!.parsed} />}
 
       {/* per-model usage — the real "agent usage" breakdown */}
       {Object.keys(usage).length > 0 && (

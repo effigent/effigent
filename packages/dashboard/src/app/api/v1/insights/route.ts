@@ -15,6 +15,8 @@ import { suggestTools, type ToolSuggestion } from '@/lib/engine/suggest.ts';
 import { segmentEpisodes } from '@/lib/engine/episodes.ts';
 import { analyzePredictability } from '@/lib/engine/entropy.ts';
 import { loadRun } from '@/lib/storage.ts';
+import { runCostUsd } from '@/lib/engine/cost.ts';
+import { analyzeAgent, type AgentAnalysis } from '@/lib/engine/plan.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
 export const dynamic = 'force-dynamic';
@@ -183,6 +185,50 @@ function wireSubtrees(subtrees: MinedSubtree[]) {
   }));
 }
 
+/**
+ * Context rent + the compiled plan (engine/plan.ts, docs/context-rent.md) for the
+ * wire: the measured spend anatomy, the rent decomposition with its identity
+ * check, and the priced harness changes WITH the files Effigent would write.
+ */
+function wireAnalysis(a: AgentAnalysis) {
+  const usd = (v: number) => Number(v.toFixed(2));
+  return {
+    costUsd: usd(a.costUsd),
+    spend: Object.fromEntries(Object.entries(a.spend).map(([k, v]) => [k, usd(v)])),
+    rent: {
+      baseUsd: usd(a.rent.baseUsd),
+      byKind: Object.fromEntries(Object.entries(a.rent.byKind).map(([k, v]) => [k, usd(v)])),
+      topTools: Object.entries(a.rent.byTool).sort((x, y) => y[1] - x[1]).slice(0, 5).map(([tool, v]) => ({ tool, usd: usd(v) })),
+    },
+    calibration: Number(a.calibration.toFixed(3)),
+    coldRewrites: { count: a.coldRewrites.count, penaltyUsd: usd(a.coldRewrites.penaltyUsd) },
+    instructionsTokens: a.instructionsTokens,
+    compaction: {
+      threshold: a.compaction.threshold,
+      calibration: Number((a.compaction.calibratedUsd / Math.max(1e-9, a.compaction.observedUsd)).toFixed(3)),
+    },
+    plan: a.plan.map((p) => ({ ...p, savingsUsd: p.savingsUsd && { low: usd(p.savingsUsd.low), high: usd(p.savingsUsd.high) } })),
+    legacyRuns: a.legacyRuns,
+    // what the requests were FOR (replaces the keyword task mix)
+    reasons: a.laws.reasons.map((r) => ({ reason: r.reason, requests: r.requests, costUsd: usd(r.costUsd), share: Number(r.share.toFixed(3)), avgContext: Math.round(r.avgContext) })),
+    law: a.laws.law && { ...a.laws.law, readPricePerToken: undefined, compactionCostUsd: usd(a.laws.law.compactionCostUsd), fitR2: Number(a.laws.law.fitR2.toFixed(2)), aboveThresholdShare: Number(a.laws.law.aboveThresholdShare.toFixed(3)) },
+    drivers: a.laws.drivers && Object.fromEntries(Object.entries(a.laws.drivers).map(([k, v]) => [k, Number(v.toFixed(2))])),
+    expensive: a.laws.expensive.map((e) => ({ ...e, costUsd: usd(e.costUsd), requestsX: Number(e.requestsX.toFixed(1)), contextX: Number(e.contextX.toFixed(1)), priceX: Number(e.priceX.toFixed(1)), topReasonShare: Number(e.topReasonShare.toFixed(2)) })),
+    outcomes: { ...a.laws.outcomes, costPerDeliveringSessionUsd: a.laws.outcomes.costPerDeliveringSessionUsd == null ? null : usd(a.laws.outcomes.costPerDeliveringSessionUsd), coverage: Number(a.laws.outcomes.coverage.toFixed(2)) },
+    // determinism, measured on later sessions (engine/predictability.ts)
+    determinism: Object.fromEntries((['reason', 'action'] as const).map((k) => {
+      const p = a.determinism[k];
+      return [k, p && {
+        testDecisions: p.testDecisions, testSessions: p.testSessions,
+        coverage80: Number(p.coverage80.toFixed(3)), precision80: Number(p.precision80.toFixed(3)),
+        spendShare80: Number(p.spendShare80.toFixed(3)), explained: Number(p.explained.toFixed(3)),
+        reliable: p.reliable,
+      }];
+    })),
+    loop: a.loop.map((o) => ({ ...o, realizedUsd: usd(o.realizedUsd), metricBefore: Math.round(o.metricBefore), metricAfter: Math.round(o.metricAfter), costPerRequestBefore: Number(o.costPerRequestBefore.toFixed(4)), costPerRequestAfter: Number(o.costPerRequestAfter.toFixed(4)) })),
+  };
+}
+
 /** Stable across windows: the same logical opportunity keeps its id. */
 /**
  * Trim the waste ledger for the wire. Slices are independent per-class
@@ -327,7 +373,9 @@ export async function GET(req: Request) {
       agentId: r.agent_id,
       startedAt: r.started_at ? new Date(r.started_at).toISOString() : run.startedAt,
       usageByModel: run.usageByModel ?? {},
-      costUsd: Number(r.cost_usd ?? run.costUsd ?? 0),
+      // Re-priced from the run's own usage — rows written before the 2026-09 pricing
+      // fix store a ~2.3×-high cost_usd; the stored value is only a fallback.
+      costUsd: runCostUsd(run) || Number(r.cost_usd ?? run.costUsd ?? 0),
     };
     (runsByAgent.get(r.agent_id) ?? runsByAgent.set(r.agent_id, []).get(r.agent_id)!).push(normalized);
   });
@@ -379,14 +427,21 @@ export async function GET(req: Request) {
         support: t.support, occurrences: t.occurrences, glueUsd: Number(t.glueUsd.toFixed(2)),
       })),
     };
+    const analysis = wireAnalysis(analyzeAgent(agentId, runs));
 
     const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
+    // Which engine applies. Repetitive agents (runs cluster) get the determinism
+    // lattice + shape miners; interactive agents get context economics only —
+    // measured on interactive traffic, shape verdicts were ~all noise.
+    const clusteredShare = analyses.reduce((s, a) => s + a.runCount, 0) / Math.max(1, runs.length);
+    const profile: 'repetitive' | 'interactive' = clusteredShare >= 0.5 ? 'repetitive' : 'interactive';
     if (analyses.length === 0) {
       insights.push({
-        agentId, runCount: runs.length, window, clusters: 0, coverage: 0,
+        agentId, profile, runCount: runs.length, window, clusters: 0, coverage: 0,
         steps: Math.max(...runs.map((r) => r.steps.length)), meanScore: 0, meanSim: 0,
         totalEstUsd: 0, opportunities: [], tools: [], drift,
         ledger,
+        analysis,
         determinism,
         taskMix,
         predictability,
@@ -468,6 +523,7 @@ export async function GET(req: Request) {
 
     insights.push({
       agentId,
+      profile,
       runCount: runs.length,
       window,
       clusters: analyses.length,
@@ -480,6 +536,7 @@ export async function GET(req: Request) {
       tools,
       drift,
       ledger,
+      analysis,
       determinism,
       taskMix,
       predictability,
@@ -494,6 +551,7 @@ export async function GET(req: Request) {
       );
     }
   }
-  insights.sort((a, b) => b.totalEstUsd - a.totalEstUsd);
+  // Spend first: totalEstUsd is 0 for every interactive agent, so it cannot order the list.
+  insights.sort((a, b) => (b.analysis?.costUsd ?? 0) - (a.analysis?.costUsd ?? 0) || b.totalEstUsd - a.totalEstUsd);
   return Response.json({ insights, window, threshold });
 }

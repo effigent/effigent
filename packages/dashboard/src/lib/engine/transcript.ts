@@ -6,7 +6,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { RawStep, Run, StepTokens, TokenUsage } from './types.ts';
+import type { RawStep, Run, RunEvent, StepTokens, TokenUsage } from './types.ts';
 import { addUsage, emptyUsage, usageCostUsd } from './cost.ts';
 
 interface TranscriptLine {
@@ -19,6 +19,23 @@ interface TranscriptLine {
   gitBranch?: string;
   isMeta?: boolean;
   isSidechain?: boolean;
+  /** Claude Code: the compaction summary injected as a user message. */
+  isCompactSummary?: boolean;
+  /** Claude Code: who produced a user turn — typed | queued | system | sdk. */
+  promptSource?: string;
+  /** Claude Code: human | task-notification | peer | auto-continuation | … */
+  origin?: { kind?: string };
+  subtype?: string;
+  agentId?: string;
+  toolDenialKind?: string;
+  compactMetadata?: { trigger?: string; preTokens?: number; postTokens?: number };
+  toolUseResult?: {
+    gitOperation?: {
+      commit?: { sha?: string };
+      push?: { branch?: string };
+      pr?: { number?: number; action?: string };
+    };
+  };
   costUSD?: number;
   message?: {
     role?: string;
@@ -29,21 +46,49 @@ interface TranscriptLine {
       output_tokens?: number;
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
+      output_tokens_details?: { thinking_tokens?: number };
+      cache_creation?: { ephemeral_1h_input_tokens?: number; ephemeral_5m_input_tokens?: number };
+      /** Per-sampling iterations; `advisor_message` entries are a SECOND model's
+       *  usage (the advisor tool) that the top-level totals do not include. */
+      iterations?: Array<{
+        type?: string;
+        model?: string;
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation?: { ephemeral_1h_input_tokens?: number };
+      }>;
     };
   };
 }
 
-/** Harness-injected user content that is not a real prompt. */
+/**
+ * Harness-injected user content that is not a real prompt. Measured on 2,400
+ * real user turns: `!`-prefixed shell echoes (`<bash-input>`/`<bash-stdout>`)
+ * alone were ~15% of all "asks", and every one of them opened a bogus episode.
+ */
+const META_PREFIXES = [
+  '<command-name>', '<command-message>', '<command-args>', '<local-command-stdout>',
+  '<local-command-stderr>', '<local-command-caveat>', '<system-reminder>',
+  '<task-notification>', '<bash-input>', '<bash-stdout>', '<bash-stderr>',
+  '<user-memory-input>', 'Caveat:',
+];
+
 function isMetaText(text: string): boolean {
   const t = text.trimStart();
-  return (
-    t.startsWith('<command-name>') ||
-    t.startsWith('<command-message>') ||
-    t.startsWith('<local-command-stdout>') ||
-    t.startsWith('<system-reminder>') ||
-    t.startsWith('<task-notification>') ||
-    t.startsWith('Caveat:')
-  );
+  return META_PREFIXES.some((p) => t.startsWith(p));
+}
+
+/**
+ * A user line is a real ask only when a human (or an SDK caller) wrote it.
+ * Claude Code marks provenance explicitly on newer transcripts; older ones fall
+ * back to the text heuristics in `isMetaText`.
+ */
+function isHarnessTurn(obj: TranscriptLine): boolean {
+  if (obj.isCompactSummary) return true;
+  if (obj.origin?.kind && obj.origin.kind !== 'human') return true;
+  return obj.promptSource === 'system';
 }
 
 function textOfContent(content: unknown): string {
@@ -58,12 +103,15 @@ function textOfContent(content: unknown): string {
 }
 
 function toUsage(u: NonNullable<TranscriptLine['message']>['usage']): TokenUsage {
-  return {
+  const usage: TokenUsage = {
     inputTokens: u?.input_tokens ?? 0,
     outputTokens: u?.output_tokens ?? 0,
     cacheCreationInputTokens: u?.cache_creation_input_tokens ?? 0,
     cacheReadInputTokens: u?.cache_read_input_tokens ?? 0,
   };
+  const h = u?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+  if (h > 0) usage.cacheCreation1hInputTokens = h;
+  return usage;
 }
 
 export interface ParseOptions {
@@ -86,6 +134,13 @@ export function parseTranscript(
   const usageByModel: Record<string, TokenUsage> = {};
   const seenUsageKeys = new Set<string>();
   const models = new Set<string>();
+  const instructions = new Map<string, { path: string; kind: string; chars: number }>();
+  let title: string | undefined;
+  let customTitle: string | undefined;
+  const events: RunEvent[] = [];
+  let sideRequests = 0;
+  let sideUsd = 0;
+  const sideAgents = new Set<string>();
 
   let sessionId: string | undefined;
   let cwd: string | undefined;
@@ -107,6 +162,42 @@ export function parseTranscript(
       continue; // tolerate truncated/corrupt lines — capture must never fail hard
     }
     sessionId ??= obj.sessionId;
+    if (obj.type === 'system' && obj.subtype === 'compact_boundary' && !obj.isSidechain) {
+      events.push({ kind: 'compact', timestamp: obj.timestamp, detail: obj.compactMetadata?.trigger, preTokens: obj.compactMetadata?.preTokens, postTokens: obj.compactMetadata?.postTokens });
+      continue;
+    }
+    // Subagent (sidechain) turns: not part of the main conversation, but real spend.
+    if (obj.isSidechain && obj.type === 'assistant' && obj.message?.usage && obj.message.model && obj.message.model !== '<synthetic>') {
+      const key = `side:${obj.requestId ?? obj.uuid ?? obj.timestamp}`;
+      if (!seenUsageKeys.has(key)) {
+        seenUsageKeys.add(key);
+        const u = toUsage(obj.message.usage);
+        usageByModel[obj.message.model] = addUsage(usageByModel[obj.message.model] ?? emptyUsage(), u);
+        models.add(obj.message.model);
+        hasUsage = true;
+        sideRequests++;
+        sideUsd += usageCostUsd(obj.message.model, u);
+        if (obj.agentId) sideAgents.add(obj.agentId);
+      }
+      continue;
+    }
+    if (obj.type === 'ai-title' || obj.type === 'custom-title') {
+      // the user's own title wins; otherwise the LATEST ai-title (it is rewritten as the session evolves)
+      const o = obj as { aiTitle?: string; customTitle?: string };
+      if (obj.type === 'custom-title' && o.customTitle) customTitle = o.customTitle;
+      else if (o.aiTitle) title = o.aiTitle;
+      continue;
+    }
+    if (obj.type === 'attachment' && !obj.isSidechain) {
+      const a = (obj as { attachment?: { type?: string; files?: { path?: string; type?: string; content?: string }[] } }).attachment;
+      if (a?.type === 'instructions') {
+        for (const f of a.files ?? []) {
+          if (!f.path) continue;
+          instructions.set(f.path, { path: f.path, kind: f.type ?? 'unknown', chars: (f.content ?? '').length });
+        }
+      }
+      continue;
+    }
     if (obj.type !== 'user' && obj.type !== 'assistant') continue;
     if (obj.isMeta || obj.isSidechain) continue;
 
@@ -121,9 +212,15 @@ export function parseTranscript(
     if (!msg) continue;
 
     if (obj.type === 'user') {
+      const git = obj.toolUseResult?.gitOperation;
+      if (git?.commit) events.push({ kind: 'commit', timestamp: obj.timestamp, detail: git.commit.sha?.slice(0, 10) });
+      if (git?.push) events.push({ kind: 'push', timestamp: obj.timestamp });
+      if (git?.pr) events.push({ kind: 'pr', timestamp: obj.timestamp, detail: `${git.pr.action ?? ''}${git.pr.number != null ? ` #${git.pr.number}` : ''}`.trim() });
+      if (obj.toolDenialKind) events.push({ kind: 'deny', timestamp: obj.timestamp, detail: obj.toolDenialKind });
       const content = msg.content;
+      const harness = isHarnessTurn(obj);
       if (typeof content === 'string') {
-        if (content.trim() && !isMetaText(content)) {
+        if (content.trim() && !harness && !isMetaText(content)) {
           firstPrompt ??= content;
           steps.push({ kind: 'model_turn', name: 'user', payload: content, timestamp: obj.timestamp });
         }
@@ -136,15 +233,17 @@ export function parseTranscript(
             content?: unknown;
             is_error?: boolean;
           };
-          if (b.type === 'text' && b.text?.trim() && !isMetaText(b.text)) {
+          if (b.type === 'text' && b.text?.trim() && !harness && !isMetaText(b.text)) {
             firstPrompt ??= b.text;
             steps.push({ kind: 'model_turn', name: 'user', payload: b.text, timestamp: obj.timestamp });
           } else if (b.type === 'tool_result') {
             const toolName = (b.tool_use_id && toolNameById.get(b.tool_use_id)) || 'unknown';
+            const text = textOfContent(b.content);
             steps.push({
               kind: 'tool_result',
               name: toolName,
-              payload: textOfContent(b.content).slice(0, 20000),
+              payload: text.slice(0, 20000),
+              ...(text.length > 20000 ? { fullChars: text.length } : {}),
               isError: b.is_error === true,
               toolUseId: b.tool_use_id,
               timestamp: obj.timestamp,
@@ -155,25 +254,43 @@ export function parseTranscript(
     } else {
       // assistant
       if (typeof obj.costUSD === 'number') legacyCostUsd += obj.costUSD;
-      if (msg.model) models.add(msg.model);
+      if (msg.model && msg.model !== '<synthetic>') models.add(msg.model);
       // Usage repeats across lines of the same API request — dedupe, and
       // attribute the request's tokens to the FIRST step it emits so per-step
       // costs sum to the run cost (a tool call's cost lands on the tool_use
       // that the model turn issued — exactly where the optimizer charges it).
       let tokensToAttach: StepTokens | undefined;
-      if (msg.usage && msg.model) {
+      // `<synthetic>` messages are harness-generated (API errors, interrupts) —
+      // never billed.
+      if (msg.usage && msg.model && msg.model !== '<synthetic>') {
         const key = obj.requestId ?? obj.uuid ?? `${obj.timestamp}`;
         if (!seenUsageKeys.has(key)) {
           seenUsageKeys.add(key);
           hasUsage = true;
           const u = toUsage(msg.usage);
           usageByModel[msg.model] = addUsage(usageByModel[msg.model] ?? emptyUsage(), u);
+          // Advisor-tool calls run another model inside this request and bill
+          // separately (measured: ~$27 on one $500 session, invisible before).
+          for (const it of msg.usage.iterations ?? []) {
+            if (it.type !== 'advisor_message' || !it.model) continue;
+            const au = toUsage(it);
+            usageByModel[it.model] = addUsage(usageByModel[it.model] ?? emptyUsage(), au);
+            models.add(it.model);
+          }
           tokensToAttach = {
             input: u.inputTokens,
             output: u.outputTokens,
             cacheCreation: u.cacheCreationInputTokens,
+            cacheCreation1h: u.cacheCreation1hInputTokens,
             cacheRead: u.cacheReadInputTokens,
           };
+          const thinking = msg.usage.output_tokens_details?.thinking_tokens ?? 0;
+          if (thinking > 0) tokensToAttach.thinking = thinking;
+          const iters = (msg.usage.iterations ?? []).filter((it) => it.type === 'message');
+          const last = iters[iters.length - 1];
+          tokensToAttach.context = last
+            ? (last.input_tokens ?? 0) + (last.cache_creation_input_tokens ?? 0) + (last.cache_read_input_tokens ?? 0)
+            : u.inputTokens + u.cacheCreationInputTokens + u.cacheReadInputTokens;
         }
       }
       const pushAssistantStep = (step: RawStep) => {
@@ -237,5 +354,9 @@ export function parseTranscript(
     steps,
     firstPrompt,
     finalOutput,
+    ...(instructions.size ? { instructions: [...instructions.values()] } : {}),
+    ...((customTitle ?? title) ? { title: (customTitle ?? title)!.slice(0, 120) } : {}),
+    ...(events.length ? { events } : {}),
+    ...(sideRequests ? { subagents: { count: sideAgents.size || 1, requests: sideRequests, costUsd: sideUsd } } : {}),
   };
 }

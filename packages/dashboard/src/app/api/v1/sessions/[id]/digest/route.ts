@@ -125,7 +125,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       return Response.json({ brief, ai: null, error: 'AI digests need OPENROUTER_API_KEY on the server' }, { status: 501 });
     }
     try {
-      const text = await callOpenRouter(MODEL, digestPrompt(renderBriefText(brief)), { maxTokens: 1200, timeoutMs: 50_000 });
+      const text = await callOpenRouter(MODEL, digestPrompt(renderBriefText(brief)), { maxTokens: 5_000, timeoutMs: 55_000, reasoning: { max_tokens: 3_000, exclude: true } });
       ai = parseAiDigest(text) ?? undefined;
       if (!ai) return Response.json({ brief, ai: null, error: 'model returned unparseable digest' }, { status: 502 });
     } catch (err) {

@@ -14,7 +14,12 @@ export function hasOpenRouterKey(): boolean {
 export async function callOpenRouter(
   model: string,
   input: string,
-  opts: { maxTokens?: number; timeoutMs?: number } = {},
+  opts: {
+    maxTokens?: number;
+    timeoutMs?: number;
+    /** OpenRouter's unified reasoning control. Claude requires maxTokens > the reasoning budget. */
+    reasoning?: { effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; max_tokens?: number; exclude?: boolean };
+  } = {},
 ): Promise<string> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error('OPENROUTER_API_KEY not set');
@@ -32,6 +37,7 @@ export async function callOpenRouter(
         model,
         messages: [{ role: 'user', content: input }],
         max_tokens: opts.maxTokens ?? 1024,
+        ...(opts.reasoning ? { reasoning: opts.reasoning } : {}),
       }),
       signal: ctl.signal,
     });

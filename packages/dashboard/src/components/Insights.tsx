@@ -118,8 +118,37 @@ interface TaskMixEntry {
   share: number;
 }
 
+interface PlanItem {
+  id: string;
+  title: string;
+  evidence: string;
+  savingsUsd: { low: number; high: number } | null;
+  basis: 'measured' | 'simulated' | 'structural' | 'needs-ab';
+  files: { path: string; content: string; note?: string }[];
+}
+
+interface ContextAnalysis {
+  costUsd: number;
+  spend: { outputUsd: number; thinkingUsd: number; cacheReadUsd: number; cacheWriteUsd: number; uncachedUsd: number; sideModelUsd: number };
+  rent: { baseUsd: number; byKind: Record<string, number>; topTools: { tool: string; usd: number }[] };
+  calibration: number;
+  coldRewrites: { count: number; penaltyUsd: number };
+  instructionsTokens: number;
+  compaction: { threshold: number | null; calibration: number };
+  plan: PlanItem[];
+  legacyRuns?: number;
+  reasons?: { reason: string; requests: number; costUsd: number; share: number; avgContext: number }[];
+  law?: { baseTokens: number; depositPerRequest: number; compactionCostUsd: number; eoqThreshold: number; fitR2: number; aboveThresholdShare: number } | null;
+  drivers?: { requests: number; context: number; price: number } | null;
+  expensive?: { runId: string; title?: string; startedAt?: string; costUsd: number; requestsX: number; contextX: number; priceX: number; dominant: string; topReason: string; topReasonShare: number; delivered?: boolean }[];
+  outcomes?: { commits: number; pushes: number; prs: number; denials: number; deliveringSessions: number; costPerDeliveringSessionUsd: number | null; coverage: number };
+  determinism?: Record<'reason' | 'action', { testDecisions: number; testSessions: number; coverage80: number; precision80: number; spendShare80: number; explained: number; reliable: boolean } | null>;
+  loop?: { lever: string; adoptedAt: string; before: number; after: number; metric: string; metricBefore: number; metricAfter: number; costPerRequestBefore: number; costPerRequestAfter: number; qualityOk: boolean; status: string; realizedUsd: number }[];
+}
+
 interface AgentInsight {
   agentId: string;
+  profile?: 'repetitive' | 'interactive';
   runCount: number;
   window: number;
   clusters: number;
@@ -129,6 +158,7 @@ interface AgentInsight {
   totalEstUsd: number;
   opportunities: Opportunity[];
   ledger?: Ledger;
+  analysis?: ContextAnalysis;
   determinism?: DeterminismInsight[];
   taskMix?: TaskMixEntry[];
   predictability?: Predictability;
@@ -403,15 +433,13 @@ const ROW_CAP = 5;
 function LedgerPanel({ ledger }: { ledger: Ledger }) {
   const pct = (v: number) => (ledger.totalUsd > 0 ? ` · ${((v / ledger.totalUsd) * 100).toFixed(1)}%` : '');
   const SLICES: { label: string; value: number; hint: string }[] = [
-    { label: 'Cache misses', value: ledger.slices.cacheMissUsd, hint: 'Input tokens re-billed at full price that a stable prompt prefix would have served at the 0.1× cache-read rate. Upper bound: context compaction legitimately cold-starts the cache.' },
     { label: 'Error recovery', value: ledger.slices.errorRecoveryUsd, hint: `Spend on the recovery tail after failed tool calls (${ledger.errorCount} errors in the window).` },
-    { label: 'Dead context', value: ledger.slices.deadContextUsd, hint: 'Large tool results carried through later LLM calls after the last step that referenced their content. Priced at the run’s measured cache-blended input rate — good caching makes this cheap in dollars, but it still bloats the context window.' },
     { label: 'Redundant calls', value: ledger.slices.redundantUsd, hint: 'Identical read-only calls repeated within one run with identical answers — the repeats bought nothing.' },
   ];
   return (
     <div style={{ margin: '12px 0' }}>
       <div className="panel-sub" style={{ marginBottom: 6 }}>
-        Where the spend goes — {usd(ledger.totalUsd)} over {ledger.runCount} runs · cache hit rate{' '}
+        Errors and repeats over {ledger.runCount} runs · cache hit rate{' '}
         <span className="tnum">{(ledger.cacheHitRate * 100).toFixed(1)}%</span>
         {ledger.cacheApparentlyDisabledRuns > 0 && (
           <span style={{ color: 'var(--warn, #eb6834)' }}> · caching looks OFF in {ledger.cacheApparentlyDisabledRuns} run{ledger.cacheApparentlyDisabledRuns === 1 ? '' : 's'}</span>
@@ -431,10 +459,166 @@ function LedgerPanel({ ledger }: { ledger: Ledger }) {
           <code>{ledger.topErrorLoops[0].tool}</code> — “{ledger.topErrorLoops[0].preview.slice(0, 70)}…”
         </div>
       )}
-      {ledger.topDeadContext[0] && (
-        <div className="foot-note" style={{ marginTop: 2 }}>
-          Biggest dead result: a <code>{ledger.topDeadContext[0].tool}</code> output (~{ledger.topDeadContext[0].estTokens.toLocaleString()} tokens)
-          carried through {ledger.topDeadContext[0].deadCalls} calls after its last use.
+    </div>
+  );
+}
+
+const REASON_LABEL: Record<string, string> = {
+  act: 'editing / acting', explore: 'exploring', verify: 'verifying', deliver: 'shipping', respond: 'answering',
+  recover: 'recovering from errors', wait: 'waiting / polling', delegate: 'delegating',
+};
+
+const BASIS: Record<PlanItem['basis'], { label: string; hint: string; color: string }> = {
+  measured: { label: 'measured', hint: 'An identity over observed spend — no model, no assumption.', color: 'var(--ok, #00a37a)' },
+  simulated: { label: 'simulated', hint: 'Trace-replay counterfactual, calibrated against observed cost (shown).', color: 'var(--accent, #0b84ff)' },
+  structural: { label: 'if adopted', hint: 'A bound that holds if the agent follows the change — confirm with a before/after window.', color: 'var(--warn, #eb6834)' },
+  'needs-ab': { label: 'needs A/B', hint: 'The mechanism is real; its size can only be learned live.', color: 'var(--txt-3)' },
+};
+
+/**
+ * Context rent + the compiled plan. The spend bar is the measured anatomy (what
+ * the money physically paid for); the plan is what Effigent would WRITE into the
+ * harness — each item priced, labelled by its evidence, with the file attached.
+ */
+function ContextPanel({ a }: { a: ContextAnalysis }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const allLegacy = (a.legacyRuns ?? 0) > 0 && a.costUsd === 0;
+  const s = a.spend;
+  const parts = [
+    { k: 'Re-reading context', v: s.cacheReadUsd, c: '#7c5cff', hint: 'Cache reads: everything already in the window, re-read on every request.' },
+    { k: 'Writing context', v: s.cacheWriteUsd + s.uncachedUsd, c: '#0b84ff', hint: 'New tokens written to the prompt cache (1-hour writes cost 2× input).' },
+    { k: 'Side model', v: s.sideModelUsd, c: '#f5a623', hint: 'Usage outside the main requests — on Claude Code, advisor-tool iterations.' },
+    { k: 'Generating', v: s.outputUsd + s.thinkingUsd, c: '#00a37a', hint: 'Output + thinking: the only part that is the model actually producing something.' },
+  ];
+  const total = parts.reduce((t, p) => t + p.v, 0) || 1;
+  const rentRows = [
+    ['base context', a.rent.baseUsd],
+    ...Object.entries(a.rent.byKind).map(([k, v]) => [k.replace('_', ' '), v] as [string, number]),
+  ].filter(([, v]) => (v as number) > 0.005).sort((x, y) => (y[1] as number) - (x[1] as number)) as [string, number][];
+  return (
+    <div style={{ margin: '12px 0' }}>
+      {!allLegacy && <>
+      <div className="panel-sub" style={{ marginBottom: 6 }}>
+        What the money paid for — {usd(a.costUsd)}
+        <span style={{ color: 'var(--txt-3)' }} title="Context rent reproduces observed cache-read spend; 1.000 = exact.">
+          {' '}· rent identity {a.calibration.toFixed(3)}
+        </span>
+      </div>
+      <div style={{ display: 'flex', height: 14, borderRadius: 4, overflow: 'hidden' }}>
+        {parts.map((p) => (
+          <div key={p.k} title={`${p.k}: ${usd(p.v)} — ${p.hint}`} style={{ width: `${(100 * p.v) / total}%`, background: p.c }} />
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 6, fontSize: 12 }}>
+        {parts.map((p) => (
+          <span key={p.k} title={p.hint} style={{ cursor: 'help' }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, background: p.c, borderRadius: 2, marginRight: 4 }} />
+            {p.k} <span className="tnum" style={{ fontWeight: 700 }}>{((100 * p.v) / total).toFixed(0)}%</span>
+          </span>
+        ))}
+      </div>
+      <div className="foot-note" style={{ marginTop: 6 }}>
+        Re-reading, by what it re-reads: {rentRows.map(([k, v]) => `${k} ${usd(v)}`).join(' · ')}
+        {a.instructionsTokens > 0 && <> · CLAUDE.md is {Math.round(a.instructionsTokens / 1000)}k tokens</>}
+        {a.coldRewrites.count > 0 && <> · {a.coldRewrites.count} cache expiries cost {usd(a.coldRewrites.penaltyUsd)}</>}
+      </div>
+      </>}
+
+      {(a.reasons?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+          <span className="panel-sub" style={{ marginRight: 4 }}>Requests were for:</span>
+          {a.reasons!.slice(0, 7).map((r) => (
+            <span key={r.reason} className="chip" title={`${r.requests} requests, made from ${Math.round(r.avgContext / 1000)}k tokens of context on average`}>
+              {REASON_LABEL[r.reason] ?? r.reason} <span className="tnum" style={{ fontWeight: 700 }}>{(r.share * 100).toFixed(0)}%</span>
+              <span style={{ color: 'var(--txt-3)' }}> @{Math.round(r.avgContext / 1000)}k</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {a.law && (
+        <div className="foot-note" style={{ marginTop: 8 }} title="Fitted per agent: cost ≈ read·(B·N + d·N²/2) + write·(B + d·N). EOQ: the compaction point where carrying context stops being cheaper than compacting.">
+          Session cost grows with the square of its length here (fit R² {a.law.fitR2.toFixed(2)}): {Math.round(a.law.baseTokens / 1000)}k base
+          + {a.law.depositPerRequest.toLocaleString()} tokens per request. {Math.round(a.law.aboveThresholdShare * 100)}% of re-reading happens above
+          {' '}{Math.round(a.law.eoqThreshold / 1000)}k, the point where compacting (≈{usd(a.law.compactionCostUsd)}) becomes cheaper than carrying.
+          {a.drivers && <> Differences between sessions come {Math.round(a.drivers.requests * 100)}% from length, {Math.round(a.drivers.context * 100)}% from context size.</>}
+        </div>
+      )}
+      {a.determinism?.reason && (
+        <div className="foot-note" style={{ marginTop: 8 }} title="A cheap model learns this agent's decisions from its earlier sessions and is scored on later ones. Predicted-at-≥80%-confidence decisions are the ones deterministic code could take.">
+          Determinism, measured on {a.determinism.reason.testSessions} later sessions ({a.determinism.reason.testDecisions.toLocaleString()} decisions):
+          {' '}{(a.determinism.reason.coverage80 * 100).toFixed(1)}% of next steps are predictable at ≥80% confidence
+          ({(a.determinism.reason.precision80 * 100).toFixed(0)}% right), carrying {(a.determinism.reason.spendShare80 * 100).toFixed(1)}% of spend;
+          {' '}exact actions {a.determinism.action ? `${(a.determinism.action.coverage80 * 100).toFixed(1)}%` : 'not measurable yet'}.
+          {' '}History explains {(a.determinism.reason.explained * 100).toFixed(0)}% of the uncertainty about what comes next.
+          {!a.determinism.reason.reliable && <span style={{ color: 'var(--warn, #eb6834)' }}> Too few later sessions to trust yet — the confident predictions were not reliably right.</span>}
+        </div>
+      )}
+      {a.outcomes && a.outcomes.coverage > 0 && (
+        <div className="foot-note" style={{ marginTop: 4 }}>
+          Delivered: {a.outcomes.commits} commits, {a.outcomes.pushes} pushes, {a.outcomes.prs} PR actions across {a.outcomes.deliveringSessions} sessions
+          {a.outcomes.costPerDeliveringSessionUsd != null && <> · {usd(a.outcomes.costPerDeliveringSessionUsd)} per delivering session</>}
+          {a.outcomes.denials > 0 && <> · {a.outcomes.denials} tool calls denied</>}.
+        </div>
+      )}
+      {(a.expensive?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div className="panel-sub" style={{ marginBottom: 4 }}>Why the most expensive sessions cost what they did</div>
+          {a.expensive!.map((e) => (
+            <div key={e.runId} className="foot-note" style={{ marginTop: 2 }}>
+              <span className="tnum" style={{ fontWeight: 700 }}>{usd(e.costUsd)}</span> {e.title ? `“${e.title}”` : <code>{e.runId.slice(0, 8)}</code>} —{' '}
+              {e.requestsX.toFixed(1)}× the median session’s requests, {e.contextX.toFixed(1)}× its context; {Math.round(e.topReasonShare * 100)}% spent on {REASON_LABEL[e.topReason] ?? e.topReason}{e.delivered === false ? '; nothing committed or pushed' : e.delivered ? '; delivered (commit/push/PR)' : ''}.
+            </div>
+          ))}
+        </div>
+      )}
+      {(a.loop?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div className="panel-sub" style={{ marginBottom: 4 }}>Changes detected in effect</div>
+          {a.loop!.map((o) => (
+            <div key={o.lever} className="foot-note" style={{ marginTop: 2 }}>
+              <b>{o.lever}</b> since {new Date(o.adoptedAt).toLocaleDateString()} — {o.status}: {o.metric} {o.metricBefore.toLocaleString()} → {o.metricAfter.toLocaleString()},
+              {' '}cost/request ${o.costPerRequestBefore.toFixed(3)} → ${o.costPerRequestAfter.toFixed(3)} ({o.before} sessions before, {o.after} after{o.qualityOk ? '' : '; errors or interruptions rose'}).
+            </div>
+          ))}
+        </div>
+      )}
+      {(a.legacyRuns ?? 0) > 0 && a.costUsd === 0 && (
+        <div className="foot-note" style={{ marginTop: 8 }}>
+          These sessions were captured before context size was recorded. Run <code>effigent sync --force --days 90</code> on the agent’s machine to re-upload them with the current CLI.
+        </div>
+      )}
+
+      {a.plan.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div className="panel-sub" style={{ marginBottom: 6 }}>Compiled plan — changes Effigent would write into the harness</div>
+          {a.plan.map((p) => {
+            const b = BASIS[p.basis];
+            return (
+              <div key={p.id} style={{ border: '1px solid var(--line, #2a2a33)', borderRadius: 6, padding: '8px 10px', marginBottom: 6 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <span title={b.hint} style={{ fontSize: 11, color: b.color, border: `1px solid ${b.color}`, borderRadius: 3, padding: '0 4px', cursor: 'help' }}>{b.label}</span>
+                  <span style={{ fontWeight: 600 }}>{p.title}</span>
+                  {p.savingsUsd && (
+                    <span className="tnum" style={{ marginLeft: 'auto', fontWeight: 700 }}>
+                      {usd(p.savingsUsd.low)}–{usd(p.savingsUsd.high)}
+                    </span>
+                  )}
+                </div>
+                <div className="foot-note" style={{ marginTop: 4 }}>{p.evidence}</div>
+                {p.files.length > 0 && (
+                  <button className="chip" style={{ marginTop: 6, cursor: 'pointer' }} onClick={() => setOpen(open === p.id ? null : p.id)}>
+                    {open === p.id ? 'Hide' : 'Show'} {p.files.map((f) => f.path).join(', ')}
+                  </button>
+                )}
+                {open === p.id && p.files.map((f) => (
+                  <div key={f.path} style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 11, color: 'var(--txt-3)' }}><code>{f.path}</code>{f.note ? ` — ${f.note}` : ''}</div>
+                    <pre style={{ fontSize: 11, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8, background: 'var(--bg-2, #111)', borderRadius: 4 }}>{f.content}</pre>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -657,7 +841,9 @@ export function Insights({ agent }: { agent: string }) {
             <div>
               <div className="mono-name" style={{ fontSize: 14 }}>{a.agentId}</div>
               <div className="panel-sub">
-                last {a.runCount} runs · {a.clusters} pattern{a.clusters === 1 ? '' : 's'} covering {a.coverage}% · determinism {a.meanScore}/100
+                {a.profile === 'interactive' && a.analysis
+                  ? <>last {a.runCount} runs · {usd(a.analysis.costUsd)} · interactive agent · determinism {a.analysis.determinism?.reason ? `${(a.analysis.determinism.reason.coverage80 * 100).toFixed(1)}% (${a.analysis.determinism.reason.reliable ? 'measured' : 'low sample'})` : 'n/a'}</>
+                  : <>last {a.runCount} runs · {a.clusters} pattern{a.clusters === 1 ? '' : 's'} covering {a.coverage}% · determinism {a.meanScore}/100</>}
                 {a.drift?.changed && (
                   <span
                     style={{ color: 'var(--warn, #eb6834)', marginLeft: 8 }}
@@ -669,19 +855,33 @@ export function Insights({ agent }: { agent: string }) {
               </div>
             </div>
             <div className="ins-save">
+              {a.profile === 'interactive' && a.analysis ? (() => {
+                // the best single priced change (items are alternatives, never summed)
+                const top = a.analysis.plan.filter((p) => p.savingsUsd).sort((x, y) => y.savingsUsd!.high - x.savingsUsd!.high)[0];
+                return top ? <>
+                  <span className="ins-save-v tnum">{usd(top.savingsUsd!.low)}–{usd(top.savingsUsd!.high)}</span>
+                  <span className="ins-save-k">largest single change</span>
+                </> : <><span className="ins-save-v tnum">—</span><span className="ins-save-k">no priced change yet</span></>;
+              })() : <>
               <span className="ins-save-v tnum">{usd(a.totalEstUsd)}</span>
               <span className="ins-save-k">est. removable cost</span>
+              </>}
             </div>
           </div>
 
           <RouteTest agent={a.agentId} />
 
-          {(a.taskMix?.length ?? 0) > 0 && <TaskMixLine taskMix={a.taskMix!} />}
+          {!a.analysis?.reasons?.length && (a.taskMix?.length ?? 0) > 0 && <TaskMixLine taskMix={a.taskMix!} />}
+
+          {a.analysis && <ContextPanel a={a.analysis} />}
 
           {a.ledger && <LedgerPanel ledger={a.ledger} />}
 
           <AnalystPanel agentId={a.agentId} />
 
+          {/* Shape miners + the determinism lattice apply to REPETITIVE agents only; on
+              interactive traffic their verdicts were measured as noise (docs/context-rent.md). */}
+          {a.profile !== 'interactive' && (<>
           {(a.determinism?.length ?? 0) > 0 && <DeterminismPanel insights={a.determinism!} predictability={a.predictability} />}
 
           {a.opportunities.length === 0 && ((a.segments?.length ?? 0) > 0 || (a.subtrees?.length ?? 0) > 0) && (
@@ -834,6 +1034,7 @@ export function Insights({ agent }: { agent: string }) {
               )}
             </div>
           )}
+          </>)}
         </section>
       ))}
     </div>
