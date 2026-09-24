@@ -35,7 +35,7 @@ import {
 import { uploadSessionFile } from './upload.js';
 
 const program = new Command();
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 // Tool INJECTION (installing skills/bundles/AGENTS.md sections and the
 // auto-refresh SessionStart hook) is OFF for the insights-only POC — Effigent
 // captures runs and surfaces analysis in the dashboard, but never modifies how
@@ -252,6 +252,11 @@ program
     'DANGER: also upload unattributed sessions (everything on this machine). ' +
       'Default is attributed-only: a session uploads only when a tag or agentRule claims it.',
   )
+  .option(
+    '--force',
+    're-upload sessions already synced (the server replaces its copy) — use after a CLI/parser ' +
+      'upgrade so older sessions get the new capture fields. Attribution rules still apply.',
+  )
   .action(async (opts) => {
     const config = loadConfig();
     const server: string | undefined = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
@@ -295,7 +300,7 @@ program
     let uploaded = 0;
     let skipped = 0;
     for (const s of sessions) {
-      if (state[s.sessionId] && state[s.sessionId] >= s.mtimeMs) {
+      if (!opts.force && state[s.sessionId] && state[s.sessionId] >= s.mtimeMs) {
         skipped++;
         continue;
       }

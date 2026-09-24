@@ -49,5 +49,5 @@ effigent run --agent nightly-etl -- node etl.js
 | `effigent agent list` | List agents registered from this machine |
 | `effigent install <harness>` | Wire capture: `claude`, `codex`, `python`, `node`, `otel` |
 | `effigent run --agent <name> -- <cmd…>` | Run any agent command with capture + attribution |
-| `effigent sync` | Upload local Claude Code sessions in batch |
+| `effigent sync` | Upload local Claude Code sessions in batch (subagent transcripts ride along; `--force` re-uploads sessions already synced, e.g. after a CLI upgrade) |
 | `effigent doctor` | Check your local setup |
