@@ -362,3 +362,22 @@ repetitive batch agents, which is exactly where the D0–D5 engine applies. Rent
 attribution below the request level splits a measured Δ by characters; the split is
 approximate, the total is exact. The simulator does not model quality, or any change
 in behaviour beyond re-acquisition. Compaction n = 26.
+
+## The summary layer (what a person reads first)
+
+`summary.ts` decides what is worth saying and says it in dollars per month (window spend
+× 30 / window days, window ≥ 7 days). Findings appear only when material (≥3% of spend or
+a ≥1.5× shift). Two findings were added from the data:
+
+- **Spend concentration.** The top 10% of sessions carry 40–73% of each agent's spend.
+- **Breaks.** A return to a 150k+ session after the 1-hour cache expired re-writes the
+  whole context. Agent A: 105 returns, $379 paid, ≈$79 avoidable by compacting first.
+  Agent B: $248 paid, ≈$143 avoidable.
+- **Context creep.** Agent A's CLAUDE.md grew 16 KB → 249 KB in five weeks (its own
+  "document every incident" rule). The base context rose 63k → 143k tokens, +$0.04 on
+  every request. Detected from base-context growth between the older and newer half of the
+  window, with instruction-file sizes as the named cause.
+
+The trend compares the older and newer half of the sessions rather than single weeks.
+Weekly cost per request swings with the session mix: single-week comparisons produced a
+"+94%" on agent C that the halves do not support.

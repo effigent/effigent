@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ALL_AGENTS } from '../data.ts';
 import { RouteTest } from './RouteTest.tsx';
+import { AgentSummary, type AgentSummaryData } from './AgentSummary.tsx';
 
 interface Opportunity {
   index: number;
@@ -136,6 +137,7 @@ interface ContextAnalysis {
   instructionsTokens: number;
   compaction: { threshold: number | null; calibration: number };
   plan: PlanItem[];
+  summary?: AgentSummaryData;
   legacyRuns?: number;
   reasons?: { reason: string; requests: number; costUsd: number; share: number; avgContext: number }[];
   law?: { baseTokens: number; depositPerRequest: number; compactionCostUsd: number; eoqThreshold: number; fitR2: number; aboveThresholdShare: number } | null;
@@ -480,7 +482,7 @@ const BASIS: Record<PlanItem['basis'], { label: string; hint: string; color: str
  * the money physically paid for); the plan is what Effigent would WRITE into the
  * harness — each item priced, labelled by its evidence, with the file attached.
  */
-function ContextPanel({ a }: { a: ContextAnalysis }) {
+function ContextPanel({ a, showPlan = true }: { a: ContextAnalysis; showPlan?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   const allLegacy = (a.legacyRuns ?? 0) > 0 && a.costUsd === 0;
   const s = a.spend;
@@ -588,7 +590,7 @@ function ContextPanel({ a }: { a: ContextAnalysis }) {
         </div>
       )}
 
-      {a.plan.length > 0 && (
+      {showPlan && a.plan.length > 0 && (
         <div style={{ marginTop: 12 }}>
           <div className="panel-sub" style={{ marginBottom: 6 }}>Compiled plan — changes Effigent would write into the harness</div>
           {a.plan.map((p) => {
@@ -794,13 +796,30 @@ export function Insights({ agent }: { agent: string }) {
 
   const totalUsd = data.reduce((s, a) => s + a.totalEstUsd, 0);
   const totalOpps = data.reduce((s, a) => s + a.opportunities.length, 0);
+  // Context-economics totals: spend, pace, and the best single change per agent (summed
+  // across agents — within one agent, changes overlap and are never added together).
+  const withSummary = data.filter((a) => a.analysis?.summary);
+  const spendTotal = withSummary.reduce((s, a) => s + a.analysis!.summary!.window.spendUsd, 0);
+  const monthTotal = withSummary.reduce((s, a) => s + a.analysis!.summary!.window.perMonthUsd, 0);
+  const bestTotal = withSummary.reduce((s, a) => {
+    const b = a.analysis!.summary!.actions.find((x) => x.perMonthUsd);
+    return b ? { low: s.low + b.perMonthUsd!.low, high: s.high + b.perMonthUsd!.high } : s;
+  }, { low: 0, high: 0 });
 
   return (
     <div className="page-stack">
       <div className="sess-totals">
         <div className="totstat"><span className="k">Agents analyzed</span><span className="v tnum">{data.length}</span></div>
-        <div className="totstat"><span className="k">Opportunities</span><span className="v tnum">{totalOpps}</span></div>
-        <div className="totstat"><span className="k">Est. removable spend</span><span className="v tnum">{usd(totalUsd)}</span></div>
+        {withSummary.length > 0 ? <>
+          <div className="totstat"><span className="k">Spend analysed</span><span className="v tnum">{usd(spendTotal)}</span></div>
+          <div className="totstat"><span className="k">Pace</span><span className="v tnum">≈{usd(monthTotal)}/mo</span></div>
+          <div className="totstat" title="The top priced change for each agent, added across agents. Within one agent the changes overlap, so they are never summed.">
+            <span className="k">Top change per agent</span><span className="v tnum" style={{ color: 'var(--green)' }}>{usd(bestTotal.low)}–{usd(bestTotal.high)}/mo</span>
+          </div>
+        </> : <>
+          <div className="totstat"><span className="k">Opportunities</span><span className="v tnum">{totalOpps}</span></div>
+          <div className="totstat"><span className="k">Est. removable spend</span><span className="v tnum">{usd(totalUsd)}</span></div>
+        </>}
         <div className="totstat"><span className="k">Analysis window</span><span className="v tnum">{windowN} runs</span></div>
         <div className="totstat">
           <span className="k">{ranAt ? 'Last analysed' : 'Not analysed yet'}</span>
@@ -842,7 +861,7 @@ export function Insights({ agent }: { agent: string }) {
               <div className="mono-name" style={{ fontSize: 14 }}>{a.agentId}</div>
               <div className="panel-sub">
                 {a.profile === 'interactive' && a.analysis
-                  ? <>last {a.runCount} runs · {usd(a.analysis.costUsd)} · interactive agent · determinism {a.analysis.determinism?.reason ? `${(a.analysis.determinism.reason.coverage80 * 100).toFixed(1)}% (${a.analysis.determinism.reason.reliable ? 'measured' : 'low sample'})` : 'n/a'}</>
+                  ? <>interactive agent · last {a.runCount} sessions{a.analysis.determinism?.reason ? ` · ${(a.analysis.determinism.reason.coverage80 * 100).toFixed(1)}% of next steps predictable${a.analysis.determinism.reason.reliable ? '' : ' (low sample)'}` : ''}</>
                   : <>last {a.runCount} runs · {a.clusters} pattern{a.clusters === 1 ? '' : 's'} covering {a.coverage}% · determinism {a.meanScore}/100</>}
                 {a.drift?.changed && (
                   <span
@@ -856,11 +875,11 @@ export function Insights({ agent }: { agent: string }) {
             </div>
             <div className="ins-save">
               {a.profile === 'interactive' && a.analysis ? (() => {
-                // the best single priced change (items are alternatives, never summed)
-                const top = a.analysis.plan.filter((p) => p.savingsUsd).sort((x, y) => y.savingsUsd!.high - x.savingsUsd!.high)[0];
+                // the best single priced change, per month (changes overlap — never summed)
+                const top = a.analysis.summary?.actions.find((x) => x.perMonthUsd);
                 return top ? <>
-                  <span className="ins-save-v tnum">{usd(top.savingsUsd!.low)}–{usd(top.savingsUsd!.high)}</span>
-                  <span className="ins-save-k">largest single change</span>
+                  <span className="ins-save-v tnum">{usd(top.perMonthUsd!.low)}–{usd(top.perMonthUsd!.high)}</span>
+                  <span className="ins-save-k">per month · top change</span>
                 </> : <><span className="ins-save-v tnum">—</span><span className="ins-save-k">no priced change yet</span></>;
               })() : <>
               <span className="ins-save-v tnum">{usd(a.totalEstUsd)}</span>
@@ -869,6 +888,16 @@ export function Insights({ agent }: { agent: string }) {
             </div>
           </div>
 
+          {a.profile === 'interactive' && a.analysis?.summary ? <>
+            <AgentSummary s={a.analysis.summary} />
+            <AnalystPanel agentId={a.agentId} />
+            <details className="sum-details">
+              <summary>How this was measured — spend breakdown, request mix, predictability, the cost law, changes in effect</summary>
+              <ContextPanel a={a.analysis} showPlan={false} />
+              {a.ledger && <LedgerPanel ledger={a.ledger} />}
+              <RouteTest agent={a.agentId} />
+            </details>
+          </> : <>
           <RouteTest agent={a.agentId} />
 
           {!a.analysis?.reasons?.length && (a.taskMix?.length ?? 0) > 0 && <TaskMixLine taskMix={a.taskMix!} />}
@@ -878,6 +907,7 @@ export function Insights({ agent }: { agent: string }) {
           {a.ledger && <LedgerPanel ledger={a.ledger} />}
 
           <AnalystPanel agentId={a.agentId} />
+          </>}
 
           {/* Shape miners + the determinism lattice apply to REPETITIVE agents only; on
               interactive traffic their verdicts were measured as noise (docs/context-rent.md). */}

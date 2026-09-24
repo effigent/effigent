@@ -17,6 +17,7 @@ import { analyzePredictability } from '@/lib/engine/entropy.ts';
 import { loadRun } from '@/lib/storage.ts';
 import { runCostUsd } from '@/lib/engine/cost.ts';
 import { analyzeAgent, type AgentAnalysis } from '@/lib/engine/plan.ts';
+import { summarizeAgent, type AgentSummary } from '@/lib/engine/summary.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
 export const dynamic = 'force-dynamic';
@@ -229,6 +230,19 @@ function wireAnalysis(a: AgentAnalysis) {
   };
 }
 
+/** The plain-language summary for the wire (dollars rounded; files kept — they are what to change). */
+function wireSummary(s: AgentSummary) {
+  const r = (v: number) => Number(v.toFixed(2));
+  return {
+    ...s,
+    window: { ...s.window, spendUsd: r(s.window.spendUsd), perMonthUsd: r(s.window.perMonthUsd) },
+    actions: s.actions.map((a) => ({ ...a, perMonthUsd: a.perMonthUsd && { low: r(a.perMonthUsd.low), high: r(a.perMonthUsd.high) } })),
+    findings: s.findings.map((f) => ({ ...f, perMonthUsd: f.perMonthUsd == null ? undefined : r(f.perMonthUsd) })),
+    sessions: s.sessions.map((x) => ({ ...x, costUsd: r(x.costUsd), requestsX: Number(x.requestsX.toFixed(1)), compactionSavesUsd: x.compactionSavesUsd == null ? null : r(x.compactionSavesUsd) })),
+    trend: { ...s.trend, weeks: s.trend.weeks.map((w) => ({ ...w, costUsd: r(w.costUsd), costPerRequest: Number(w.costPerRequest.toFixed(4)) })) },
+  };
+}
+
 /** Stable across windows: the same logical opportunity keeps its id. */
 /**
  * Trim the waste ledger for the wire. Slices are independent per-class
@@ -427,7 +441,8 @@ export async function GET(req: Request) {
         support: t.support, occurrences: t.occurrences, glueUsd: Number(t.glueUsd.toFixed(2)),
       })),
     };
-    const analysis = wireAnalysis(analyzeAgent(agentId, runs));
+    const agentAnalysis = analyzeAgent(agentId, runs);
+    const analysis = { ...wireAnalysis(agentAnalysis), summary: wireSummary(summarizeAgent(agentAnalysis, runs)) };
 
     const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
     // Which engine applies. Repetitive agents (runs cluster) get the determinism

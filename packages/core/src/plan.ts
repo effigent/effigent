@@ -50,6 +50,8 @@ export interface PlanFile {
 export interface PlanItem {
   id: string;
   title: string;
+  /** One plain sentence for the summary view (evidence holds the full numbers). */
+  summary: string;
   /** One-paragraph evidence statement with the numbers behind it. */
   evidence: string;
   /** Savings over the analysed window, low/high; null = not priced. */
@@ -357,6 +359,7 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     plan.push({
       id: 'recapture',
       title: 'Re-upload these sessions to unlock context analysis',
+      summary: 'These sessions were captured before context size was recorded. Run `effigent sync --force --days 90` on the agent’s machine.',
       evidence: `All ${legacyRuns} sessions in this window were captured before the 2026-09 parser, which did not record each request's true context size — so rent, compaction and exploration figures would be noise and are withheld. Run \`effigent sync --force --days 90\` on the machine that ran the agent to re-upload them with the current CLI (raw transcripts are not kept server-side; the server replaces its copy).`,
       savingsUsd: null,
       basis: 'measured',
@@ -368,6 +371,7 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     plan.push({
       id: 'spill-exploration',
       title: 'Run exploration in an isolated scout subagent',
+      summary: `${Math.round((100 * spill.burstRequests) / Math.max(1, spill.requests))}% of requests are lookups made from the full conversation; a scout subagent makes them from a small one and hands back only the findings.`,
       evidence: `${spill.burstRequests} of ${spill.requests} requests (${Math.round((100 * spill.burstRequests) / Math.max(1, spill.requests))}%) are read-only exploration bursts (${spill.bursts} bursts of ≥${MIN_BURST}) issued from the main context — each lookup re-reads the whole conversation. In a subagent the same lookups read a small context and only the findings come back. Net ${usd(spill.netUsd.fullReturn)}–${usd(spill.netUsd.measured)} (returning 100% vs the measured 55% of findings), after paying the subagent. Holds if the agent actually delegates — verify with a before/after window.`,
       savingsUsd: { low: spill.netUsd.fullReturn, high: spill.netUsd.measured },
       basis: 'structural',
@@ -406,7 +410,10 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     const high = compaction.savingsUsd[compaction.savingsUsd.length - 1]?.usd ?? 0;
     plan.push({
       id: 'compact-earlier',
-      title: `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of the ~${window / 1000}k default`,
+      title: `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of the ~${window >= 1_000_000 ? '1M' : `${window / 1000}k`} default`,
+      summary: laws.law
+        ? `${Math.round(100 * laws.law.aboveThresholdShare)}% of re-reading happens above ${Math.round(laws.law.eoqThreshold / 1000)}k tokens. Replaying every session, compacting at ${Math.round(compaction.threshold / 1000)}k saved money in all re-exploration scenarios measured.`
+        : `Replaying every session, compacting at ${Math.round(compaction.threshold / 1000)}k saved money in all re-exploration scenarios measured.`,
       evidence: `${laws.law ? `Session cost here follows cost ≈ p·(B·N + d·N²/2) (fit R² ${laws.law.fitR2.toFixed(2)}; base ${Math.round(laws.law.baseTokens / 1000)}k, +${laws.law.depositPerRequest} tokens/request), so long sessions are priced quadratically; ${Math.round(100 * laws.law.aboveThresholdShare)}% of re-reading happens above the economic compaction point (EOQ: ${Math.round(laws.law.eoqThreshold / 1000)}k, one compaction ≈ ${usd(laws.law.compactionCostUsd)}). ` : ''}Trace-replay of ${runs.length} sessions (simulator reproduces observed cost at ${(100 * compaction.calibratedUsd / Math.max(1e-9, compaction.observedUsd)).toFixed(1)}%) picks ${Math.round(compaction.threshold / 1000)}k: the threshold with the best expected savings that still saves money in every measured re-exploration scenario (${usd(low)} worst case, ${usd(high)} typical)${laws.law && Math.abs(laws.law.eoqThreshold - compaction.threshold) > 50_000 ? `. It sits above the EOQ point because compacting at ${Math.round(laws.law.eoqThreshold / 1000)}k loses money if re-exploration is at the costly end` : ''}. Not additive with the scout item (fewer sessions reach the threshold once exploration moves out). The simulator cannot see answer quality after compaction.`,
       savingsUsd: { low, high },
       basis: 'simulated',
@@ -424,6 +431,7 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     plan.push({
       id: 'advisor-cost',
       title: 'Advisor calls are an uncached second model',
+      summary: `${Math.round((100 * spend.sideModelUsd) / Math.max(1e-9, costUsd))}% of spend went to advisor calls, which re-send the transcript to a second model without caching.`,
       evidence: `${usd(spend.sideModelUsd)} (${Math.round((100 * spend.sideModelUsd) / Math.max(1e-9, costUsd))}% of spend) is usage outside the main requests — on Claude Code, advisor-tool iterations, which re-send the transcript to the advisor model with no cache reads. Whether the second opinion is worth it is your call; the setting is \`advisorModel\`.`,
       savingsUsd: null,
       basis: 'measured',
@@ -435,6 +443,7 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     plan.push({
       id: 'shrink-instructions',
       title: `CLAUDE.md is ${Math.round(instructionsTokens / 1000)}k tokens, re-read on every request`,
+      summary: `Re-reading CLAUDE.md on every request cost ${usd(instrRent)} (${Math.round((100 * instrRent) / Math.max(1e-9, costUsd))}% of spend). Keep an index in it and move rarely needed sections out, then compare a week before and after.`,
       evidence: `Instruction files are part of the base context: ${usd(instrRent)} of rent over ${reqsTotal} requests (${Math.round((100 * instrRent) / Math.max(1e-9, costUsd))}% of spend). Moving rarely-needed sections behind an index (or a UserPromptSubmit hook that injects only matching entries) removes most of it — but which entries the agent silently relies on is only learnable live: run it as an A/B on a window of sessions.`,
       savingsUsd: null,
       basis: 'needs-ab',
@@ -447,6 +456,7 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     plan.push({
       id: `command-${slug(c.template).slice(0, 24)}`,
       title: `Package a recurring command as a skill (${c.occurrences}× in ${c.runs} sessions)`,
+      summary: `The agent retyped \`${c.template.slice(0, 60)}${c.template.length > 60 ? '…' : ''}\` ${c.occurrences} times; a skill runs it the same way every time.`,
       evidence: `The agent retyped this command ${c.occurrences} times across ${c.runs} sessions${c.slots ? `, varying only ${c.slots} literal slot(s)` : ', identically'}. ${c.readOnly && !c.slots ? 'It is read-only, so the skill runs it deterministically at load (`!` injection) — no model tool call.' : 'It has side effects, so the skill is manual-invocation only.'} Small in dollars; it removes rediscovery.`,
       savingsUsd: null,
       basis: 'measured',
@@ -458,6 +468,7 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     plan.push({
       id: 'ship-skill',
       title: `"Commit, push and deploy" is a recurring intent (${ship.episodes}×)`,
+      summary: `${ship.episodes} asks to commit, push or deploy took ${(ship.requests / ship.episodes).toFixed(1)} requests each, with a different improvised sequence almost every time; a ship skill makes it about two.`,
       evidence: `${ship.episodes} episodes across ${ship.runs} sessions asked to commit/push/deploy — ${usd(ship.costUsd)} total, ${(ship.requests / ship.episodes).toFixed(1)} requests each, and the agent improvised a different command sequence almost every time. A skill that injects the repo state deterministically and fixes the procedure turns ~${Math.round(ship.requests / ship.episodes)} requests into ~2. Edit the deploy step to your project's real command.`,
       savingsUsd: { low: ship.costUsd * 0.5, high: ship.costUsd * (1 - 2 / Math.max(2, ship.requests / ship.episodes)) },
       basis: 'structural',

@@ -129,7 +129,13 @@ The data contract everything else depends on.
   earlier sessions, scored on later; `reliable` flag). Parser now keeps `Run.events`
   (commit/push/PR/deny/compact), `Run.subagents` (CLI uploads `<session>/subagents/*.jsonl`
   with the session), `RawStep.fullChars`, `Run.title` (scrubbed at ingest); `effigent
-  sync --force` re-uploads. Insights routes by `profile`: shape miners/D0–D5 only for repetitive agents.
+  sync --force` re-uploads. **`summary.ts`**: `summarizeAgent()` turns the analysis into what a
+  person reads first — one headline ($/month at the observed pace, trend + cause), actions
+  ranked by expected monthly value (plain `summary` line per plan item + its file), 3–4
+  finding cards (spend concentration, breaks that expire the cache, context creep,
+  CLAUDE.md size, long sessions, exploration, advisor), expensive sessions with what
+  compacting would have saved. Rendered by `components/AgentSummary.tsx`; technical detail
+  collapses under "How this was measured". Insights routes by `profile`: shape miners/D0–D5 only for repetitive agents.
   Surfaced as `analysis`
   in `/api/v1/insights` (cost re-priced via `runCostUsd`) + Insights' Compiled plan;
   sessions render `contextSkylineSvg` (graph-svg.ts).
@@ -355,7 +361,7 @@ auth inside the handlers):
 - `GET /api/v1/reports` — key validation (`effigent login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
 (types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/predictability/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/predictability/summary/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb
