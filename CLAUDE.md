@@ -41,7 +41,12 @@ The data contract everything else depends on.
   `RunGraph`.
 - **`transcript.ts`** — `parseTranscript()`: Claude Code JSONL → `Run` (returns null if no
   assistant turn / tool use). Per-request usage is deduped by requestId AND attributed to
-  the first step each request emits, so per-step costs sum to the run cost.
+  the first step each request emits, so per-step costs sum to the run cost. Also reads
+  the 1h cache-write split, thinking tokens, the TRUE per-request context (last
+  `usage.iterations` entry — top-level usage sums iterations), and advisor-tool
+  iterations (a second model, billed separately — 19% of spend on measured traffic).
+  User turns count as asks only when human-authored (`promptSource`/`origin.kind`;
+  shell echoes, compaction summaries, task notifications and `<synthetic>` are harness).
 - **`otel.ts`** — `otelToRuns()` + `normalizeGenAiUsage()`: OTLP GenAI spans → `Run[]`
   with per-step model/tokens/duration. Anthropic usage maps 1:1; OpenAI
   (`prompt_tokens` includes cached) is normalized to the uncached remainder.
@@ -50,7 +55,10 @@ The data contract everything else depends on.
   a canonical `labelSequence`, per-node `structLabel`/`valueHash`/`costUsd`, and
   heuristic dataflow edges.
 - **`cost.ts`** — `usageCostUsd(model, usage)`: regex-priced per model tier (unknown model
-  falls back to the sonnet tier — never zero, so a mis-guess only mildly mis-estimates).
+  falls back to the sonnet tier — never zero). Cache writes split 5m (1.25×) / 1h (2×) via
+  `TokenUsage.cacheCreation1hInputTokens`; per-model `cacheReadMult` (Fable 5.1 = 0.025×).
+  **Verified against Claude Code's own `cost-state`** (median ratio 0.999, 247 sessions;
+  `test/cost.test.ts`) — the pre-2026-09 table overstated spend 2.3× (all Opus at $15/$75).
 - **`taxonomy.ts`** — classifies tool names (unknown tools degrade to `side_effect`).
 - **`redact.ts`** — sensitive-data redaction, applied in the server's `persistParsedRun`
   (the single choke point both capture paths flow through) BEFORE storage/analysis:
@@ -97,6 +105,34 @@ The data contract everything else depends on.
   tests; sensitivity documented in the file header. Surfaced as `ledger` per
   agent in `/api/v1/insights` and the Insights view's "Where the spend goes"
   strip.
+- **`rent.ts`** — **context rent: the cost model for interactive agents
+  (docs/context-rent.md).** Everything that enters context pays rent (tokens × read
+  price) on every later request until a reset. `computeRentLedger(run)` decomposes
+  cache-read spend into base context + per-deposit rent (thinking/output exact, tool
+  results/user text by chars, remainder = harness) + cold rewrites + side models — an
+  identity that reproduces observed reads at 100.0% over 38k real requests.
+  `simulateCompaction` replays observed deposits under "compact at T" (calibration
+  100.8%); `recommendCompaction` picks the maximin threshold over measured
+  re-acquisition scenarios (null when none wins everywhere). Finding on interactive
+  coding traffic: 8.6% of spend is generation, 73% is carrying context; held-out
+  next-decision predictability is ~2% of decisions — compilation is for batch agents.
+  Research harness: `research/context-rent/`. **`plan.ts`** — `analyzeAgent()` = the
+  compiled plan: priced harness changes WITH the files to write (scout subagent,
+  autocompact override, recurring-command skills, ship skill, CLAUDE.md size, advisor
+  line), each labelled measured/simulated/structural/needs-ab. **`laws.ts`**: request
+  reasons (explore/act/verify/deliver/respond/recover/wait/delegate), the session law
+  cost ≈ p·(B·N+d·N²/2)+w·(B+d·N) (R² 0.92–0.98 on real agents), EOQ compaction
+  threshold, variance drivers, explained expensive sessions. **`loop.ts`**: detects
+  adoption of proposed changes from transcripts + before/after verdicts with a quality
+  guard (errors, interruptions, denials). **`predictability.ts`**: determinism for
+  EVERY agent = held-out predictability of next decisions (Witten–Bell, trained on
+  earlier sessions, scored on later; `reliable` flag). Parser now keeps `Run.events`
+  (commit/push/PR/deny/compact), `Run.subagents` (CLI uploads `<session>/subagents/*.jsonl`
+  with the session), `RawStep.fullChars`, `Run.title` (scrubbed at ingest); `effigent
+  sync --force` re-uploads. Insights routes by `profile`: shape miners/D0–D5 only for repetitive agents.
+  Surfaced as `analysis`
+  in `/api/v1/insights` (cost re-priced via `runCostUsd`) + Insights' Compiled plan;
+  sessions render `contextSkylineSvg` (graph-svg.ts).
 - **`actions.ts` + `episodes.ts` + `suggest.ts`** — **the semantic run IR + tool
   suggester.** The missing middle zoom level: structLabels collapse ~70% of a
   dev agent's calls into one opaque Bash label while raw values almost never
@@ -319,7 +355,7 @@ auth inside the handlers):
 - `GET /api/v1/reports` — key validation (`effigent login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
 (types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/predictability/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb
@@ -360,6 +396,8 @@ The prod dashboard reads prod Neon, which was wiped. To make the demo look popul
   PROD_DATABASE_URL=…  node scripts/seed-prod.mjs --ref <clerk_ref-substr>
   # cleanup:  delete from runs where session_id like 'seed-%';
   ```
+- **`scripts/recompute-run-costs.mjs`** — re-prices `runs.cost_usd` with the corrected
+  `cost.ts` (rows written before 2026-09 are ~2.3× high). Dry run by default; `--apply`.
 - **`scripts/mark-optimized.mjs`** — applies `agents.optimized_at` (migration 007),
   ensures an `agents` row per agent, and marks agents optimized so the indicator shows.
   ```

@@ -24,3 +24,6 @@ effigent-mvp-spec.md
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# research datasets are private session content — never commit
+research/**/*.json
