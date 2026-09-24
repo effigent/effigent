@@ -4030,16 +4030,16 @@ function clusterRuns(graphs) {
       l1,
       labelSequence: rs[0].labelSequence
     }));
-    const familyOf = clusterFamilies(shapes);
+    const familyOf2 = clusterFamilies(shapes);
     const familyRunCounts = /* @__PURE__ */ new Map();
     const familyModalRuns = /* @__PURE__ */ new Map();
     for (const [l1, rs] of byL1) {
-      const fam = familyOf.get(l1);
+      const fam = familyOf2.get(l1);
       familyRunCounts.set(fam, (familyRunCounts.get(fam) ?? 0) + rs.length);
       familyModalRuns.set(fam, Math.max(familyModalRuns.get(fam) ?? 0, rs.length));
     }
     for (const [l1, rs] of byL1) {
-      const fam = familyOf.get(l1);
+      const fam = familyOf2.get(l1);
       const modalPathFraction = (familyModalRuns.get(fam) ?? rs.length) / (familyRunCounts.get(fam) ?? rs.length);
       clusters.push({
         clusterId: `cl_${agentId.replace(/[^\w-]/g, "_")}_${l1.slice(0, 12)}`,
