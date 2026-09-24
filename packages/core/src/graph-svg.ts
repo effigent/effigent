@@ -7,6 +7,7 @@
 
 import type { RunGraph } from './types.js';
 import { classifyNode, type StepClass } from './taxonomy.js';
+import type { ContextPoint, DepositKind } from './rent.js';
 
 function esc(s: string): string {
   return s
@@ -89,4 +90,85 @@ export function runGraphSvg(graph: RunGraph, options: GraphSvgOptions = {}): str
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${parts.join('')}</svg>`;
+}
+
+// ---- the context skyline -----------------------------------------------------------
+
+
+/** Stack order bottom → top; colors picked to read on light and dark backgrounds. */
+export const SKYLINE_LAYERS: { key: 'base' | DepositKind; label: string; color: string }[] = [
+  { key: 'base', label: 'base (system + tools + CLAUDE.md)', color: '#8a8f98' },
+  { key: 'harness', label: 'harness injections', color: '#b9a36b' },
+  { key: 'user', label: 'user text', color: '#e0629a' },
+  { key: 'tool_result', label: 'tool output', color: '#0b84ff' },
+  { key: 'output', label: 'assistant text + edits', color: '#00a37a' },
+  { key: 'thinking', label: 'thinking', color: '#7c5cff' },
+];
+
+export interface SkylineOptions {
+  width?: number;
+  height?: number;
+  /** Simulated context per request under a policy (simulateCompaction trace). */
+  counterfactual?: number[];
+  /** Policy threshold line (tokens). */
+  threshold?: number;
+  /** Downsample to at most this many points (resets always kept). Default 500. */
+  maxPoints?: number;
+  /** Internal: the original request count when drawing a downsampled series. */
+  requestCount?: number;
+}
+
+/**
+ * Context size per request, stacked by what the context is made of. Area under
+ * the curve × read price IS the re-reading bill — the picture of context rent.
+ * Resets (compactions) show as cliffs; the dashed line is the same session
+ * replayed under the counterfactual policy.
+ */
+export function contextSkylineSvg(series: ContextPoint[], opts: SkylineOptions = {}): string {
+  const W = opts.width ?? 760, H = opts.height ?? 240, L = 48, R = 12, T = 10, B = 26;
+  if (series.length < 2) return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"></svg>`;
+  const nTotal = series.length;
+  const maxPts = opts.maxPoints ?? 500;
+  if (nTotal > maxPts) {
+    // stride-sample, but keep every reset and the point just before it so cliffs stay sharp
+    const stride = Math.ceil(nTotal / maxPts);
+    const keep = series.map((p, i) => i % stride === 0 || i === nTotal - 1 || p.reset || series[i + 1]?.reset);
+    const cf = opts.counterfactual && opts.counterfactual.length === nTotal ? opts.counterfactual.filter((_, i) => keep[i]) : undefined;
+    const sampled = series.filter((_, i) => keep[i]).map((p, j) => ({ ...p, request: j }));
+    return contextSkylineSvg(sampled, { ...opts, counterfactual: cf, maxPoints: Infinity, requestCount: nTotal });
+  }
+  const requestCount = opts.requestCount ?? nTotal;
+  const maxY = Math.max(...series.map((p) => p.context), ...(opts.counterfactual ?? [0]), opts.threshold ?? 0) * 1.05;
+  const x = (i: number) => L + ((W - L - R) * i) / (series.length - 1);
+  const y = (v: number) => T + (H - T - B) * (1 - v / maxY);
+  // scale stacked composition to the MEASURED context (attribution splits a measured total)
+  const stacks = series.map((p) => {
+    const vals = SKYLINE_LAYERS.map((l) => (l.key === 'base' ? p.base : p.kinds[l.key as DepositKind]));
+    const sum = vals.reduce((a, b) => a + b, 0) || 1;
+    return vals.map((v) => (v * p.context) / sum);
+  });
+  const layers: string[] = [];
+  const cum = series.map(() => 0);
+  SKYLINE_LAYERS.forEach((layer, li) => {
+    const lower = cum.slice();
+    series.forEach((_, i) => { cum[i] += stacks[i][li]; });
+    const top = series.map((_, i) => `${x(i).toFixed(1)},${y(cum[i]).toFixed(1)}`);
+    const bottom = series.map((_, i) => `${x(i).toFixed(1)},${y(lower[i]).toFixed(1)}`).reverse();
+    layers.push(`<polygon points="${[...top, ...bottom].join(' ')}" fill="${layer.color}" fill-opacity="0.78"><title>${layer.label}</title></polygon>`);
+  });
+  const ticks: string[] = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = (maxY / 1.05) * (i / 4);
+    ticks.push(`<line x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="currentColor" stroke-opacity="0.12"/>`
+      + `<text x="${L - 6}" y="${(y(v) + 3).toFixed(1)}" font-size="10" text-anchor="end" fill="currentColor" fill-opacity="0.6">${Math.round(v / 1000)}k</text>`);
+  }
+  const resets = series.filter((p) => p.reset).map((p) => `<line x1="${x(p.request).toFixed(1)}" x2="${x(p.request).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 3"><title>compaction / reset</title></line>`);
+  const cf = opts.counterfactual && opts.counterfactual.length === series.length
+    ? `<polyline points="${opts.counterfactual.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4"><title>same session replayed under the policy</title></polyline>`
+    : '';
+  const thr = opts.threshold
+    ? `<line x1="${L}" x2="${W - R}" y1="${y(opts.threshold).toFixed(1)}" y2="${y(opts.threshold).toFixed(1)}" stroke="#eb6834" stroke-opacity="0.8" stroke-dasharray="1 3"><title>compaction threshold</title></line>`
+    : '';
+  const axis = `<text x="${L}" y="${H - 8}" font-size="10" fill="currentColor" fill-opacity="0.6">request 1</text><text x="${W - R}" y="${H - 8}" font-size="10" text-anchor="end" fill="currentColor" fill-opacity="0.6">request ${requestCount}</text>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Context size per request, stacked by content">${ticks.join('')}${layers.join('')}${resets.join('')}${thr}${cf}${axis}</svg>`;
 }

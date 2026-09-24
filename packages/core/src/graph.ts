@@ -30,6 +30,7 @@ function stepCostUsd(model: string | undefined, tokens: StepTokens | undefined):
     inputTokens: tokens.input,
     outputTokens: tokens.output,
     cacheCreationInputTokens: tokens.cacheCreation ?? 0,
+    cacheCreation1hInputTokens: tokens.cacheCreation1h,
     cacheReadInputTokens: tokens.cacheRead ?? 0,
   });
 }

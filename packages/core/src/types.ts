@@ -9,7 +9,18 @@ export interface StepTokens {
   input: number;
   output: number;
   cacheCreation?: number;
+  /** The part of `cacheCreation` written with the 1-hour TTL (priced 2×, not 1.25×). */
+  cacheCreation1h?: number;
   cacheRead?: number;
+  /** Part of `output` spent on thinking (it stays in context — measured 6,151 of 6,278 turns). */
+  thinking?: number;
+  /**
+   * Tokens the model actually READ on this request (input + cache write + cache
+   * read of the LAST sampling iteration). Top-level usage sums iterations, so a
+   * multi-iteration request reports ~2× its real context — using the sum as
+   * context size fakes resets and misattributes rent.
+   */
+  context?: number;
 }
 
 /** One step of a run, before canonicalization. */
@@ -33,12 +44,31 @@ export interface RawStep {
    */
   tokens?: StepTokens;
   durationMs?: number;
+  /** Real result size when `payload` was truncated for storage (rent needs the true size). */
+  fullChars?: number;
+}
+
+/**
+ * Outcome and friction events the harness records beside the messages. Kept so
+ * the engine can say whether spend DELIVERED anything and guard changes that
+ * make the agent worse. Only kinds, times and short identifiers — no content.
+ */
+export interface RunEvent {
+  kind: 'commit' | 'push' | 'pr' | 'deny' | 'compact';
+  timestamp?: string;
+  /** commit sha (short), pr number/action, denial kind, compaction trigger. */
+  detail?: string;
+  /** compaction: context tokens before → after. */
+  preTokens?: number;
+  postTokens?: number;
 }
 
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   cacheCreationInputTokens: number;
+  /** Subset of cacheCreationInputTokens written with the 1-hour TTL (2× input, vs 1.25×). */
+  cacheCreation1hInputTokens?: number;
   cacheReadInputTokens: number;
 }
 
@@ -59,6 +89,22 @@ export interface Run {
   firstPrompt?: string;
   /** Final assistant text (raw), for output-consistency checks. */
   finalOutput?: string;
+  /**
+   * Instruction files the harness loaded into the base context (CLAUDE.md,
+   * memory) — path + size only, never content. They are re-read on EVERY
+   * request, so their size is a direct rent driver (measured: one 68k-token
+   * CLAUDE.md cost 15% of its project's spend).
+   */
+  instructions?: { path: string; kind: string; chars: number }[];
+  /** The harness's own session title (Claude Code `ai-title`), when present. */
+  title?: string;
+  /** Outcome / friction events (git commits, pushes, PRs, denied tool calls, compactions). */
+  events?: RunEvent[];
+  /**
+   * Subagent (sidechain) spend inside this session — included in `costUsd` and in
+   * `usageByModel`. Uploaded by the CLI alongside the session transcript.
+   */
+  subagents?: { count: number; requests: number; costUsd: number };
 }
 
 /** A node of the canonical run graph. */

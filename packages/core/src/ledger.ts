@@ -45,7 +45,7 @@
  */
 
 import type { Run, RunGraph } from './types.js';
-import { pricingFor } from './cost.js';
+import { inputSideCostUsd, pricingFor } from './cost.js';
 import { attributeStepCosts } from './segments.js';
 import { classifyNode } from './taxonomy.js';
 
@@ -150,10 +150,14 @@ function effectiveInputPrice(run: Run): { pricePerTok: number; modelCalls: numbe
   for (const s of run.steps) {
     if (!s.tokens || !s.model) continue;
     calls++;
-    const p = pricingFor(s.model);
     const cc = s.tokens.cacheCreation ?? 0;
     const cr = s.tokens.cacheRead ?? 0;
-    usd += (s.tokens.input * p.inputPerM + cc * p.inputPerM * 1.25 + cr * p.inputPerM * 0.1) / 1_000_000;
+    usd += inputSideCostUsd(s.model, {
+      inputTokens: s.tokens.input,
+      cacheCreationInputTokens: cc,
+      cacheCreation1hInputTokens: s.tokens.cacheCreation1h,
+      cacheReadInputTokens: cr,
+    });
     toks += s.tokens.input + cc + cr;
   }
   return { pricePerTok: toks > 0 ? usd / toks : 0, modelCalls: calls };
@@ -249,7 +253,7 @@ function detectDeadContext(
 }
 
 function detectCacheMisses(run: Run): RunLedger['cache'] {
-  interface Req { model: string; input: number; cc: number; cr: number }
+  interface Req { model: string; input: number; cc: number; cc1h: number; cr: number }
   const reqs: Req[] = [];
   for (const s of run.steps) {
     if (!s.tokens || !s.model) continue;
@@ -257,6 +261,7 @@ function detectCacheMisses(run: Run): RunLedger['cache'] {
       model: s.model,
       input: s.tokens.input,
       cc: s.tokens.cacheCreation ?? 0,
+      cc1h: s.tokens.cacheCreation1h ?? 0,
       cr: s.tokens.cacheRead ?? 0,
     });
   }
@@ -275,7 +280,14 @@ function detectCacheMisses(run: Run): RunLedger['cache'] {
     const expectedRead = Math.min(prevTotal, curTotal);
     const m = Math.max(0, expectedRead - cur.cr);
     missed += m;
-    missedUsd += (m * pricingFor(cur.model).inputPerM * 0.9) / 1_000_000;
+    // A missed token was re-sent as a cache WRITE (1.25× or 2× for the 1-hour
+    // TTL) or as plain input (1×) instead of a read — the penalty is the gap.
+    const p = pricingFor(cur.model);
+    const fresh = cur.input + cur.cc;
+    const paidMult = fresh > 0
+      ? (cur.input * 1 + (cur.cc - cur.cc1h) * 1.25 + cur.cc1h * 2) / fresh
+      : 1;
+    missedUsd += (m * p.inputPerM * Math.max(0, paidMult - (p.cacheReadMult ?? 0.1))) / 1_000_000;
   }
 
   const denom = input + cr + cc;

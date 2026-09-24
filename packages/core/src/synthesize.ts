@@ -312,10 +312,11 @@ export function synthesizeTools(
       if (body.length === 0) continue;
 
       // Context-carriage: every intermediate result is re-read by each later
-      // turn (cache reads at ~10% of input price — a floor, and raw is a
+      // turn (cache reads at the model's read rate — a floor, and raw is a
       // truncated floor too, so this UNDERestimates).
       const model = medoid.models[0] ?? 'claude-sonnet-4';
-      const inputPerM = pricingFor(model).inputPerM;
+      const pricing = pricingFor(model);
+      const readPerM = pricing.inputPerM * (pricing.cacheReadMult ?? 0.1);
       const turnsAfter = nodes.filter(
         (n) => n.index > span.end && n.kind === 'model_turn' && n.support > 0,
       ).length;
@@ -326,7 +327,7 @@ export function synthesizeTools(
         const nonGap = col.nodes.filter((x): x is NonNullable<typeof x> => x !== null);
         if (nonGap.length === 0) continue;
         const meanChars = nonGap.reduce((s, x) => s + x.raw.length, 0) / nonGap.length;
-        carriagePerRunUsd += ((meanChars / 4) * turnsAfter * inputPerM * 0.1) / 1_000_000;
+        carriagePerRunUsd += ((meanChars / 4) * turnsAfter * readPerM) / 1_000_000;
       }
 
       const spanLabels = spanNodes.map((n) => n.structLabel).join('>');
