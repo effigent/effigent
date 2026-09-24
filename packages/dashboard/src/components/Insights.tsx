@@ -139,6 +139,10 @@ interface ContextAnalysis {
   plan: PlanItem[];
   summary?: AgentSummaryData;
   legacyRuns?: number;
+  loops?: {
+    patterns: { kind: string; template: string; loops: number; sessions: number; costUsd: number }[];
+    verify: { verifier: string; reverifies: number; clean: number; found: number; cleanCostUsd: number }[];
+  };
   reasons?: { reason: string; requests: number; costUsd: number; share: number; avgContext: number }[];
   law?: { baseTokens: number; depositPerRequest: number; compactionCostUsd: number; eoqThreshold: number; fitR2: number; aboveThresholdShare: number } | null;
   drivers?: { requests: number; context: number; price: number } | null;
@@ -465,6 +469,10 @@ function LedgerPanel({ ledger }: { ledger: Ledger }) {
   );
 }
 
+const LOOP_LABEL: Record<string, string> = {
+  paging: 'reading one file in slices', collection: 'same command per item', retry: 'failed command re-run', poll: 'polling',
+};
+
 const REASON_LABEL: Record<string, string> = {
   act: 'editing / acting', explore: 'exploring', verify: 'verifying', deliver: 'shipping', respond: 'answering',
   recover: 'recovering from errors', wait: 'waiting / polling', delegate: 'delegating',
@@ -569,6 +577,21 @@ function ContextPanel({ a, showPlan = true }: { a: ContextAnalysis; showPlan?: b
             <div key={e.runId} className="foot-note" style={{ marginTop: 2 }}>
               <span className="tnum" style={{ fontWeight: 700 }}>{usd(e.costUsd)}</span> {e.title ? `“${e.title}”` : <code>{e.runId.slice(0, 8)}</code>} —{' '}
               {e.requestsX.toFixed(1)}× the median session’s requests, {e.contextX.toFixed(1)}× its context; {Math.round(e.topReasonShare * 100)}% spent on {REASON_LABEL[e.topReason] ?? e.topReason}{e.delivered === false ? '; nothing committed or pushed' : e.delivered ? '; delivered (commit/push/PR)' : ''}.
+            </div>
+          ))}
+        </div>
+      )}
+      {a.loops && (a.loops.patterns.length > 0 || a.loops.verify.length > 0) && (
+        <div style={{ marginTop: 8 }}>
+          <div className="panel-sub" style={{ marginBottom: 4 }}>Loops inside sessions</div>
+          {a.loops.verify.filter((v) => v.reverifies > 0).map((v) => (
+            <div key={v.verifier} className="foot-note" style={{ marginTop: 2 }}>
+              <b>{v.verifier}</b> re-run {v.reverifies} times after an edit as its own request: {v.clean} clean ({usd(v.cleanCostUsd)}), {v.found} found problems.
+            </div>
+          ))}
+          {a.loops.patterns.map((p) => (
+            <div key={p.kind + p.template} className="foot-note" style={{ marginTop: 2 }}>
+              <b>{LOOP_LABEL[p.kind] ?? p.kind}</b> ×{p.loops} in {p.sessions} session{p.sessions === 1 ? '' : 's'} · {usd(p.costUsd)} · <code>{p.template.slice(0, 80)}</code>
             </div>
           ))}
         </div>

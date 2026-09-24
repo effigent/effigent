@@ -57,7 +57,7 @@ export interface RentRequest {
   thinking: number;
   costUsd: number;
   /** Tool calls this request issued. */
-  tools: { name: string; resultChars: number; preview: string; readOnly: boolean; command?: string; isError?: boolean; subagent?: string }[];
+  tools: { name: string; resultChars: number; preview: string; readOnly: boolean; command?: string; isError?: boolean; subagent?: string; filePath?: string; resultHead?: string }[];
   /** User text that arrived before the NEXT request. */
   userChars: number;
 }
@@ -176,12 +176,19 @@ export function requestsOf(run: Run): RentRequest[] {
           else subagent = input.subagent_type ?? 'general-purpose';
         } catch { /* not JSON */ }
       }
-      const tool: RentRequest['tools'][number] = { name: s.name, resultChars: 0, preview: s.payload.slice(0, 120), readOnly: isReadOnlyCall(s), command, subagent };
+      let filePath: string | undefined;
+      if (!command) { try { filePath = (JSON.parse(s.payload) as { file_path?: string }).file_path; } catch { /* not JSON */ } }
+      const tool: RentRequest['tools'][number] = { name: s.name, resultChars: 0, preview: s.payload.slice(0, 120), readOnly: isReadOnlyCall(s), command, subagent, filePath };
       cur.tools.push(tool);
       if (s.toolUseId) byToolUse.set(s.toolUseId, tool);
     } else if (s.kind === 'tool_result') {
       const tool = (s.toolUseId && byToolUse.get(s.toolUseId)) || cur.tools[cur.tools.length - 1];
-      if (tool) { tool.resultChars += s.fullChars ?? s.payload.length; if (s.isError) tool.isError = true; }
+      if (tool) {
+        tool.resultChars += s.fullChars ?? s.payload.length;
+        if (s.isError) tool.isError = true;
+        // the head of a command's output — enough to tell "clean" from "errors" when exit codes are masked by `| head`
+        if (tool.command != null && tool.resultHead == null) tool.resultHead = s.payload.slice(0, 600);
+      }
     } else if (s.kind === 'model_turn' && s.name === 'user') {
       pendingUser += s.payload.length;
     }

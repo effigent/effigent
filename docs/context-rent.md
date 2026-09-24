@@ -381,3 +381,30 @@ a ≥1.5× shift). Two findings were added from the data:
 The trend compares the older and newer half of the sessions rather than single weeks.
 Weekly cost per request swings with the session mix: single-week comparisons produced a
 "+94%" on agent C that the halves do not support.
+
+## Loops inside runs (E22–E25)
+
+Do agents repeat procedures inside one session, and can those loops become tools?
+
+- **E22, naive tandem repeats.** 9.6% of spend sits in repeated decision blocks, almost
+  all of it several edits in a row: the work itself, not a procedure. Excluded.
+- **E23, procedural loops detected on the commands.** Paging through one file in slices,
+  the same command per item, a failed command re-run unchanged, and status polling. Total
+  $130 (1.4% of spend); a script per loop would save ≈$59.
+- **E24, the verify rule.** "After editing, run the check." A first count said 2,820
+  re-checks, 73% clean, $539. Most of those were one command that edits *and* checks
+  (`python3 - <<PY … PY && npx tsc`), which costs no extra request. Counting only
+  check-only requests: **1,083 re-checks after an edit, 60% clean — $118 (1.3%) that only
+  confirmed "no errors", $229 (2.4%) in all.** On this traffic the agent already chains
+  most checks onto its edits. Clean vs failed is read from the output (`error TS`, `N
+  failed`), because `| head` masks the exit code.
+- **E25, within-session predictability.** A predictor that also learns from the current
+  session as it unfolds predicts ~0.1% of next actions at ≥0.8, the same as history alone.
+  Sessions are not loop-like step by step.
+
+Conclusion: intra-run loops are real but small for interactive coding agents. The engine
+(`loops.ts`) detects all five kinds for every agent. When clean check-only re-verifies are
+material (≥3% of spend) it generates the tool: a PostToolUse hook that type-checks after
+TypeScript edits, is silent when clean and returns errors with exit 2 (tested on a real
+project), plus its settings.json entry and a CLAUDE.md line. No new data was needed:
+command text, result heads and error flags suffice.

@@ -135,7 +135,11 @@ The data contract everything else depends on.
   finding cards (spend concentration, breaks that expire the cache, context creep,
   CLAUDE.md size, long sessions, exploration, advisor), expensive sessions with what
   compacting would have saved. Rendered by `components/AgentSummary.tsx`; technical detail
-  collapses under "How this was measured". Insights routes by `profile`: shape miners/D0–D5 only for repetitive agents.
+  collapses under "How this was measured". **`loops.ts`**: procedural loops inside runs
+  (paging, per-item collection, retry, poll) + the verify-after-edit rule counted on
+  CHECK-ONLY requests (chained `edit && tsc` costs no extra request); generates a
+  PostToolUse type-check hook (`TYPECHECK_HOOK_SCRIPT`) when clean re-checks are material.
+  Insights routes by `profile`: shape miners/D0–D5 only for repetitive agents.
   Surfaced as `analysis`
   in `/api/v1/insights` (cost re-priced via `runCostUsd`) + Insights' Compiled plan;
   sessions render `contextSkylineSvg` (graph-svg.ts).
@@ -361,7 +365,7 @@ auth inside the handlers):
 - `GET /api/v1/reports` — key validation (`effigent login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
 (types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/predictability/summary/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/loops/predictability/summary/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb

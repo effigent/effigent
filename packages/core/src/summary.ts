@@ -33,7 +33,7 @@ export interface SummaryAction {
 }
 
 export interface AgentFinding {
-  id: 'concentration' | 'breaks' | 'context-creep' | 'instructions' | 'long-sessions' | 'exploration' | 'advisor' | 'delivery';
+  id: 'concentration' | 'breaks' | 'context-creep' | 'instructions' | 'long-sessions' | 'verify-loop' | 'loops' | 'exploration' | 'advisor' | 'delivery';
   title: string;
   /** The one number, pre-formatted ("56%", "$143/mo", "2.3×"). */
   value: string;
@@ -196,6 +196,25 @@ export function summarizeAgent(a: AgentAnalysis, allRuns: Run[]): AgentSummary {
       id: 'instructions', title: 'CLAUDE.md is re-read on every request', value: `${Math.round(a.instructionsTokens / 1000)}k tokens`,
       severity: share >= 0.1 ? 'high' : 'medium', perMonthUsd: monthly(rent),
       sentence: `Re-reading the instruction files cost ${money(monthly(rent))}/month, ${pct(share)} of spend. Most of it is guidance a given session never touches.`,
+    });
+  }
+  // the verify rule — the deterministic loop that is actually worth money
+  const clean = a.loops.verify.reduce((s2, v) => s2 + v.cleanCostUsd, 0);
+  const rechecks = a.loops.verify.reduce((s2, v) => s2 + v.reverifies, 0);
+  const cleanN = a.loops.verify.reduce((s2, v) => s2 + v.clean, 0);
+  if (rechecks >= 10 && clean >= MATERIAL * spend) findings.push({
+    id: 'verify-loop', title: 'Checks after edits mostly confirm nothing', value: pct(cleanN / rechecks),
+    severity: clean >= 0.05 * spend ? 'high' : 'medium', perMonthUsd: monthly(clean),
+    sentence: `${cleanN} of ${rechecks} checks the agent ran after editing came back clean — ${money(monthly(clean))}/month of requests that only confirmed "no errors". Running the check is a rule, not a decision.`,
+  });
+  // other procedural loops (paging, per-item commands, retries, polling) — only when material
+  const loopUsd = a.loops.patterns.reduce((s2, p) => s2 + p.costUsd, 0);
+  if (loopUsd >= MATERIAL * spend && a.loops.patterns[0]) {
+    const top = a.loops.patterns[0];
+    const label = { paging: 'reading one file in slices', collection: 'the same command for item after item', retry: 'failed commands re-run unchanged', poll: 'polling a status' }[top.kind];
+    findings.push({
+      id: 'loops', title: 'Repeated procedures inside sessions', value: money(monthly(loopUsd)) + '/mo', severity: 'medium', perMonthUsd: monthly(loopUsd),
+      sentence: `${a.loops.patterns.reduce((s2, p) => s2 + p.loops, 0)} loops inside sessions — mostly ${label} (e.g. ${top.template.slice(0, 50)}). A script would do each in one call.`,
     });
   }
   const explore = a.laws.reasons.find((r) => r.reason === 'explore');

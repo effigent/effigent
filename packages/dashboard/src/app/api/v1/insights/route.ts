@@ -210,6 +210,11 @@ function wireAnalysis(a: AgentAnalysis) {
     },
     plan: a.plan.map((p) => ({ ...p, savingsUsd: p.savingsUsd && { low: usd(p.savingsUsd.low), high: usd(p.savingsUsd.high) } })),
     legacyRuns: a.legacyRuns,
+    // procedural loops inside sessions + the verify-after-edit rule (engine/loops.ts)
+    loops: {
+      patterns: a.loops.patterns.slice(0, 5).map((p) => ({ kind: p.kind, template: p.template, loops: p.loops, sessions: p.sessions, costUsd: usd(p.costUsd) })),
+      verify: a.loops.verify.slice(0, 4).map((v) => ({ verifier: v.verifier, reverifies: v.reverifies, clean: v.clean, found: v.found, cleanCostUsd: usd(v.cleanCostUsd) })),
+    },
     // what the requests were FOR (replaces the keyword task mix)
     reasons: a.laws.reasons.map((r) => ({ reason: r.reason, requests: r.requests, costUsd: usd(r.costUsd), share: Number(r.share.toFixed(3)), avgContext: Math.round(r.avgContext) })),
     law: a.laws.law && { ...a.laws.law, readPricePerToken: undefined, compactionCostUsd: usd(a.laws.law.compactionCostUsd), fitR2: Number(a.laws.law.fitR2.toFixed(2)), aboveThresholdShare: Number(a.laws.law.aboveThresholdShare.toFixed(3)) },

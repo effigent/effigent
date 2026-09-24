@@ -29,6 +29,7 @@ import { redactSensitive } from './redact.js';
 import { computeLaws, type AgentLaws } from './laws.js';
 import { evaluateLoop, type LeverOutcome } from './loop.js';
 import { measurePredictability, type Predictability } from './predictability.js';
+import { detectLoops, TYPECHECK_HOOK_SCRIPT, type LoopReport } from './loops.js';
 import {
   computeRentLedger,
   recommendCompaction,
@@ -305,6 +306,8 @@ export interface AgentAnalysis {
    * are from its own history — by reason (what a request was for) and by action.
    */
   determinism: { reason: Predictability | null; action: Predictability | null };
+  /** Procedural loops inside runs, and the verify-after-edit rule (loops.ts). */
+  loops: LoopReport;
   plan: PlanItem[];
 }
 
@@ -427,6 +430,30 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     });
   }
 
+  // The verify rule: the agent re-runs its checker after edits; most runs come back clean.
+  const loops = detectLoops(allRuns);
+  const tsc = loops.verify.find((v) => v.verifier === 'tsc');
+  if (tsc && tsc.reverifies >= 10 && tsc.cleanCostUsd >= 0.03 * costUsd) {
+    const cleanShare = tsc.clean / Math.max(1, tsc.reverifies);
+    plan.push({
+      id: 'verify-hook',
+      title: 'Type-check automatically after edits instead of asking the model to',
+      summary: `${Math.round(cleanShare * 100)}% of the ${tsc.reverifies} type checks the agent ran after an edit came back clean — each one a full-context request just to decide to run it. A hook runs the check and speaks only when there are errors.`,
+      evidence: `After an edit the agent re-ran tsc ${tsc.reverifies} times (usually \`${tsc.topCommand.slice(0, 60)}\`). ${tsc.clean} came back with no errors (${usd(tsc.cleanCostUsd)} of requests that confirmed nothing); ${tsc.found} found errors. Clean vs failed is read from the output, because \`| head\` hides the exit code. A PostToolUse hook runs the check after every TypeScript edit, stays silent when clean and hands errors straight back, so the model no longer spends a request deciding to verify. Holds if the agent follows the CLAUDE.md line — confirm with a before/after window.`,
+      savingsUsd: { low: tsc.cleanCostUsd * 0.5, high: tsc.reverifyCostUsd * 0.9 },
+      basis: 'structural',
+      files: [
+        { path: '.claude/hooks/typecheck-after-edit.sh', note: 'create, then chmod +x', content: TYPECHECK_HOOK_SCRIPT },
+        {
+          path: '.claude/settings.json',
+          note: 'merge into "hooks" · the check runs after every TS edit; on a large project add --incremental to tsconfig',
+          content: JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/typecheck-after-edit.sh', timeout: 120 }] }] } }, null, 2) + '\n',
+        },
+        { path: 'CLAUDE.md', note: 'append one line', content: '- Type checking runs automatically after every TypeScript edit (a hook) and shows you any errors. Do not run tsc yourself unless asked.\n' },
+      ],
+    });
+  }
+
   if (runs.length > 0 && spend.sideModelUsd > 0.05 * costUsd) {
     plan.push({
       id: 'advisor-cost',
@@ -518,6 +545,7 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     laws,
     loop: evaluateLoop(allRuns, { threshold: compaction.threshold ?? undefined }),
     determinism: { reason: measurePredictability(allRuns, 'reason'), action: measurePredictability(allRuns, 'action') },
+    loops,
     plan,
   };
 }
