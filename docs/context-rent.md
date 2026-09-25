@@ -408,3 +408,35 @@ material (≥3% of spend) it generates the tool: a PostToolUse hook that type-ch
 TypeScript edits, is silent when clean and returns errors with exit 2 (tested on a real
 project), plus its settings.json entry and a CLAUDE.md line. No new data was needed:
 command text, result heads and error flags suffice.
+
+## Does it actually save? The test (E26)
+
+`experiments.ts` measures every applied recommendation before vs after:
+
+- **Matched by exact position in the session.** Request 57 is compared with request 57,
+  weighted by where the after sessions spent their requests. Session cost grows with the
+  square of its length, so raw averages mostly measure the task mix. Coarse buckets
+  (1–25, 26–50, …) were tried first and failed the "shorter sessions are not a saving" test.
+- **95% interval** from a seeded session-level bootstrap.
+- **Two layers.**
+  - *Mechanism*: the lever's own signature — share of requests above the compaction
+    threshold, tokens a session starts with, share of main-thread lookups, context
+    rewritten after breaks, share of check-only requests. It moves sharply, so a few
+    sessions show whether the change took effect.
+  - *Money*: tokens and cost per request, matched, with an estimate of the sessions
+    needed before the interval can exclude zero.
+- **Quality guard.** Errors per request, and interruptions and denials per session.
+
+Validation on real sessions:
+
+| Check | Result |
+|---|---|
+| Placebo: 31 cut dates where nothing changed | 1 called a saving (3% — what a 95% interval should give); 8 "worse" are mostly real drift |
+| Known change: agent A's CLAUDE.md growth | detected at every cut: sessions start +15% / +38% / +33% bigger, tight intervals |
+| Injected −20% context into real after-sessions | estimates −10…−31%; confirmed on 2 of 4 agents at 6–15 sessions/side, the others "≈15–18 sessions per side needed" |
+| Simulated compaction at 200k | mechanism 27% → 0% of requests above 200k, "in effect" at once; money confirmed or "working" |
+
+Verdicts: collecting · not in effect · working · saving confirmed · got worse ·
+inconclusive. The record of what was suggested, when, and when it was applied lives in
+the org's own bucket (`effigent/experiments/<agent>.json`). Adoption is marked in the UI,
+or detected from transcripts (scout calls, resets near the threshold, CLAUDE.md shrink).

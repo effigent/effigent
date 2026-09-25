@@ -145,6 +145,13 @@ The data contract everything else depends on.
   Insights layout (2026-09, navy palette): KPI cards → agent hero (top change/month, headline,
   weekly cost trend) → Top recommendations → "Why it costs what it does" tinted cards →
   most expensive sessions (rows open the session + run map) → collapsed details.
+  **`experiments.ts`**: did an applied recommendation save tokens? — before/after matched
+  by EXACT position in the session, seeded session bootstrap (95% interval), mechanism
+  check first then money, quality guard; verdicts collecting / not-in-effect / working /
+  confirmed / regressed / inconclusive (placebo on real data: 3% false "saved").
+  `GET/POST /api/v1/experiments` + `components/Experiments.tsx` ("Suggestions & results");
+  the record (suggested / predicted / applied) is JSON in the org bucket
+  (`lib/experiments-store.ts`, written by the Insights route — no DB migration).
   Insights routes by `profile`: shape miners/D0–D5 only for repetitive agents.
   Surfaced as `analysis`
   in `/api/v1/insights` (cost re-priced via `runCostUsd`) + Insights' Compiled plan;
@@ -371,7 +378,7 @@ auth inside the handlers):
 - `GET /api/v1/reports` — key validation (`effigent login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
 (types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/loops/predictability/summary/runmap/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/loops/predictability/summary/runmap/experiments/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb

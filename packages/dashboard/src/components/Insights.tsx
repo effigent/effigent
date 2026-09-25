@@ -3,6 +3,7 @@ import { ALL_AGENTS } from '../data.ts';
 import { RouteTest } from './RouteTest.tsx';
 import { Ic } from '../icons.tsx';
 import { AgentSummary, type AgentSummaryData } from './AgentSummary.tsx';
+import { Experiments } from './Experiments.tsx';
 
 interface Opportunity {
   index: number;
@@ -927,6 +928,7 @@ export function Insights({ agent, onOpenSession, onViewSessions }: { agent: stri
             onOpenSession={onOpenSession}
             onViewSessions={onViewSessions}
           />
+          <Experiments agentId={a.agentId} />
           <details className="ins-details">
             <summary>How this was measured — spend breakdown, request mix, predictability, loops, the cost law, the AI analyst</summary>
             <ContextPanel a={a.analysis} showPlan={false} />

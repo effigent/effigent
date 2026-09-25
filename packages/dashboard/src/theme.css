@@ -960,3 +960,24 @@ details.install-manual > summary:hover { color: var(--txt); }
 .runmap-loop-label { font-size: 12.5px; color: var(--txt); overflow-wrap: anywhere; }
 .runmap-loop-meta { font-size: 11.5px; color: var(--txt-3); }
 @media (max-width: 1000px) { .runmap-body { grid-template-columns: 1fr; } }
+
+/* ---- suggestions & results (components/Experiments.tsx) ------------------------ */
+.exp { display: flex; flex-direction: column; gap: 12px; }
+.exp-verified { font-size: 13px; color: var(--txt-2); } .exp-verified b { color: var(--green); }
+.exp-tbl td { vertical-align: top; }
+.exp-sub { display: block; font-size: 11.5px; color: var(--txt-3); margin-top: 3px; }
+.exp-sub.bad { color: var(--red); }
+.exp-status { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.03em; padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; cursor: help; white-space: nowrap; }
+.st-idle { color: var(--txt-3); } .st-wait { color: var(--blue); } .st-go { color: var(--teal); }
+.st-ok { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.st-warn { color: var(--gold); } .st-bad { color: var(--red); }
+.exp-measure { display: flex; flex-direction: column; gap: 1px; }
+.exp-measure .down { color: var(--green); font-weight: 650; } .exp-measure .up { color: var(--red); font-weight: 650; }
+.exp-ci { font-size: 11.5px; color: var(--txt-2); }
+.exp-act { white-space: nowrap; text-align: right; }
+.exp-btn { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; } .exp-btn svg { width: 12px; height: 12px; }
+.exp-mark { display: inline-flex; align-items: center; gap: 8px; }
+.exp-mark input { background: var(--inset); border: 1px solid var(--border); color: var(--txt); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; color-scheme: dark; }
+.exp-foot { margin: 0; font-size: 12px; color: var(--txt-3); max-width: 90ch; }
+.exp-empty { font-size: 13px; color: var(--txt-3); padding: 6px 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

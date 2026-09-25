@@ -238,3 +238,26 @@ export async function isProvisioned(tenantId: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Small JSON documents in the org's own bucket, beside its runs — used for state
+ * that must not need a database migration (e.g. the recommendation record).
+ * Returns null when the document does not exist yet.
+ */
+export async function getJson<T>(tenantId: string, key: string): Promise<T | null> {
+  const { client, cfg } = await resolveStorage(tenantId);
+  try {
+    const out = await client.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: fullKey(cfg.prefix, key) }));
+    const buf = Buffer.from(await out.Body!.transformToByteArray());
+    const text = (buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf) : buf).toString('utf8');
+    return JSON.parse(text) as T;
+  } catch (err) {
+    const name = (err as { name?: string }).name;
+    if (name === 'NoSuchKey' || name === 'NotFound') return null;
+    throw err;
+  }
+}
+
+export async function putJson(tenantId: string, key: string, value: unknown): Promise<void> {
+  await putRunBlob(tenantId, key, JSON.stringify(value));
+}

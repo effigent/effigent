@@ -18,6 +18,7 @@ import { loadRun } from '@/lib/storage.ts';
 import { runCostUsd } from '@/lib/engine/cost.ts';
 import { analyzeAgent, type AgentAnalysis } from '@/lib/engine/plan.ts';
 import { summarizeAgent, type AgentSummary } from '@/lib/engine/summary.ts';
+import { loadRecord, saveRecord, mergeSuggestions } from '@/lib/experiments-store.ts';
 import type { RawStep, Run } from '@/lib/engine/types.ts';
 
 export const dynamic = 'force-dynamic';
@@ -447,7 +448,20 @@ export async function GET(req: Request) {
       })),
     };
     const agentAnalysis = analyzeAgent(agentId, runs);
-    const analysis = { ...wireAnalysis(agentAnalysis), summary: wireSummary(summarizeAgent(agentAnalysis, runs)) };
+    const agentSummary = summarizeAgent(agentAnalysis, runs);
+    const analysis = { ...wireAnalysis(agentAnalysis), summary: wireSummary(agentSummary) };
+    // Record what was suggested (and any adoption detected from the transcripts) so the
+    // Results view can later measure it. Best effort: a storage hiccup never fails Insights.
+    try {
+      const record = await loadRecord(tenantId, agentId);
+      if (mergeSuggestions(record, agentSummary.actions, {
+        now: new Date().toISOString(),
+        threshold: agentAnalysis.compaction.threshold,
+        detected: agentAnalysis.loop.map((o) => ({ lever: o.lever, adoptedAt: o.adoptedAt })),
+      })) await saveRecord(tenantId, record);
+    } catch (err) {
+      console.error(`[insights] recommendation record not updated tenant=${tenantId} agent=${agentId}:`, err);
+    }
 
     const analyses: ClusterAnalysis[] = analyzeDeterminism(graphs, { threshold });
     // Which engine applies. Repetitive agents (runs cluster) get the determinism
