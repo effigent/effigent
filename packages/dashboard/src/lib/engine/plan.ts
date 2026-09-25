@@ -407,20 +407,21 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     });
   }
 
-  // Where the harness compacts ON ITS OWN today: Claude Code's automatic window varies by
-  // model, version and server-side experiment (observed ~500k on 1M-context sessions), so it
-  // is measured from the transcripts' auto compactions, never assumed. Recommending a
-  // threshold at that point is recommending nothing — and loop.ts would then "detect" the
-  // harness's own behaviour as the user applying it.
-  // Read from the requests (the context just before each drop), in sessions the harness
-  // auto-compacted: compact_boundary's own preTokens measured ~2× the request context on
-  // real sessions (≈1.1M against resets at ≈500k), so it cannot place the point.
-  const autoAt = allRuns
-    .filter((r) => (r.events ?? []).some((e) => e.kind === 'compact' && e.detail === 'auto'))
-    .flatMap((r) => { const R = requestsOf(r); const at: number[] = []; for (let k = 1; k < R.length; k++) if (R[k].context < 0.6 * R[k - 1].context) at.push(R[k - 1].context); return at; })
-    .sort((a, b) => a - b);
+  // Where the harness compacts ON ITS OWN today. Claude Code's automatic window varies by
+  // model, version and server-side experiment (observed: ~500k on some 1M-context sessions,
+  // none up to 650k+ on others), so it is measured, never assumed — from the requests (the
+  // context just before each drop): compact_boundary's own preTokens read ~2× the request
+  // context on real sessions. When the harness already compacts MOST sessions that reach
+  // T, recommending T is recommending nothing, and loop.ts would read the harness as an
+  // adoption; when only some, the replay above already prices the ones that still exceed T.
+  const T0 = compaction.threshold ?? 0;
+  const resetsOf = (r: Run) => { const R = requestsOf(r); const at: number[] = []; for (let k = 1; k < R.length; k++) if (R[k].context < 0.6 * R[k - 1].context) at.push(R[k - 1].context); return at; };
+  const autoCompacted = (r: Run) => (r.events ?? []).some((e) => e.kind === 'compact' && e.detail === 'auto');
+  const autoAt = allRuns.filter(autoCompacted).flatMap(resetsOf).sort((a, b) => a - b);
   const nativeAt = autoAt.length >= 3 ? autoAt[autoAt.length >> 1] : null;
-  const harnessCompactsThere = !!(nativeAt && compaction.threshold && compaction.threshold >= 0.85 * nativeAt);
+  const reachT = T0 ? runs.filter((r) => requestsOf(r).some((x) => x.context >= 0.8 * T0)) : [];
+  const compactedNearT = reachT.filter((r) => autoCompacted(r) && resetsOf(r).some((c) => c >= 0.8 * T0 && c <= 1.25 * T0));
+  const harnessCompactsThere = reachT.length >= 3 && compactedNearT.length >= 0.5 * reachT.length;
   if (runs.length > 0 && compaction.threshold && !harnessCompactsThere) {
     const window = Math.max(...ledgers.map((l) => l.peakContext)) > 200_000 ? 1_000_000 : 200_000;
     const pct = Math.max(10, Math.min(95, Math.round((100 * compaction.threshold) / window)));
@@ -432,9 +433,11 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     const high = compaction.savingsUsd[compaction.savingsUsd.length - 1]?.usd ?? 0;
     plan.push({
       id: 'compact-earlier',
-      title: nativeAt
+      title: nativeAt && nativeAt > 1.1 * compaction.threshold
         ? `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of ~${Math.round(nativeAt / 1000)}k, where it compacts now`
-        : `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of the ~${window >= 1_000_000 ? '1M' : `${window / 1000}k`} default`,
+        : nativeAt
+          ? `Compact every long session at ${Math.round(compaction.threshold / 1000)}k tokens (today ${compactedNearT.length} of ${reachT.length} compact there on their own)`
+          : `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of the ~${window >= 1_000_000 ? '1M' : `${window / 1000}k`} default`,
       summary: laws.law
         ? `${Math.round(100 * laws.law.aboveThresholdShare)}% of re-reading happens above ${Math.round(laws.law.eoqThreshold / 1000)}k tokens. Replaying every session, compacting at ${Math.round(compaction.threshold / 1000)}k saved money in all re-exploration scenarios measured.`
         : `Replaying every session, compacting at ${Math.round(compaction.threshold / 1000)}k saved money in all re-exploration scenarios measured.`,

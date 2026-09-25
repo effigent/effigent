@@ -64,10 +64,14 @@ export function mergeSuggestions(
       changed = true;
     }
   }
+  // A detected change point before the suggestion is not the suggestion being applied —
+  // it is the harness or the user changing on their own (measured: Claude Code began
+  // auto-compacting some sessions near 500k and was read as "applied" 13 days before
+  // Effigent suggested it). Those are marked by hand, if at all.
   for (const d of opts.detected ?? []) {
     const id = DETECTED[d.lever];
     const cur = id ? rec.recommendations[id] : undefined;
-    if (cur && !cur.appliedAt) { cur.appliedAt = d.adoptedAt; cur.source = 'detected'; changed = true; }
+    if (cur && !cur.appliedAt && d.adoptedAt >= cur.firstSuggestedAt) { cur.appliedAt = d.adoptedAt; cur.source = 'detected'; changed = true; }
   }
   return changed;
 }

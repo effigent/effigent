@@ -77,14 +77,18 @@ describe('compact-earlier', () => {
     expect(analyzeAgent('a', runs()).plan.find((p) => p.id === 'compact-earlier')?.title).toMatch(/instead of the ~1M default/);
   });
 
-  it('is not recommended at the point the harness already compacts at on its own', () => {
-    const T = Number(analyzeAgent('a', runs()).plan.find((p) => p.id === 'compact-earlier')!.title.match(/at (\d+)k/)![1]) * 1000;
-    // as on real traffic: most sessions never compact, but the harness auto-compacts some at ≈T
-    // on its own — and, like real transcripts, their preTokens read ~2× the request context
-    const rs = [...runs(), ...Array.from({ length: 4 }, (_, i) => long(`h${i}`, 14 + i, 320, T * 1.05))];
-    for (const r of rs.slice(-4)) r.events = [{ kind: 'compact', detail: 'auto', preTokens: T * 2.2, postTokens: 30_000 }];
+  it('is not recommended where the harness already compacts most long sessions on its own', () => {
+    // as on real traffic, compact_boundary's preTokens read ~2× the request context
+    const rs = [...Array.from({ length: 4 }, (_, i) => long(`u${i}`, 1 + i, 200 + 40 * i)), ...Array.from({ length: 12 }, (_, i) => long(`h${i}`, 5 + i, 320, 420_000))];
+    for (const r of rs.slice(4)) r.events = [{ kind: 'compact', detail: 'auto', preTokens: 900_000, postTokens: 30_000 }];
     const a = analyzeAgent('a', rs);
     expect(a.plan.map((p) => p.id)).not.toContain('compact-earlier');
     expect(a.loop.map((o) => o.lever)).not.toContain('compaction'); // the harness's own compactions are not an adoption
+  });
+
+  it('says so when only some long sessions compact on their own', () => {
+    const rs = [...runs(), ...Array.from({ length: 4 }, (_, i) => long(`h${i}`, 14 + i, 320, 420_000))];
+    for (const r of rs.slice(-4)) r.events = [{ kind: 'compact', detail: 'auto', preTokens: 900_000, postTokens: 30_000 }];
+    expect(analyzeAgent('a', rs).plan.find((p) => p.id === 'compact-earlier')?.title).toMatch(/^Compact every long session at \d+k tokens \(today \d+ of \d+ compact there on their own\)$/);
   });
 });
