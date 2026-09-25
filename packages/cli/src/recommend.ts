@@ -51,7 +51,8 @@ export function renderForAgent(r: RecommendationsResponse): string {
     open.forEach((x, i) => {
       const value = x.perMonthUsd ? ` · ≈${money(x.perMonthUsd.low)}–${money(x.perMonthUsd.high)}/month` : '';
       out.push('', `### ${i + 1}. ${x.title}`, `id \`${x.id}\` · ${x.basis}${value}`, '', x.why);
-      if (!x.files.length) out.push('', 'No file: a habit or a setting for the person — report it, do not invent a file.');
+      if (x.basis === 'needs-ab') out.push('', 'Needs an A/B: propose it to the user and apply it only when asked, on its own (not in the same week as another change).');
+      else if (!x.files.length) out.push('', 'No file: a habit or a setting for the person — report it, do not invent a file.');
       for (const f of x.files) {
         const f3 = fence(f.content);
         out.push('', `File \`${f.path}\`${f.note ? ` — ${f.note}` : ''}`, f3, f.content.replace(/\n$/, ''), f3);

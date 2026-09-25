@@ -413,7 +413,8 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
   // harness's own behaviour as the user applying it.
   const autoAt = allRuns.flatMap((r) => (r.events ?? []).filter((e) => e.kind === 'compact' && e.detail === 'auto' && (e.preTokens ?? 0) > 0).map((e) => e.preTokens!)).sort((a, b) => a - b);
   const nativeAt = autoAt.length >= 3 ? autoAt[autoAt.length >> 1] : null;
-  if (runs.length > 0 && compaction.threshold && !(nativeAt && compaction.threshold >= 0.85 * nativeAt)) {
+  const harnessCompactsThere = !!(nativeAt && compaction.threshold && compaction.threshold >= 0.85 * nativeAt);
+  if (runs.length > 0 && compaction.threshold && !harnessCompactsThere) {
     const window = Math.max(...ledgers.map((l) => l.peakContext)) > 200_000 ? 1_000_000 : 200_000;
     const pct = Math.max(10, Math.min(95, Math.round((100 * compaction.threshold) / window)));
     // Claude Code's CLAUDE_CODE_AUTO_COMPACT_WINDOW takes tokens (100k–1M) and is capped at
@@ -558,7 +559,8 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     spill,
     recurring,
     laws,
-    loop: evaluateLoop(allRuns, { threshold: compaction.threshold ?? undefined }),
+    // no compaction fingerprint to look for when the harness itself compacts at T
+    loop: evaluateLoop(allRuns, { threshold: harnessCompactsThere ? undefined : compaction.threshold ?? undefined }),
     determinism: { reason: measurePredictability(allRuns, 'reason'), action: measurePredictability(allRuns, 'action') },
     loops,
     plan,

@@ -80,6 +80,8 @@ describe('compact-earlier', () => {
     const rs = runs();
     const T = Number(analyzeAgent('a', rs).plan.find((p) => p.id === 'compact-earlier')!.title.match(/at (\d+)k/)![1]) * 1000;
     for (const r of rs.slice(0, 4)) r.events = [{ kind: 'compact', detail: 'auto', preTokens: T + 20_000, postTokens: 30_000 }];
-    expect(analyzeAgent('a', rs).plan.map((p) => p.id)).not.toContain('compact-earlier');
+    const a = analyzeAgent('a', rs);
+    expect(a.plan.map((p) => p.id)).not.toContain('compact-earlier');
+    expect(a.loop.map((o) => o.lever)).not.toContain('compaction'); // the harness's own compactions are not an adoption
   });
 });
