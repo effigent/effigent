@@ -13,7 +13,10 @@
  *
  * Detectors must be SPECIFIC to the change Effigent proposed: measured on real
  * traffic, a generic signal ("any skill was used", "any reset below 700k") fired
- * on unrelated behaviour and produced confident, wrong verdicts. Skills are not
+ * on unrelated behaviour and produced confident, wrong verdicts. And adoption must
+ * be SUSTAINED: one manual /compact near T stamped a false "applied" date, so the
+ * fingerprint has to hold in at least half (and ≥2) of the sessions after it that
+ * could show it (for compaction: the ones that grew to near T). Skills are not
  * in the loop yet — their effect is per episode, not per session.
  *
  *   quality guard: tool errors per request, user interruptions and denied tool
@@ -43,6 +46,8 @@ export interface RunFeatures {
   delegatedShare: number;
   /** Largest context a reset happened at (0 = no reset). */
   resetAt: number;
+  /** Largest context any request carried. */
+  peakContext: number;
   instructionsTokens: number;
   errorsPerRequest: number;
   interruptions: number;
@@ -92,6 +97,7 @@ export function runFeatures(run: Run, scoutName = 'scout'): RunFeatures {
     baseContext: R[0]?.context ?? 0,
     delegatedShare: R.filter((r) => r.tools.some((t) => t.subagent === scoutName)).length / n,
     resetAt,
+    peakContext: R.reduce((m, r) => Math.max(m, r.context), 0),
     instructionsTokens: Math.round((run.instructions ?? []).reduce((s, f) => s + f.chars, 0) / 3.6),
     errorsPerRequest: tools.filter((t) => t.isError).length / n,
     interruptions: run.steps.filter((s) => s.kind === 'model_turn' && s.name === 'user' && INTERRUPT.test(s.payload)).length,
@@ -103,13 +109,20 @@ export function runFeatures(run: Run, scoutName = 'scout'): RunFeatures {
 const mean = (v: number[]) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0);
 const median = (v: number[]) => { const s = [...v].sort((a, b) => a - b); return s.length ? s[s.length >> 1] : 0; };
 
-/** Index of the first session where `on` holds while it held in at most 1 of the sessions before. */
-function changePoint(F: RunFeatures[], on: (f: RunFeatures, i: number) => boolean): number {
+/**
+ * Index of the first session where `on` holds while it held in at most 1 of the
+ * sessions before — and keeps holding in at least half (≥2) of the eligible
+ * sessions from there on.
+ */
+function changePoint(F: RunFeatures[], on: (f: RunFeatures, i: number) => boolean, eligible: (f: RunFeatures) => boolean = () => true): number {
   for (let i = MIN_SIDE; i < F.length; i++) {
     if (!on(F[i], i)) continue;
     const start = Math.max(0, i - WINDOW);
     const before = F.slice(start, i).filter((f, j) => on(f, start + j)).length; // absolute index into F
-    if (before <= 1) return i;
+    if (before > 1) continue;
+    let could = 0, did = 0;
+    for (let j = i; j < Math.min(F.length, i + WINDOW); j++) if (eligible(F[j])) { could++; if (on(F[j], j)) did++; }
+    if (did >= 2 && did >= could / 2) return i;
   }
   return -1;
 }
@@ -120,13 +133,14 @@ interface LoopOptions {
   scoutName?: string;
 }
 
-function detectors(opts: LoopOptions): { lever: Lever; metric: string; on: (F: RunFeatures[]) => (f: RunFeatures, i: number) => boolean; value: (f: RunFeatures) => number }[] {
+function detectors(opts: LoopOptions): { lever: Lever; metric: string; on: (F: RunFeatures[]) => (f: RunFeatures, i: number) => boolean; eligible?: (f: RunFeatures) => boolean; value: (f: RunFeatures) => number }[] {
   const T = opts.threshold;
   return [
     { lever: 'scout', metric: 'mean context per request', on: () => (f) => f.delegatedShare >= 0.02, value: (f) => f.meanContext },
     ...(T ? [{
       lever: 'compaction' as const, metric: 'mean context per request',
       on: () => (f: RunFeatures) => f.resetAt >= 0.8 * T && f.resetAt <= 1.25 * T,
+      eligible: (f: RunFeatures) => f.peakContext >= 0.8 * T,
       value: (f: RunFeatures) => f.meanContext,
     }] : []),
     {
@@ -146,7 +160,7 @@ export function evaluateLoop(allRuns: Run[], opts: LoopOptions = {}): LeverOutco
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   const out: LeverOutcome[] = [];
   for (const d of detectors(opts)) {
-    const i = changePoint(F, d.on(F));
+    const i = changePoint(F, d.on(F), d.eligible);
     if (i < 0) continue;
     const before = F.slice(Math.max(0, i - WINDOW), i);
     const after = F.slice(i, i + WINDOW);

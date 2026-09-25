@@ -218,7 +218,7 @@ identity), the compaction recommendation, the spill estimate, recurring commands
 label (`measured` / `simulated` / `structural` = if adopted / `needs-ab`):
 
 - `.claude/agents/scout.md` + one CLAUDE.md line (E13)
-- `.claude/settings.json` `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (E5)
+- `.claude/settings.json` `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` (tokens, 100k–1M, capped at the model window; the older `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is a share of the window, so the same value means 40k on a 200k model) (E5)
 - the advisor spend line (measured; the choice is the user's)
 - CLAUDE.md size (needs-ab)
 - skills for recurring commands. They are read-only with no slots → `!` injection;

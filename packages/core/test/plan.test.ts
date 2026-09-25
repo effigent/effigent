@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeAgent, mineRecurringCommands } from '../src/plan.js';
-import { isLegacyParse } from '../src/rent.js';
+import { isLegacyParse, requestsOf } from '../src/rent.js';
 import type { RawStep, Run } from '../src/types.js';
 
 function run(id: string, commands: string[], opts: { legacy?: boolean; cwd?: string } = {}): Run {
@@ -51,5 +51,35 @@ describe('recurring commands → skills', () => {
     expect(skill!.content).toMatch(/\ndescription: .+\n/);
     expect(skill!.content).not.toContain('/home/u/repo');
     expect(skill!.content).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/);
+  });
+});
+
+describe('compact-earlier', () => {
+  /** A long session: context grows 2k per request from 60k, with large tool results. */
+  function long(id: string, day: number, n: number): Run {
+    const start = Date.parse(`2026-09-${String(day).padStart(2, '0')}T10:00:00Z`);
+    const steps: RawStep[] = [{ kind: 'model_turn', name: 'user', payload: 'do the task' }];
+    let ctx = 60_000, prev = 0;
+    for (let k = 0; k < n; k++) {
+      steps.push({ kind: 'tool_use', name: k % 3 ? 'Edit' : 'Read', payload: JSON.stringify({ file_path: `/r/f${k % 7}.ts` }), toolUseId: `${id}-${k}`, model: 'claude-opus-5',
+        timestamp: new Date(start + k * 60_000).toISOString(), tokens: { input: 0, output: 300, cacheCreation: ctx - prev, cacheCreation1h: ctx - prev, cacheRead: prev, context: ctx } });
+      steps.push({ kind: 'tool_result', name: 'Edit', payload: 'x'.repeat(2000), toolUseId: `${id}-${k}` });
+      prev = ctx; ctx += 2_000;
+    }
+    const r: Run = { runId: id, agentId: 'a', startedAt: new Date(start).toISOString(), models: ['claude-opus-5'], usageByModel: {}, costUsd: 0, steps };
+    r.costUsd = requestsOf(r).reduce((s, x) => s + x.costUsd, 0);
+    return r;
+  }
+  const runs = () => Array.from({ length: 12 }, (_, i) => long(`s${i}`, 1 + i, 200 + 40 * (i % 5)));
+
+  it('is recommended for long sessions that never compact', () => {
+    expect(analyzeAgent('a', runs()).plan.find((p) => p.id === 'compact-earlier')?.title).toMatch(/instead of the ~1M default/);
+  });
+
+  it('is not recommended at the point the harness already compacts at on its own', () => {
+    const rs = runs();
+    const T = Number(analyzeAgent('a', rs).plan.find((p) => p.id === 'compact-earlier')!.title.match(/at (\d+)k/)![1]) * 1000;
+    for (const r of rs.slice(0, 4)) r.events = [{ kind: 'compact', detail: 'auto', preTokens: T + 20_000, postTokens: 30_000 }];
+    expect(analyzeAgent('a', rs).plan.map((p) => p.id)).not.toContain('compact-earlier');
   });
 });

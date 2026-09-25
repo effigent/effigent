@@ -65,3 +65,25 @@ describe('measureEffect', () => {
     expect(e.verdict).toBe('regressed');
   });
 });
+
+describe('measureEffect — work moved to a subagent', () => {
+  /** Same total spend, but after the change 40% of it happens in a scout the main thread cannot see. */
+  function delegated(id: string, day: number, n: number): Run {
+    const run = session(id, day, n, { d: 1_200 });
+    const main = requestsOf(run).reduce((s, r) => s + r.costUsd, 0);
+    const scoutAt = run.steps.findIndex((s) => s.kind === 'tool_use');
+    run.steps[scoutAt] = { ...run.steps[scoutAt], name: 'Agent', payload: '{"subagent_type":"scout","prompt":"find it"}' };
+    const total = before.find((b) => b.steps.length / 2 === n)!.costUsd;
+    run.subagents = { count: 1, requests: 20, costUsd: Math.max(0, total - main) };
+    run.costUsd = main + run.subagents.costUsd;
+    return run;
+  }
+
+  it('does not count spend moved into the scout as a saving', () => {
+    const after = lengths.map((n, i) => delegated(`a${i}`, 16 + i, n));
+    const e = measureEffect([...before, ...after], CUT, 'spill-exploration');
+    expect(e.tokensPerRequest!.changePct).toBeLessThan(-0.1); // the main thread did get smaller…
+    expect(Math.abs(e.costPerRequest!.changePct)).toBeLessThan(0.02); // …but the total did not move
+    expect(e.verdict).not.toBe('confirmed');
+  });
+});

@@ -89,6 +89,17 @@ describe('evaluateLoop', () => {
     expect(evaluateLoop([...before, ...after])[0].status).toBe('regressed');
   });
 
+  it('does not call one manual /compact near the threshold an adoption', () => {
+    const T = 200_000;
+    // every session grows past T; only session 5 resets near it (a one-off manual /compact)
+    const runs = Array.from({ length: 10 }, (_, i) => {
+      const r = session(String(i), 120, { start: day(i), d: 2_000 });
+      if (i === 5) for (const s of r.steps) if (s.tokens && s.tokens.context! > 0.95 * T) s.tokens.context = s.tokens.context! - 150_000;
+      return r;
+    });
+    expect(evaluateLoop(runs, { threshold: T }).filter((o) => o.lever === 'compaction')).toEqual([]);
+  });
+
   it('ignores a generic subagent that is not the proposed scout', () => {
     const runs = Array.from({ length: 8 }, (_, i) => session(String(i), 50, { start: day(i), tool: (k) => (i >= 4 && k % 5 === 0 ? { name: 'Agent', input: { subagent_type: 'general-purpose' } } : { name: 'Edit', input: {} }) }));
     expect(evaluateLoop(runs)).toEqual([]);

@@ -406,14 +406,27 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
     });
   }
 
-  if (runs.length > 0 && compaction.threshold) {
+  // Where the harness compacts ON ITS OWN today: Claude Code's automatic window varies by
+  // model, version and server-side experiment (observed ~500k on 1M-context sessions), so it
+  // is measured from the transcripts' auto compactions, never assumed. Recommending a
+  // threshold at that point is recommending nothing — and loop.ts would then "detect" the
+  // harness's own behaviour as the user applying it.
+  const autoAt = allRuns.flatMap((r) => (r.events ?? []).filter((e) => e.kind === 'compact' && e.detail === 'auto' && (e.preTokens ?? 0) > 0).map((e) => e.preTokens!)).sort((a, b) => a - b);
+  const nativeAt = autoAt.length >= 3 ? autoAt[autoAt.length >> 1] : null;
+  if (runs.length > 0 && compaction.threshold && !(nativeAt && compaction.threshold >= 0.85 * nativeAt)) {
     const window = Math.max(...ledgers.map((l) => l.peakContext)) > 200_000 ? 1_000_000 : 200_000;
     const pct = Math.max(10, Math.min(95, Math.round((100 * compaction.threshold) / window)));
+    // Claude Code's CLAUDE_CODE_AUTO_COMPACT_WINDOW takes tokens (100k–1M) and is capped at
+    // the model's window; CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is a share of whatever window the
+    // model has, so "20" is 200k on a 1M model but 40k on a 200k one.
+    const absolute = compaction.threshold >= 100_000 && compaction.threshold <= 1_000_000;
     const low = compaction.savingsUsd[0]?.usd ?? 0;
     const high = compaction.savingsUsd[compaction.savingsUsd.length - 1]?.usd ?? 0;
     plan.push({
       id: 'compact-earlier',
-      title: `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of the ~${window >= 1_000_000 ? '1M' : `${window / 1000}k`} default`,
+      title: nativeAt
+        ? `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of ~${Math.round(nativeAt / 1000)}k, where it compacts now`
+        : `Compact at ${Math.round(compaction.threshold / 1000)}k tokens instead of the ~${window >= 1_000_000 ? '1M' : `${window / 1000}k`} default`,
       summary: laws.law
         ? `${Math.round(100 * laws.law.aboveThresholdShare)}% of re-reading happens above ${Math.round(laws.law.eoqThreshold / 1000)}k tokens. Replaying every session, compacting at ${Math.round(compaction.threshold / 1000)}k saved money in all re-exploration scenarios measured.`
         : `Replaying every session, compacting at ${Math.round(compaction.threshold / 1000)}k saved money in all re-exploration scenarios measured.`,
@@ -423,8 +436,10 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
       files: [
         {
           path: '.claude/settings.json',
-          note: `merge into "env" · assumes a ${window / 1000}k-token context window (${window === 1_000_000 ? 'peak context in these sessions exceeded 200k' : 'no session exceeded 200k'}); on a different window set the percentage to ${Math.round(compaction.threshold / 1000)}k ÷ window`,
-          content: JSON.stringify({ env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(pct) } }, null, 2) + '\n',
+          note: absolute
+            ? 'merge into "env" · an absolute window, capped at the model\'s own — a teammate on a smaller-context model is unaffected; use .claude/settings.local.json to keep it personal'
+            : `merge into "env" · a percentage of a ${window / 1000}k-token window (the absolute CLAUDE_CODE_AUTO_COMPACT_WINDOW accepts 100k–1M only); on a different window set it to ${Math.round(compaction.threshold / 1000)}k ÷ window`,
+          content: JSON.stringify({ env: absolute ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(Math.round(compaction.threshold / 1000) * 1000) } : { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(pct) } }, null, 2) + '\n',
         },
       ],
     });

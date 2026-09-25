@@ -6,10 +6,12 @@
  * session cost grows with the square of its length (laws.ts), so a week of short
  * tasks looks like a "saving". So every comparison here is MATCHED:
  *
- *   - requests are bucketed by their position in the session (1–25, 26–50, 51–100,
- *     101–200, 201–400, 400+); each bucket's before/after means are compared, and
- *     the buckets are weighted by where the AFTER sessions spent their requests —
- *     "what would these sessions have cost with the old behaviour?";
+ *   - requests are matched by their EXACT position in the session (request 57 of
+ *     the after sessions against request 57 of the before sessions); positions are
+ *     weighted by where the AFTER sessions spent their requests — "what would these
+ *     sessions have cost with the old behaviour?". (Coarse buckets were tried first:
+ *     inside a 51–100 bucket, shorter sessions only reach its early positions, so a
+ *     shift to shorter tasks read as a saving.);
  *   - the change is reported with a 95% interval from a session-level bootstrap
  *     (sessions resampled on each side, seeded — the same data always gives the
  *     same answer);
@@ -51,7 +53,7 @@ export interface EffectMeasurement {
   after: { sessions: number; requests: number };
   /** Context tokens per request, matched by position in the session. */
   tokensPerRequest: Measured | null;
-  /** Dollars per request, matched by position in the session. */
+  /** Dollars per request — subagent and side-model spend included — matched by position in the session. */
   costPerRequest: Measured | null;
   /** The metric the change is meant to move (lever-specific). */
   primary: (Measured & { name: string }) | null;
@@ -65,8 +67,9 @@ export interface EffectMeasurement {
   realizedPerMonthUsd: number | null;
 }
 
-const BUCKETS = [25, 50, 100, 200, 400, Infinity];
-const bucketOf = (k: number) => BUCKETS.findIndex((b) => k < b);
+/** Positions beyond this are pooled (very long tails are sparse). */
+const MAX_POSITION = 600;
+const bucketOf = (k: number) => Math.min(k, MAX_POSITION);
 const INTERRUPT = /\[request interrupted by user/i;
 const B = 400;
 
@@ -84,7 +87,7 @@ interface Session { R: RentRequest[]; run: Run }
 
 /** Per-bucket sums for one metric over a set of sessions. */
 function bucketStats(sessions: Session[], value: (r: RentRequest, k: number, R: RentRequest[]) => number) {
-  const sum = new Array<number>(BUCKETS.length).fill(0), n = new Array<number>(BUCKETS.length).fill(0);
+  const sum = new Array<number>(MAX_POSITION + 1).fill(0), n = new Array<number>(MAX_POSITION + 1).fill(0);
   for (const s of sessions) s.R.forEach((r, k) => { const b = bucketOf(k); sum[b] += value(r, k, s.R); n[b]++; });
   return { sum, n };
 }
@@ -93,7 +96,7 @@ function bucketStats(sessions: Session[], value: (r: RentRequest, k: number, R: 
 function matchedChange(before: Session[], after: Session[], value: (r: RentRequest, k: number, R: RentRequest[]) => number): { b: number; a: number } | null {
   const sb = bucketStats(before, value), sa = bucketStats(after, value);
   let wb = 0, wa = 0;
-  for (let i = 0; i < BUCKETS.length; i++) {
+  for (let i = 0; i <= MAX_POSITION; i++) {
     if (!sb.n[i] || !sa.n[i]) continue; // compare only where both sides have requests
     const w = sa.n[i];
     wb += w * (sb.sum[i] / sb.n[i]);
@@ -139,7 +142,22 @@ function measureSessions(before: Session[], after: Session[], value: (s: Session
 }
 
 const ctxOf = (r: RentRequest) => r.context;
-const costOf = (r: RentRequest) => r.costUsd;
+/**
+ * Spend the main-thread requests do not carry — subagents and side models (the
+ * advisor) — attributed back onto them: subagent spend to the requests that
+ * delegated, the rest evenly. Without it a scout "saves" by moving lookups where
+ * the per-request cost cannot see them.
+ */
+const offThread = new WeakMap<RentRequest, number>();
+function attributeOffThread(run: Run, R: RentRequest[]): void {
+  const main = R.reduce((s, r) => s + r.costUsd, 0);
+  const rest = Math.max(0, run.costUsd - main);
+  const sub = Math.min(rest, run.subagents?.costUsd ?? 0);
+  const delegating = R.filter((r) => r.tools.some((t) => t.subagent));
+  for (const r of R) offThread.set(r, (rest - (delegating.length ? sub : 0)) / R.length);
+  for (const r of delegating) offThread.set(r, offThread.get(r)! + sub / delegating.length);
+}
+const costOf = (r: RentRequest) => r.costUsd + (offThread.get(r) ?? 0);
 
 /** The MECHANISM each change is supposed to move — lower is better for all of them. */
 function mechanismFor(recId: string, threshold?: number): { name: string; kind: 'request' | 'session'; value: (...args: never[]) => number | null } | null {
@@ -169,6 +187,7 @@ export function measureEffect(allRuns: Run[], appliedAt: string, recId = 'generi
     .filter((r) => !isLegacyParse(r) && r.startedAt)
     .map((run) => ({ run, R: requestsOf(run) }))
     .filter((s) => s.R.length >= 3);
+  for (const s of sessions) attributeOffThread(s.run, s.R);
   const t = Date.parse(appliedAt);
   const before = sessions.filter((s) => Date.parse(s.run.startedAt!) < t);
   const after = sessions.filter((s) => Date.parse(s.run.startedAt!) >= t);
@@ -200,7 +219,9 @@ export function measureEffect(allRuns: Run[], appliedAt: string, recId = 'generi
   const primary = mechM && mech ? { ...mechM, name: mech.name } : null;
   // the mechanism moved when its whole interval is a drop (or it fell to ~zero from something)
   const inEffect = mech ? !!primary && (primary.ci[1] < 0 || (primary.before > 0 && primary.after <= primary.before * 0.2)) : null;
-  const money = tokensPerRequest ?? costPerRequest;
+  // A scout lowers main-thread context by construction; only total spend (subagents
+  // included) can say whether it saved anything.
+  const money = recId === 'spill-exploration' ? costPerRequest : (tokensPerRequest ?? costPerRequest);
   const moneySaved = !!money && money.ci[1] < 0;
   const moneyWorse = !!money && money.ci[0] > 0;
   const verdict: EffectMeasurement['verdict'] = !quality.ok ? 'regressed'
