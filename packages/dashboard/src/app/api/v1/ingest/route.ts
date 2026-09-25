@@ -56,7 +56,20 @@ interface RunLike {
   firstPrompt?: string;
   finalOutput?: string;
   steps?: Array<{ kind: string; name: string; payload: string; isError?: boolean; toolUseId?: string; timestamp?: string }>;
+  cwd?: string;
+  gitBranch?: string;
+  title?: string;
+  instructions?: unknown;
+  events?: unknown;
+  subagents?: unknown;
 }
+
+const arrayOr = <T,>(v: unknown): T[] | undefined => (Array.isArray(v) ? (v as T[]) : undefined);
+const subagentsOf = (v: unknown) => {
+  const s = v as { count?: unknown; requests?: unknown; costUsd?: unknown } | null;
+  return s && typeof s.count === 'number' && typeof s.requests === 'number' && typeof s.costUsd === 'number'
+    ? { count: s.count, requests: s.requests, costUsd: s.costUsd } : undefined;
+};
 
 /**
  * Transcript ingest (Claude Code SessionEnd hook / `effigent run` / `effigent sync`).
@@ -103,6 +116,15 @@ export async function POST(req: Request) {
       firstPrompt: run.firstPrompt,
       finalOutput: run.finalOutput,
       steps: run.steps,
+      // Everything the raw-transcript path's parser keeps, so a session too big to upload
+      // raw is not analysed with less: compactions/commits/denials (events), subagent spend,
+      // instruction files. Dropping them hid exactly the long sessions that compact and delegate.
+      cwd: typeof run.cwd === 'string' ? run.cwd : undefined,
+      gitBranch: typeof run.gitBranch === 'string' ? run.gitBranch : undefined,
+      title: typeof run.title === 'string' ? run.title : undefined,
+      instructions: arrayOr(run.instructions),
+      events: arrayOr(run.events),
+      subagents: subagentsOf(run.subagents),
     };
     // persistRun redacts + trims payloads — same choke point as the raw path.
     try {
