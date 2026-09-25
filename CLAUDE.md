@@ -20,7 +20,7 @@ npm workspaces (`packages/*`). TypeScript throughout; ESM (`.js` import specifie
 |---|---|---|
 | `@effigent/core` | Pure TS engine: transcript/OTel → `Run` → `RunGraph` (DAG), clustering, cost, taxonomy, **determinism scoring**. No I/O. | library |
 | `@effigent/server` | Fastify API: ingest, agents/keys, insights (LLM), analyze, reports, viewers. **Being retired** (see §6). | Node (Render) |
-| `@effigent/cli` | `effigent` CLI (npm: `effigent`): `login`, `agent add/list`, `run` (wrap ANY agent command), `install claude` (**one** agent-agnostic SessionEnd hook — see §4.1) + `install otel/codex/python/node` (key-filled OTel recipes per harness — table-driven, one entry per new harness), `claude-hook`, upload. | Node |
+| `@effigent/cli` | `effigent` CLI (npm: `effigent`): `login`, `agent add/list`, `run` (wrap ANY agent command), `recommendations` / `applied <id>` (the plan for the cwd's agent, written for the coding agent, and recording when a change went in), `install claude` (**one** agent-agnostic SessionEnd hook — see §4.1 — plus the user-invoked `/effigent-apply` skill) + `install otel/codex/python/node` (key-filled OTel recipes per harness — table-driven, one entry per new harness), `claude-hook`, upload. | Node |
 | `@effigent/dashboard` | Next.js App Router dashboard + its own API routes. The product UI. | Vercel |
 | `@effigent/site` | Marketing site, Next.js **static export** (`output: 'export'`). Pages: `/` (landing), `/docs` (+7 doc pages incl. `/docs/storage` — managed vs customer-S3 residency), `/developers` (full per-harness install guide), `/about`, `/pricing`, `/security` (redaction + posture), `/terms`, `/privacy`. Endpoints are env-driven: `NEXT_PUBLIC_COLLECTOR_URL` / `NEXT_PUBLIC_DASHBOARD_URL` (set as GitHub `prod` environment Variables `COLLECTOR_URL`/`DASHBOARD_URL`, injected in the deploy workflow; unset → explicit `<placeholder>`) — never hardcode domains. | S3 + CloudFront |
 
@@ -319,6 +319,12 @@ Reads Neon directly via a pooled `pg` client (`lib/db.ts`).
   auto-inject), `effigent optimize` is insights-only (writes nothing), the server
   does not stamp `optimized_at`, and the "Injected tools" control is hidden.
   Capture + read-only insights (Insights, Tool Synthesis) are always on.
+- `GET /api/v1/recommendations?agent=` — the plan (plan.ts + summary.ts, last 40 sessions)
+  with files + applied state, for `effigent recommendations`; records suggestions like
+  Insights does. `GET/POST /api/v1/experiments` — results + mark applied. Both take a
+  Bearer key OR a Clerk session (`lib/caller.ts`; scoped keys act on their own agent only)
+  and are public in middleware. Instructions for the applying agent:
+  `docs/applying-recommendations.md`.
 - `GET /api/v1/sessions[?agent=]` — the tenant's runs, newest first.
 - `GET /api/v1/sessions/[id]` — one run (with `parsed`) for the DAG deep-dive.
 - `GET /api/v1/insights[?agent=&window=]` — **the determinism brain (v3)**: a thin

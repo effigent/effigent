@@ -20,6 +20,7 @@ import {
   EFFIGENT_STORE,
   defaultSource,
   defaultSources,
+  agentForDir,
   classifySession,
   discoverSessions,
   loadAgentMap,
@@ -33,9 +34,10 @@ import {
   UNATTRIBUTED_AGENT,
 } from './store.js';
 import { uploadSessionFile } from './upload.js';
+import { applySkill, parseAppliedAt, renderForAgent, type RecommendationsResponse } from './recommend.js';
 
 const program = new Command();
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 // Tool INJECTION (installing skills/bundles/AGENTS.md sections and the
 // auto-refresh SessionStart hook) is OFF for the insights-only POC — Effigent
 // captures runs and surfaces analysis in the dashboard, but never modifies how
@@ -915,8 +917,14 @@ installCmd
 
     mkdirSync(dirname(settingsPath), { recursive: true });
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    // `/effigent-apply` in any project: the agent fetches that project's plan and applies
+    // it. User-invoked only (disable-model-invocation) — it never runs on its own.
+    const skillPath = join(homedir(), '.claude', 'skills', 'effigent-apply', 'SKILL.md');
+    mkdirSync(dirname(skillPath), { recursive: true });
+    writeFileSync(skillPath, applySkill(bin));
 
     console.log(`✓ installed capture hook in ${settingsPath}`);
+    console.log(`✓ installed /effigent-apply (${skillPath}) — run it in a project to apply its recommendations`);
     if (staleEnd > 1) {
       console.log(`  removed ${staleEnd} stacked SessionEnd hooks — each session had been uploading ${staleEnd}× (once per agent).`);
     } else if (staleEnd === 1) {
@@ -1299,6 +1307,106 @@ function renderSkill(bundle: Bundle, executables: Set<string>, format: 'skill' |
   lines.push('');
   return lines.join('\n');
 }
+
+/** Server + key for an agent: its scoped key, then EFFIGENT_API_KEY, then the tenant key. */
+function endpointFor(agent: string | undefined, opts: { server?: string; key?: string }): { server: string; apiKey: string } | null {
+  const config = loadConfig();
+  const server = opts.server ?? process.env.EFFIGENT_SERVER ?? config.server ?? DEFAULT_SERVER;
+  const apiKey = opts.key ?? (agent ? config.agents?.[agent]?.key : undefined) ?? process.env.EFFIGENT_API_KEY ?? config.apiKey;
+  return server && apiKey ? { server: server.replace(/\/$/, ''), apiKey } : null;
+}
+
+/** --agent, else the agent the directory belongs to (agentRules → git repo name). */
+function agentOf(opts: { agent?: string; dir?: string }): string | undefined {
+  return opts.agent ?? agentForDir(resolve(opts.dir ?? process.cwd()));
+}
+
+program
+  .command('recommendations')
+  .description('Print what Effigent recommends for this project — the changes, their files, and how to apply them (written for the coding agent)')
+  .option('--agent <name>', 'agent name (default: the agent this directory belongs to)')
+  .option('--dir <path>', 'project directory used to resolve the agent (default: cwd)')
+  .option('--json', 'print the raw response')
+  .option('--server <url>', 'effigent server base URL (default: effigent login config)')
+  .option('--key <apiKey>', 'API key (default: the agent’s scoped key, then the tenant key)')
+  .action(async (opts) => {
+    const agent = agentOf(opts);
+    if (!agent) {
+      console.error('Could not tell which agent this directory is (not a git repo, no agentRule matched, or excluded). Pass --agent <name>.');
+      process.exitCode = 2;
+      return;
+    }
+    const ep = endpointFor(agent, opts);
+    if (!ep) {
+      console.error('No server/key: run `effigent login` first, or pass --server/--key.');
+      process.exitCode = 2;
+      return;
+    }
+    let res: Response;
+    try {
+      res = await fetch(`${ep.server}/api/v1/recommendations?agent=${encodeURIComponent(agent)}`, { headers: { authorization: `Bearer ${ep.apiKey}` } });
+    } catch (err) {
+      console.error(`Cannot reach ${ep.server}: ${err instanceof Error ? err.message : err}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!res.ok) {
+      console.error(`Recommendations failed (HTTP ${res.status}): ${await res.text()}`);
+      process.exitCode = 1;
+      return;
+    }
+    const body = (await res.json()) as RecommendationsResponse;
+    process.stdout.write(opts.json ? JSON.stringify(body, null, 2) + '\n' : renderForAgent(body));
+  });
+
+program
+  .command('applied')
+  .description('Record that recommendations were applied (starts their before/after measurement)')
+  .argument('<ids...>', 'recommendation ids, as `effigent recommendations` prints them')
+  .option('--agent <name>', 'agent name (default: the agent this directory belongs to)')
+  .option('--dir <path>', 'project directory used to resolve the agent (default: cwd)')
+  .option('--at <date>', 'when it was applied (YYYY-MM-DD or ISO; default: now)')
+  .option('--undo', 'clear the applied date instead')
+  .option('--server <url>', 'effigent server base URL (default: effigent login config)')
+  .option('--key <apiKey>', 'API key (default: the agent’s scoped key, then the tenant key)')
+  .action(async (ids: string[], opts) => {
+    const agent = agentOf(opts);
+    if (!agent) {
+      console.error('Could not tell which agent this directory is. Pass --agent <name>.');
+      process.exitCode = 2;
+      return;
+    }
+    const appliedAt = parseAppliedAt(opts.at);
+    if (!appliedAt) {
+      console.error(`--at '${opts.at}' is not a date.`);
+      process.exitCode = 2;
+      return;
+    }
+    const ep = endpointFor(agent, opts);
+    if (!ep) {
+      console.error('No server/key: run `effigent login` first, or pass --server/--key.');
+      process.exitCode = 2;
+      return;
+    }
+    for (const recId of ids) {
+      try {
+        const res = await fetch(`${ep.server}/api/v1/experiments`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${ep.apiKey}`, 'content-type': 'application/json' },
+          body: JSON.stringify(opts.undo ? { agent, recId, undo: true } : { agent, recId, appliedAt }),
+        });
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        if (res.ok) console.log(opts.undo ? `✓ ${agent} · ${recId}: applied date cleared` : `✓ ${agent} · ${recId}: applied ${appliedAt.slice(0, 16).replace('T', ' ')} UTC — measuring from here`);
+        else {
+          console.error(`✗ ${agent} · ${recId}: ${d.error ?? `HTTP ${res.status}`}`);
+          process.exitCode = 1;
+        }
+      } catch (err) {
+        console.error(`✗ ${recId}: cannot reach ${ep.server}: ${err instanceof Error ? err.message : err}`);
+        process.exitCode = 1;
+      }
+    }
+  });
 
 program
   .command('optimize')

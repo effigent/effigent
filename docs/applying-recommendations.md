@@ -1,8 +1,10 @@
 # Applying Effigent recommendations — instructions for the coding agent
 
-Hand this file to the agent working in the project (Claude Code: "apply the Effigent
-recommendations for this repo, following docs/applying-recommendations.md"). It is written
-for the agent, not for a person.
+The short way, in Claude Code: run **`/effigent-apply`** in the project (installed by
+`effigent install claude`). It loads `effigent recommendations` — this project's open changes,
+their files and these rules — and the agent applies them and records each one with
+`effigent applied <id>`. Without Claude Code, hand this file plus the output of
+`effigent recommendations` to the agent. It is written for the agent, not for a person.
 
 Effigent's Insights view lists, per agent, **recommendations** — each with an id, a basis
 (measured / simulated / structural / needs A/B) and usually **files** to write. Every change
@@ -51,7 +53,8 @@ and record *when*.
 ## After applying
 
 Tell the user, in a few lines: which recommendation ids were applied, the files written,
-what was deliberately left out and why. Then **mark each applied id with today's date** in
-Effigent (Insights → the agent → *Suggestions & results* → *Mark as applied*), so the
-before/after starts at the right day. The measurement needs at least 3 sessions on each side
+what was deliberately left out and why. Then **record each applied id**:
+`effigent applied <id> [<id>…]` (the agent is resolved from the directory; `--at YYYY-MM-DD`
+for a change made earlier, `--undo` to clear), or in the dashboard (Insights → the agent →
+*Suggestions & results* → *Mark as applied*), so the before/after starts at the right moment. The measurement needs at least 3 sessions on each side
 and reports "collecting" until then.

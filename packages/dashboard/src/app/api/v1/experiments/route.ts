@@ -1,6 +1,5 @@
-import { auth } from '@clerk/nextjs/server';
 import { pool } from '@/lib/db.ts';
-import { resolveTenant } from '@/lib/tenant.ts';
+import { resolveCaller, agentFor } from '@/lib/caller.ts';
 import { loadRun } from '@/lib/storage.ts';
 import { runCostUsd } from '@/lib/engine/cost.ts';
 import { measureEffect, type EffectMeasurement } from '@/lib/engine/experiments.ts';
@@ -17,6 +16,9 @@ export const maxDuration = 120;
  *
  * GET  ?agent=  → every recorded recommendation with its measured result
  * POST { agent, recId, appliedAt?, undo? } → mark a recommendation applied (or undo)
+ *
+ * A signed-in dashboard user, or a Bearer key (`effigent applied`, so the coding agent
+ * that made the change can record it); a scoped key acts on its own agent only.
  */
 
 const BEFORE = 20;
@@ -56,11 +58,12 @@ const round = (m: EffectMeasurement) => {
 };
 
 export async function GET(req: Request) {
-  const { userId, orgId } = await auth();
-  if (!userId) return Response.json({ error: 'unauthorized' }, { status: 401 });
-  const tenantId = await resolveTenant({ userId, orgId: orgId ?? null });
-  const agent = new URL(req.url).searchParams.get('agent');
-  if (!agent) return Response.json({ error: 'agent required' }, { status: 400 });
+  const caller = await resolveCaller(req);
+  if (!caller) return Response.json({ error: 'unauthorized' }, { status: 401 });
+  const tenantId = caller.tenantId;
+  const which = agentFor(caller, new URL(req.url).searchParams.get('agent'));
+  if ('error' in which) return Response.json({ error: which.error }, { status: which.status });
+  const agent = which.agent;
   try {
     const record = await loadRecord(tenantId, agent);
     const recs = Object.values(record.recommendations);
@@ -83,22 +86,24 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const { userId, orgId } = await auth();
-  if (!userId) return Response.json({ error: 'unauthorized' }, { status: 401 });
-  const tenantId = await resolveTenant({ userId, orgId: orgId ?? null });
+  const caller = await resolveCaller(req);
+  if (!caller) return Response.json({ error: 'unauthorized' }, { status: 401 });
+  const tenantId = caller.tenantId;
   let body: { agent?: string; recId?: string; appliedAt?: string; undo?: boolean };
   try { body = await req.json(); } catch { return Response.json({ error: 'invalid JSON' }, { status: 400 }); }
-  if (!body.agent || !body.recId) return Response.json({ error: 'agent and recId are required' }, { status: 400 });
-  const record = await loadRecord(tenantId, body.agent);
+  const which = agentFor(caller, body.agent);
+  if ('error' in which) return Response.json({ error: which.error }, { status: which.status });
+  if (!body.recId) return Response.json({ error: 'recId is required' }, { status: 400 });
+  const record = await loadRecord(tenantId, which.agent);
   const rec = record.recommendations[body.recId];
-  if (!rec) return Response.json({ error: 'This recommendation has not been suggested for this agent. Run Insights first.' }, { status: 404 });
+  if (!rec) return Response.json({ error: 'This recommendation has not been suggested for this agent. Run `effigent recommendations` or open Insights first.' }, { status: 404 });
   if (body.undo) {
     delete rec.appliedAt; delete rec.appliedBy; delete rec.source;
   } else {
     const at = body.appliedAt ? new Date(body.appliedAt) : new Date();
     if (Number.isNaN(at.getTime())) return Response.json({ error: 'appliedAt is not a date' }, { status: 400 });
     if (at.getTime() > Date.now() + 86_400_000) return Response.json({ error: 'appliedAt cannot be in the future' }, { status: 400 });
-    rec.appliedAt = at.toISOString(); rec.appliedBy = userId; rec.source = 'marked';
+    rec.appliedAt = at.toISOString(); rec.appliedBy = caller.actor; rec.source = 'marked';
   }
   await saveRecord(tenantId, record);
   return Response.json({ ok: true, recommendation: rec });

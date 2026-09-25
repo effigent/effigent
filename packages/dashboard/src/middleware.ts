@@ -13,6 +13,8 @@ const isPublic = createRouteMatcher([
   '/api/v1/agents', // GET uses Clerk auth() internally; POST uses Bearer keys
   '/api/v1/reports',
   '/api/v1/optimize', // CLI activation bundle — Bearer keys inside the handler
+  '/api/v1/recommendations', // `effigent recommendations` — Bearer keys or Clerk, inside the handler
+  '/api/v1/experiments', // `effigent applied` — Bearer keys or Clerk, inside the handler (lib/caller.ts)
   '/healthz', // liveness probe (effigent doctor) — public, no auth, no DB
 ]);
 

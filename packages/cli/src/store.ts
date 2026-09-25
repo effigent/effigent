@@ -161,6 +161,13 @@ export function gitRepoName(cwd: string | undefined): string | undefined {
   return undefined;
 }
 
+/** The agent a working directory belongs to — the same rules the capture hook uses (minus session tags). */
+export function agentForDir(cwd: string): string | undefined {
+  const config = loadConfig();
+  if (isExcludedCwd(cwd, config.excludeRules)) return undefined;
+  return agentFromRules(cwd, config.agentRules) ?? gitRepoName(cwd);
+}
+
 /**
  * Resolve a session's agentId without a full parse. Precedence:
  *   explicit tag (`effigent run`/`tag`)  >  cwd `agentRule`  >  git repo name.
