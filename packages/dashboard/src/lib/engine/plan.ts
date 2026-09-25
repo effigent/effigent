@@ -412,7 +412,13 @@ export function analyzeAgent(agentId: string, allRuns: Run[]): AgentAnalysis {
   // is measured from the transcripts' auto compactions, never assumed. Recommending a
   // threshold at that point is recommending nothing — and loop.ts would then "detect" the
   // harness's own behaviour as the user applying it.
-  const autoAt = allRuns.flatMap((r) => (r.events ?? []).filter((e) => e.kind === 'compact' && e.detail === 'auto' && (e.preTokens ?? 0) > 0).map((e) => e.preTokens!)).sort((a, b) => a - b);
+  // Read from the requests (the context just before each drop), in sessions the harness
+  // auto-compacted: compact_boundary's own preTokens measured ~2× the request context on
+  // real sessions (≈1.1M against resets at ≈500k), so it cannot place the point.
+  const autoAt = allRuns
+    .filter((r) => (r.events ?? []).some((e) => e.kind === 'compact' && e.detail === 'auto'))
+    .flatMap((r) => { const R = requestsOf(r); const at: number[] = []; for (let k = 1; k < R.length; k++) if (R[k].context < 0.6 * R[k - 1].context) at.push(R[k - 1].context); return at; })
+    .sort((a, b) => a - b);
   const nativeAt = autoAt.length >= 3 ? autoAt[autoAt.length >> 1] : null;
   const harnessCompactsThere = !!(nativeAt && compaction.threshold && compaction.threshold >= 0.85 * nativeAt);
   if (runs.length > 0 && compaction.threshold && !harnessCompactsThere) {

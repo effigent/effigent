@@ -56,11 +56,12 @@ describe('recurring commands → skills', () => {
 
 describe('compact-earlier', () => {
   /** A long session: context grows 2k per request from 60k, with large tool results. */
-  function long(id: string, day: number, n: number): Run {
+  function long(id: string, day: number, n: number, capAt?: number): Run {
     const start = Date.parse(`2026-09-${String(day).padStart(2, '0')}T10:00:00Z`);
     const steps: RawStep[] = [{ kind: 'model_turn', name: 'user', payload: 'do the task' }];
     let ctx = 60_000, prev = 0;
     for (let k = 0; k < n; k++) {
+      if (capAt && ctx > capAt) { ctx = 70_000; prev = 0; } // the harness's own auto-compaction
       steps.push({ kind: 'tool_use', name: k % 3 ? 'Edit' : 'Read', payload: JSON.stringify({ file_path: `/r/f${k % 7}.ts` }), toolUseId: `${id}-${k}`, model: 'claude-opus-5',
         timestamp: new Date(start + k * 60_000).toISOString(), tokens: { input: 0, output: 300, cacheCreation: ctx - prev, cacheCreation1h: ctx - prev, cacheRead: prev, context: ctx } });
       steps.push({ kind: 'tool_result', name: 'Edit', payload: 'x'.repeat(2000), toolUseId: `${id}-${k}` });
@@ -77,9 +78,11 @@ describe('compact-earlier', () => {
   });
 
   it('is not recommended at the point the harness already compacts at on its own', () => {
-    const rs = runs();
-    const T = Number(analyzeAgent('a', rs).plan.find((p) => p.id === 'compact-earlier')!.title.match(/at (\d+)k/)![1]) * 1000;
-    for (const r of rs.slice(0, 4)) r.events = [{ kind: 'compact', detail: 'auto', preTokens: T + 20_000, postTokens: 30_000 }];
+    const T = Number(analyzeAgent('a', runs()).plan.find((p) => p.id === 'compact-earlier')!.title.match(/at (\d+)k/)![1]) * 1000;
+    // as on real traffic: most sessions never compact, but the harness auto-compacts some at ≈T
+    // on its own — and, like real transcripts, their preTokens read ~2× the request context
+    const rs = [...runs(), ...Array.from({ length: 4 }, (_, i) => long(`h${i}`, 14 + i, 320, T * 1.05))];
+    for (const r of rs.slice(-4)) r.events = [{ kind: 'compact', detail: 'auto', preTokens: T * 2.2, postTokens: 30_000 }];
     const a = analyzeAgent('a', rs);
     expect(a.plan.map((p) => p.id)).not.toContain('compact-earlier');
     expect(a.loop.map((o) => o.lever)).not.toContain('compaction'); // the harness's own compactions are not an adoption
