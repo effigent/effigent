@@ -3,6 +3,7 @@ import { Ic } from '../icons.tsx';
 import { runCostUsd, usageCostUsd } from '@/lib/engine/cost.ts';
 import { computeRentLedger, simulateCompaction, REACQUISITION_SCENARIOS } from '@/lib/engine/rent.ts';
 import { contextSkylineSvg, SKYLINE_LAYERS } from '@/lib/engine/graph-svg.ts';
+import { RunMap } from '@/components/RunMap.tsx';
 import type { Run } from '@/lib/engine/types.ts';
 
 interface Usage { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }
@@ -256,6 +257,9 @@ export function SessionDetail({ sessionId, optimized, onBack }: { sessionId: str
 
       {/* what the session was ABOUT — storyline + on-request AI digest */}
       <SessionDigest sessionId={sessionId} />
+
+      {/* the whole run as a network: the steps it took and the loops it went round */}
+      {steps.length > 0 && <RunMap run={run!.parsed as unknown as Run} />}
 
       {/* where this session's money went: context over time, stacked by content */}
       {steps.length > 0 && <ContextSkyline parsed={run!.parsed} />}

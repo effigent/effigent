@@ -36,3 +36,4 @@ export * from './loop.js';
 export * from './predictability.js';
 export * from './summary.js';
 export * from './loops.js';
+export * from './runmap.js';

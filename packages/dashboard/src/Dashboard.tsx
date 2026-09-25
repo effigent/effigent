@@ -104,9 +104,10 @@ export function Dashboard() {
                 <button className="hamburger-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
                   <Ic n="menu" />
                 </button>
+                {view === 'insights' && <span className="head-icon"><Ic n="spark" /></span>}
                 <div>
                   <h1>{head.title}</h1>
-                  <div className="sub">{head.sub}</div>
+                  <div className={`sub ${view === 'insights' ? 'italic' : ''}`}>{head.sub}</div>
                 </div>
                 <div className="head-actions">
                   <ThemeToggle />
@@ -148,7 +149,9 @@ export function Dashboard() {
               )}
               {view === 'tools' && (demo ? <ToolSynthesis /> : <ToolSynthesisLive agent={agent} />)}
               {view === 'kg' && (demo ? <KnowledgeGraph agent={agent} /> : <KnowledgeView agent={agent} />)}
-              {view === 'insights' && <Insights agent={agent} />}
+              {view === 'insights' && (
+                <Insights agent={agent} onOpenSession={(id) => openSession(id, false)} onViewSessions={() => setView('sessions')} />
+              )}
               {view === 'privacy' && <Privacy />}
               {view === 'storage' && <Storage />}
               {view === 'overview' && (demo ? (

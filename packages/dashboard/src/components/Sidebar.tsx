@@ -44,7 +44,7 @@ export function Sidebar({
 
       <div className="sidebar-foot">
         <div className="live"><span className="dot" /> Effigent is active</div>
-        <div className="meta">Runtime compiler for AI agents</div>
+        <div className="meta">The self-optimizing runtime for AI agents.</div>
       </div>
     </aside>
   );

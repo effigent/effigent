@@ -251,7 +251,7 @@ export function summarizeAgent(a: AgentAnalysis, allRuns: Run[]): AgentSummary {
     actions.push({
       id: 'compact-before-breaks',
       title: 'Run /compact before stepping away from a long session',
-      why: `${breaksFinding.sentence.split(' times')[0]} returns to a long session after more than an hour re-wrote its whole context; compacting before the break would have saved about ${money(breaksFinding.perMonthUsd / perMonth)} in these ${Math.round(days)} days.`,
+      why: `${breaksFinding.sentence.match(/^(\d+) returns/)?.[1] ?? 'Several'} times a long session was resumed after an hour away and re-wrote its whole context. Compacting before the break would have saved about ${money(breaksFinding.perMonthUsd / perMonth)} in these ${Math.round(days)} days.`,
       perMonthUsd: { low: breaksFinding.perMonthUsd * 0.5, high: breaksFinding.perMonthUsd },
       basis: 'structural',
       files: [],

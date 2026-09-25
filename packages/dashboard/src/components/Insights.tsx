@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ALL_AGENTS } from '../data.ts';
 import { RouteTest } from './RouteTest.tsx';
+import { Ic } from '../icons.tsx';
 import { AgentSummary, type AgentSummaryData } from './AgentSummary.tsx';
 
 interface Opportunity {
@@ -777,11 +778,12 @@ function MoreRows({ shown, total, onClick }: { shown: number; total: number; onC
   );
 }
 
-export function Insights({ agent }: { agent: string }) {
+export function Insights({ agent, onOpenSession, onViewSessions }: { agent: string; onOpenSession?: (runId: string) => void; onViewSessions?: () => void }) {
   const key = agent || ALL_AGENTS;
   const cached = CACHE.get(key);
   const [data, setData] = useState<AgentInsight[]>(cached?.insights ?? []);
   const [windowN, setWindowN] = useState(cached?.window ?? 40);
+  const [winSel, setWinSel] = useState(cached?.window ?? 40);
   const [ranAt, setRanAt] = useState<number | null>(cached?.at ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -801,8 +803,9 @@ export function Insights({ agent }: { agent: string }) {
   const run = () => {
     setLoading(true);
     setError(null);
-    const q = agent && agent !== ALL_AGENTS ? `?agent=${encodeURIComponent(agent)}` : '';
-    fetch(`/api/v1/insights${q}`)
+    const qs = new URLSearchParams({ window: String(winSel) });
+    if (agent && agent !== ALL_AGENTS) qs.set('agent', agent);
+    fetch(`/api/v1/insights?${qs}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: { insights?: AgentInsight[]; window?: number }) => {
         const insights = d.insights ?? [];
@@ -831,6 +834,43 @@ export function Insights({ agent }: { agent: string }) {
 
   return (
     <div className="page-stack">
+      {withSummary.length > 0 ? (
+        <div className="ins-kpis">
+          <div className="ins-kpi">
+            <span className="ins-kpi-icon"><Ic n="user" /></span>
+            <div><div className="ins-kpi-k">Agents analyzed</div><div className="ins-kpi-v tnum">{data.length}</div>
+              <div className="ins-kpi-c">{data.map((a) => a.agentId).slice(0, 3).join(', ')}{data.length > 3 ? ` +${data.length - 3}` : ''}</div></div>
+          </div>
+          <div className="ins-kpi">
+            <span className="ins-kpi-icon"><Ic n="database" /></span>
+            <div><div className="ins-kpi-k">Spend analyzed</div><div className="ins-kpi-v tnum">≈{usd(monthTotal)}<small>/mo</small></div>
+              <div className="ins-kpi-c">{usd(spendTotal)} in the window · at this pace</div></div>
+          </div>
+          <div className="ins-kpi" title="The top priced change for each agent, added across agents. Within one agent the changes overlap, so they are never summed.">
+            <span className="ins-kpi-icon green"><Ic n="tag" /></span>
+            <div><div className="ins-kpi-k">Top change per agent</div><div className="ins-kpi-v green tnum">{usd(bestTotal.low)}–{usd(bestTotal.high)}<small>/mo</small></div>
+              <div className="ins-kpi-c green">Potential savings</div></div>
+          </div>
+          <div className="ins-kpi">
+            <span className="ins-kpi-icon"><Ic n="trend" /></span>
+            <div style={{ flex: 1 }}>
+              <div className="ins-kpi-k">Analysis window</div>
+              <div className="ins-kpi-row">
+                <div className="ins-kpi-v tnum">{windowN} <small>sessions / agent</small></div>
+                <button type="button" onClick={run} disabled={loading} className="chip" title="Re-read every run in the window and recompute">{loading ? 'Analysing…' : 'Re-run'}</button>
+              </div>
+              <div className="ins-kpi-c">
+                <label>Window{' '}
+                  <select value={winSel} onChange={(e) => setWinSel(Number(e.target.value))} aria-label="Sessions per agent to analyse">
+                    {[20, 40, 60, 100].map((n) => <option key={n} value={n}>last {n} sessions</option>)}
+                  </select>
+                </label>
+                {ranAt && <> · last run {new Date(ranAt).toLocaleTimeString()}</>}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className="sess-totals">
         <div className="totstat"><span className="k">Agents analyzed</span><span className="v tnum">{data.length}</span></div>
         {withSummary.length > 0 ? <>
@@ -861,6 +901,7 @@ export function Insights({ agent }: { agent: string }) {
           </span>
         </div>
       </div>
+      )}
 
       {loading && <div className="dag-empty">Analysing the last {windowN} sessions per agent…</div>}
       {error && !loading && <div className="dag-empty">Analysis failed: {error}. Try again.</div>}
@@ -877,7 +918,24 @@ export function Insights({ agent }: { agent: string }) {
         </div>
       )}
 
-      {!loading && !error && data.map((a) => (
+      {!loading && !error && data.map((a) => a.profile === 'interactive' && a.analysis?.summary ? (
+        <div key={a.agentId} className="agent-block">
+          <AgentSummary
+            s={a.analysis.summary}
+            agentId={a.agentId}
+            sub={`Interactive agent · last ${a.runCount} sessions${a.analysis.determinism?.reason ? ` · ${(a.analysis.determinism.reason.coverage80 * 100).toFixed(1)}% of next steps predictable${a.analysis.determinism.reason.reliable ? '' : ' (low sample)'}` : ''}`}
+            onOpenSession={onOpenSession}
+            onViewSessions={onViewSessions}
+          />
+          <details className="ins-details">
+            <summary>How this was measured — spend breakdown, request mix, predictability, loops, the cost law, the AI analyst</summary>
+            <ContextPanel a={a.analysis} showPlan={false} />
+            {a.ledger && <LedgerPanel ledger={a.ledger} />}
+            <AnalystPanel agentId={a.agentId} />
+            <RouteTest agent={a.agentId} />
+          </details>
+        </div>
+      ) : (
         <section key={a.agentId} className="panel panel-pad">
           <div className="ins-head">
             <div>
@@ -911,16 +969,7 @@ export function Insights({ agent }: { agent: string }) {
             </div>
           </div>
 
-          {a.profile === 'interactive' && a.analysis?.summary ? <>
-            <AgentSummary s={a.analysis.summary} />
-            <AnalystPanel agentId={a.agentId} />
-            <details className="sum-details">
-              <summary>How this was measured — spend breakdown, request mix, predictability, the cost law, changes in effect</summary>
-              <ContextPanel a={a.analysis} showPlan={false} />
-              {a.ledger && <LedgerPanel ledger={a.ledger} />}
-              <RouteTest agent={a.agentId} />
-            </details>
-          </> : <>
+          <>
           <RouteTest agent={a.agentId} />
 
           {!a.analysis?.reasons?.length && (a.taskMix?.length ?? 0) > 0 && <TaskMixLine taskMix={a.taskMix!} />}
@@ -930,7 +979,7 @@ export function Insights({ agent }: { agent: string }) {
           {a.ledger && <LedgerPanel ledger={a.ledger} />}
 
           <AnalystPanel agentId={a.agentId} />
-          </>}
+          </>
 
           {/* Shape miners + the determinism lattice apply to REPETITIVE agents only; on
               interactive traffic their verdicts were measured as noise (docs/context-rent.md). */}

@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { Ic } from '../icons.tsx';
 
 /**
- * The agent summary — what a person reads first (engine/summary.ts): one headline,
- * the few changes worth making ranked by monthly value, the findings that explain
- * the bill, and the sessions that drove it. Technical detail lives below it, collapsed.
+ * The agent summary — what a person reads first (engine/summary.ts). Layout: a hero
+ * card (top change per month, the headline, the cost trend), two top recommendations,
+ * four "why it costs what it does" cards, and the sessions that drove the bill.
+ * Everything technical lives below it, collapsed, in Insights.
  */
 
 export interface SummaryAction {
@@ -46,137 +48,190 @@ export interface AgentSummaryData {
   };
 }
 
-const money = (v: number) =>
+export const money = (v: number) =>
   v >= 1000 ? `$${Math.round(v).toLocaleString('en-US')}` : v >= 10 ? `$${v.toFixed(0)}` : `$${v.toFixed(2)}`;
 
 const BASIS: Record<SummaryAction['basis'], { label: string; hint: string }> = {
-  measured: { label: 'measured', hint: 'Read directly off the recorded spend.' },
-  simulated: { label: 'simulated', hint: 'Every recorded session replayed under the change; the replay reproduces the real bill within ~1%.' },
-  structural: { label: 'if adopted', hint: 'Holds if the agent follows the change. Effigent checks the sessions after you apply it and reports whether it worked.' },
-  'needs-ab': { label: 'needs a trial', hint: 'The effect is real but its size can only be learned by trying it for a week and comparing.' },
+  measured: { label: 'Measured', hint: 'Read directly off the recorded spend.' },
+  simulated: { label: 'Simulated', hint: 'Every recorded session replayed under the change; the replay reproduces the real bill within ~1%.' },
+  structural: { label: 'If adopted', hint: 'Holds if the agent follows the change. Effigent checks the sessions after you apply it and reports whether it worked.' },
+  'needs-ab': { label: 'Needs a trial', hint: 'The effect is real but its size can only be learned by trying it for a week and comparing.' },
 };
 
-/** Weekly cost per request — the trend line in the header. */
-function Sparkline({ weeks }: { weeks: AgentSummaryData['trend']['weeks'] }) {
+const ACTION_ICON: Record<string, string> = {
+  'spill-exploration': 'spark', 'ship-skill': 'code', 'compact-earlier': 'layers', 'verify-hook': 'check',
+  'compact-before-breaks': 'chat', 'shrink-instructions': 'database', 'advisor-cost': 'percent',
+};
+const FINDING_STYLE: Record<string, { icon: string; tint: 'red' | 'blue' | 'teal' | 'gold' }> = {
+  advisor: { icon: 'percent', tint: 'red' },
+  instructions: { icon: 'database', tint: 'blue' },
+  'context-creep': { icon: 'database', tint: 'blue' },
+  breaks: { icon: 'chat', tint: 'teal' },
+  'verify-loop': { icon: 'check', tint: 'teal' },
+  concentration: { icon: 'percent', tint: 'gold' },
+  'long-sessions': { icon: 'layers', tint: 'gold' },
+  exploration: { icon: 'search', tint: 'blue' },
+  loops: { icon: 'loop', tint: 'gold' },
+  delivery: { icon: 'upload', tint: 'teal' },
+};
+
+/** Weekly cost per request as an area chart — the hero's trend. */
+function TrendArea({ weeks }: { weeks: AgentSummaryData['trend']['weeks'] }) {
   const pts = weeks.filter((w) => w.sessions > 0);
-  if (pts.length < 3) return null;
-  const W = 96, H = 26, max = Math.max(...pts.map((p) => p.costPerRequest)) || 1;
-  const x = (i: number) => 2 + ((W - 4) * i) / (pts.length - 1);
-  const y = (v: number) => H - 3 - ((H - 6) * v) / max;
-  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.costPerRequest).toFixed(1)}`).join(' ');
+  if (pts.length < 2) return null;
+  const W = 520, H = 120, max = Math.max(...pts.map((p) => p.costPerRequest)) * 1.15 || 1;
+  const x = (i: number) => 6 + ((W - 12) * i) / (pts.length - 1);
+  const y = (v: number) => H - 8 - ((H - 20) * v) / max;
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.costPerRequest).toFixed(1)}`).join(' ');
   const last = pts[pts.length - 1];
   return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Cost per request by week" className="sum-spark">
-      <title>{pts.map((p) => `week of ${p.week}: $${p.costPerRequest.toFixed(3)}/request`).join('\n')}</title>
-      <path d={`${d} L${x(pts.length - 1)},${H} L${x(0)},${H} Z`} fill="var(--accent-bg)" />
-      <path d={d} fill="none" stroke="var(--accent-2)" strokeWidth="1.5" />
-      <circle cx={x(pts.length - 1)} cy={y(last.costPerRequest)} r="2.5" fill="var(--accent-2)" />
-    </svg>
+    <figure className="hero-chart">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Cost per request by week">
+        <title>{pts.map((p) => `week of ${p.week}: $${p.costPerRequest.toFixed(3)} per request`).join('\n')}</title>
+        <defs>
+          <linearGradient id="heroFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0" stopColor="var(--green)" stopOpacity="0.32" />
+            <stop offset="1" stopColor="var(--green)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={`${line} L${x(pts.length - 1)},${H} L${x(0)},${H} Z`} fill="url(#heroFill)" />
+        <path d={line} fill="none" stroke="var(--green)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        <circle cx={x(pts.length - 1)} cy={y(last.costPerRequest)} r="4" fill="var(--green)" />
+      </svg>
+      <figcaption>Cost per request, by week · now ${last.costPerRequest.toFixed(2)}</figcaption>
+    </figure>
   );
 }
 
-function ActionCard({ a, rank }: { a: SummaryAction; rank: number }) {
+function RecommendationCard({ a, rank }: { a: SummaryAction; rank: number }) {
   const [open, setOpen] = useState(false);
   const b = BASIS[a.basis];
   return (
-    <div className="sum-action">
-      <div className="sum-action-top">
-        <span className="sum-rank">{rank}</span>
-        <span className="sum-action-title">{a.title}</span>
+    <article className={`rec ${open ? 'open' : ''}`}>
+      <div className="rec-side">
+        <span className="rec-rank">{rank}</span>
+        <span className="rec-icon"><Ic n={ACTION_ICON[a.id] ?? (a.id.startsWith('command-') ? 'terminal' : 'spark')} /></span>
       </div>
-      <div className="sum-action-money">
-        {a.perMonthUsd ? <><span className="sum-money tnum">{money(a.perMonthUsd.low)}–{money(a.perMonthUsd.high)}</span><span className="sum-per">/month</span></> : <span className="sum-per">not priced</span>}
-        <span className={`sum-basis b-${a.basis}`} title={b.hint}>{b.label}</span>
+      <div className="rec-body">
+        <div className="rec-head">
+          <h4>{a.title}</h4>
+          <span className={`rec-basis b-${a.basis}`} title={b.hint}>{b.label}</span>
+        </div>
+        {a.perMonthUsd
+          ? <div className="rec-money"><span className="tnum">{money(a.perMonthUsd.low)}–{money(a.perMonthUsd.high)}</span><span>/month</span></div>
+          : <div className="rec-money muted"><span>Not priced</span></div>}
+        <p className="rec-why">{a.why}</p>
+        {open && a.files.map((f) => (
+          <div key={f.path} className="rec-file">
+            <div className="rec-file-path"><Ic n="pencil" /><code>{f.path}</code>{f.note ? <span> — {f.note}</span> : null}</div>
+            <pre>{f.content}</pre>
+          </div>
+        ))}
       </div>
-      <p className="sum-why">{a.why}</p>
       {a.files.length > 0 && (
-        <button type="button" className="sum-link" onClick={() => setOpen(!open)} aria-expanded={open}>
-          {open ? 'Hide the change' : `What to change · ${a.files.map((f) => f.path.split('/').pop()).join(', ')}`}
+        <button type="button" className="rec-toggle" onClick={() => setOpen(!open)} aria-expanded={open}
+          aria-label={open ? 'Hide the change' : 'Show what to change'} title={open ? 'Hide the change' : 'What to change'}>
+          <Ic n={open ? 'chevronDown' : 'chevronRight'} />
         </button>
       )}
-      {open && a.files.map((f) => (
-        <div key={f.path} className="sum-file">
-          <div className="sum-file-path"><code>{f.path}</code>{f.note ? ` — ${f.note}` : ''}</div>
-          <pre>{f.content}</pre>
-        </div>
-      ))}
-    </div>
+    </article>
   );
 }
 
-export function AgentSummary({ s }: { s: AgentSummaryData }) {
+export function AgentSummary({
+  s, agentId, sub, onOpenSession, onViewSessions,
+}: {
+  s: AgentSummaryData;
+  agentId: string;
+  sub: string;
+  onOpenSession?: (runId: string) => void;
+  onViewSessions?: () => void;
+}) {
   const [showAll, setShowAll] = useState(false);
   const priced = s.actions.filter((a) => a.perMonthUsd);
-  const rest = s.actions.filter((a) => !a.perMonthUsd);
-  const top = showAll ? [...priced, ...rest] : priced.slice(0, 3);
-  const hidden = priced.length + rest.length - top.length;
-  const change = s.trend.costPerRequestChange;
-  const showSaves = s.sessions.some((x) => x.compactionSavesUsd != null);
+  const all = [...priced, ...s.actions.filter((a) => !a.perMonthUsd)];
+  const recs = showAll ? all : priced.slice(0, 2);
+  const top = priced[0];
   return (
-    <div className="sum">
-      <div className="sum-head">
-        <p className="sum-headline">{s.headline}</p>
-        <div className="sum-meta">
-          <span className="chip">{money(s.window.spendUsd)} · {s.window.sessions} sessions · {s.window.days} days</span>
-          <span className="chip">≈{money(s.window.perMonthUsd)}/month</span>
-          {change != null && Math.abs(change) >= 0.1 && (
-            <span className={`chip ${change > 0 ? 'sum-up' : 'sum-down'}`} title="Cost per request, newer half of these sessions vs the older half">
-              {change > 0 ? '▲' : '▼'} {Math.round(Math.abs(change) * 100)}% cost per request
-            </span>
-          )}
-          {s.delivered && s.delivered.sessions > 0 && (
-            <span className="chip" title={`${s.delivered.commits} commits, ${s.delivered.pushes} pushes, ${s.delivered.prs} PR actions`}>
-              {s.delivered.sessions}/{s.window.sessions} sessions shipped code{s.delivered.costPerSessionUsd != null ? ` · ${money(s.delivered.costPerSessionUsd)} each` : ''}
-            </span>
-          )}
-          <Sparkline weeks={s.trend.weeks} />
-        </div>
-      </div>
-
-      {top.length > 0 && (
-        <section aria-label="Do this first">
-          <div className="sum-label">Do this first</div>
-          <div className="sum-actions">
-            {top.map((a, i) => <ActionCard key={a.id} a={a} rank={i + 1} />)}
+    <div className="agent-block">
+      <section className="hero">
+        <div className="hero-main">
+          <div className="hero-id">
+            <span className="hero-avatar"><Ic n="users" /></span>
+            <div>
+              <div className="hero-name">{agentId}</div>
+              <div className="hero-sub">{sub}</div>
+            </div>
           </div>
-          {hidden > 0 && (
-            <button type="button" className="sum-link" onClick={() => setShowAll(true)}>Show {hidden} more change{hidden === 1 ? '' : 's'}</button>
+          {top && (
+            <div className="hero-save">
+              <span className="hero-money tnum">{money(top.perMonthUsd!.low)}–{money(top.perMonthUsd!.high)}</span>
+              <span className="hero-per">per month · top change</span>
+              <span className="hero-up" aria-hidden="true"><Ic n="arrowUp" /></span>
+            </div>
           )}
+          <p className="hero-headline">{s.headline}</p>
+        </div>
+        <TrendArea weeks={s.trend.weeks} />
+      </section>
+
+      {recs.length > 0 && (
+        <section>
+          <div className="sec-head">
+            <h3>Top recommendations</h3>
+            {all.length > 2 && (
+              <button type="button" className="sec-link" onClick={() => setShowAll(!showAll)}>
+                {showAll ? 'Show top 2' : `View all ${all.length}`} <Ic n="arrowRight" />
+              </button>
+            )}
+          </div>
+          <div className="recs">
+            {recs.map((a, i) => <RecommendationCard key={a.id} a={a} rank={i + 1} />)}
+          </div>
         </section>
       )}
 
       {s.findings.length > 0 && (
-        <section aria-label="Why it costs what it does">
-          <div className="sum-label">Why it costs what it does</div>
-          <div className="sum-findings">
-            {s.findings.slice(0, 4).map((f) => (
-              <div key={f.id} className={`sum-finding sev-${f.severity}`}>
-                <div className="sum-finding-value tnum">{f.value}</div>
-                <div className="sum-finding-title">{f.title}</div>
-                <p className="sum-finding-text">{f.sentence}</p>
-              </div>
-            ))}
+        <section>
+          <div className="sec-head"><h3>Why it costs what it does</h3></div>
+          <div className="whys">
+            {s.findings.slice(0, 4).map((f) => {
+              const st = FINDING_STYLE[f.id] ?? { icon: 'bulb', tint: 'blue' as const };
+              return (
+                <article key={f.id} className={`why tint-${st.tint}`}>
+                  <span className="why-icon"><Ic n={st.icon} /></span>
+                  <div>
+                    <div className="why-value tnum">{f.value}</div>
+                    <div className="why-title">{f.title}</div>
+                    <p className="why-text">{f.sentence}</p>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </section>
       )}
 
       {s.sessions.length > 0 && (
-        <section aria-label="Most expensive sessions">
-          <div className="sum-label">Most expensive sessions</div>
-          <div className="sum-table-wrap">
-            <table className="sum-table">
-              <thead>
-                <tr><th>Session</th><th className="num">Cost</th><th className="num">Length</th><th className="num">Peak context</th><th>Outcome</th>{showSaves && <th className="num">Compacting would have saved</th>}</tr>
-              </thead>
+        <section>
+          <div className="sec-head">
+            <h3>Most expensive sessions</h3>
+            {onViewSessions && <button type="button" className="sec-link" onClick={onViewSessions}>View all sessions <Ic n="arrowRight" /></button>}
+          </div>
+          <div className="sess-table-wrap">
+            <table className="sess-tbl">
+              <thead><tr><th>Session</th><th className="num">Cost</th><th className="num">Length</th><th className="num">Peak context</th><th>Outcome</th><th aria-label="Open" /></tr></thead>
               <tbody>
                 {s.sessions.map((x) => (
-                  <tr key={x.runId}>
-                    <td className="sum-sess-title">{x.title ?? <code>{x.runId.slice(0, 8)}</code>}{x.startedAt && <span className="sum-date"> {new Date(x.startedAt).toLocaleDateString()}</span>}</td>
+                  <tr key={x.runId} className={onOpenSession ? 'clickable' : ''} onClick={() => onOpenSession?.(x.runId)}
+                    tabIndex={onOpenSession ? 0 : undefined} onKeyDown={(e) => { if (e.key === 'Enter') onOpenSession?.(x.runId); }}>
+                    <td><span className="sess-title">{x.title ?? x.runId.slice(0, 8)}</span>{x.startedAt && <span className="sess-date">{new Date(x.startedAt).toLocaleDateString()}</span>}</td>
                     <td className="num tnum">{money(x.costUsd)}</td>
-                    <td className="num tnum" title="Requests, relative to this agent's median session">{x.requestsX.toFixed(1)}× median</td>
+                    <td className="num tnum">{x.requestsX.toFixed(1)}× median</td>
                     <td className="num tnum">{Math.round(x.peakContext / 1000)}k</td>
-                    <td>{x.delivered ? <span className="sum-ok">committed / pushed</span> : <span className="sum-muted">no commit or push</span>}</td>
-                    {showSaves && <td className="num tnum">{x.compactionSavesUsd != null ? money(x.compactionSavesUsd) : '—'}</td>}
+                    <td><span className={`outcome ${x.delivered ? 'ok' : ''}`}>{x.delivered ? 'committed / pushed' : 'no commit or push'}</span>
+                      {x.compactionSavesUsd != null && <span className="sess-save">compacting: −{money(x.compactionSavesUsd)}</span>}</td>
+                    <td className="chev">{onOpenSession && <Ic n="chevronRight" />}</td>
                   </tr>
                 ))}
               </tbody>
