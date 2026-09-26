@@ -464,6 +464,7 @@ The "brain" turns observed runs into activated optimizations. Sequenced:
 
 ## 9. Conventions
 
+- Delegate any investigation that needs 3+ reads, greps or log queries to the `scout` subagent; act on its findings instead of reading the files yourself.
 - **Migrations are idempotent** and run on boot; never assume a tracking table.
 - **Never commit secrets.** `.env.local`, `.env*.local`, `.next/`, `out/` are gitignored.
 - **Prod DB writes:** data seeds are fine; **schema changes (ALTER)** are gated in

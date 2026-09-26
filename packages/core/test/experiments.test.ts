@@ -4,19 +4,19 @@ import { requestsOf } from '../src/rent.js';
 import type { RawStep, Run } from '../src/types.js';
 
 /** A session of n requests; context grows by d per request, optionally capped (compaction) at `cap`. */
-function session(id: string, day: number, n: number, opts: { d?: number; base?: number; cap?: number; errors?: number } = {}): Run {
+function session(id: string, day: number, n: number, opts: { d?: number; base?: number; cap?: number; errors?: number; model?: string } = {}): Run {
   const base = opts.base ?? 60_000, d = opts.d ?? 2_000;
   const steps: RawStep[] = [];
   let ctx = base, prev = 0;
   for (let k = 0; k < n; k++) {
     if (opts.cap && ctx > opts.cap) { ctx = base + 15_000; prev = 0; }
     const read = prev && ctx > prev ? prev : 0;
-    steps.push({ kind: 'tool_use', name: 'Edit', payload: '{"file_path":"/r/a.ts"}', toolUseId: `${id}-${k}`, model: 'claude-opus-5',
+    steps.push({ kind: 'tool_use', name: 'Edit', payload: '{"file_path":"/r/a.ts"}', toolUseId: `${id}-${k}`, model: opts.model ?? 'claude-opus-5',
       tokens: { input: 0, output: 120, cacheCreation: ctx - read, cacheCreation1h: ctx - read, cacheRead: read, context: ctx } });
     steps.push({ kind: 'tool_result', name: 'Edit', payload: 'ok', toolUseId: `${id}-${k}`, isError: (opts.errors ?? 0) > 0 && k % Math.max(1, Math.round(1 / opts.errors!)) === 0 });
     prev = ctx; ctx += d;
   }
-  const run: Run = { runId: id, agentId: 'a', startedAt: `2026-09-${String(day).padStart(2, '0')}T10:00:00Z`, models: ['claude-opus-5'], usageByModel: {}, costUsd: 0, steps };
+  const run: Run = { runId: id, agentId: 'a', startedAt: `2026-09-${String(day).padStart(2, '0')}T10:00:00Z`, models: [opts.model ?? 'claude-opus-5'], usageByModel: {}, costUsd: 0, steps };
   run.costUsd = requestsOf(run).reduce((s, r) => s + r.costUsd, 0);
   return run;
 }
@@ -84,6 +84,18 @@ describe('measureEffect — work moved to a subagent', () => {
     const e = measureEffect([...before, ...after], CUT, 'spill-exploration');
     expect(e.tokensPerRequest!.changePct).toBeLessThan(-0.1); // the main thread did get smaller…
     expect(Math.abs(e.costPerRequest!.changePct)).toBeLessThan(0.02); // …but the total did not move
+    expect(e.verdict).not.toBe('confirmed');
+  });
+});
+
+describe('measureEffect — a model switch is not a saving', () => {
+  it('prices both sides at one model, so identical work on a cheaper model saves nothing', () => {
+    const after = lengths.map((n, i) => session(`a${i}`, 16 + i, n, { model: 'claude-opus-5-5' }));
+    const billed = after.reduce((s, r) => s + r.costUsd, 0) / before.reduce((s, r) => s + r.costUsd, 0);
+    expect(billed).toBeLessThan(0.85); // the bill did drop…
+    const e = measureEffect([...before, ...after], CUT, 'spill-exploration');
+    expect(e.models).toEqual({ before: 'claude-opus-5', after: 'claude-opus-5-5', repricedAt: 'claude-opus-5-5' });
+    expect(Math.abs(e.costPerRequest!.changePct)).toBeLessThan(0.02); // …but not because of the change
     expect(e.verdict).not.toBe('confirmed');
   });
 });

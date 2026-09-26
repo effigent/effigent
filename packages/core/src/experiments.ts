@@ -36,6 +36,8 @@
 
 import type { Run } from './types.js';
 import { requestsOf, isLegacyParse, type RentRequest } from './rent.js';
+import { pricingFor } from './cost.js';
+import { requestReason } from './laws.js';
 
 export interface Measured {
   before: number;
@@ -52,8 +54,14 @@ export interface EffectMeasurement {
   after: { sessions: number; requests: number };
   /** Context tokens per request, matched by position in the session. */
   tokensPerRequest: Measured | null;
-  /** Dollars per request — subagent and side-model spend included — matched by position in the session. */
+  /**
+   * Dollars per request — subagent and side-model spend included — matched by position
+   * in the session, with BOTH sides priced at one model's prices (the after side's main
+   * model): a model switch changes the bill without the change doing anything.
+   */
   costPerRequest: Measured | null;
+  /** Main model (most requests) on each side; `repricedAt` is the one both were priced at. */
+  models: { before: string | null; after: string | null; repricedAt: string | null };
   /** The metric the change is meant to move (lever-specific). */
   primary: (Measured & { name: string }) | null;
   quality: { errorsPerRequest: [number, number]; interruptionsPerSession: [number, number]; denialsPerSession: [number, number]; ok: boolean };
@@ -121,6 +129,19 @@ function measure(before: Session[], after: Session[], value: (r: RentRequest, k:
   return { before: perReqBefore, after: perReqAfter, changePct: point.a / point.b - 1, ci: [q(0.025), q(0.975)] };
 }
 
+/** Did a per-session metric RISE by more than `tol(before)`, with 95% confidence? */
+function rises(before: Session[], after: Session[], value: (s: Session) => number, tol: (b: number) => number, seed: number): boolean {
+  const vb = before.map(value), va = after.map(value);
+  if (vb.length < 2 || va.length < 2) return false;
+  const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;
+  const t = tol(mean(vb));
+  const rand = rng(seed);
+  const draws: number[] = [];
+  for (let i = 0; i < B; i++) draws.push(mean(va.map(() => va[Math.floor(rand() * va.length)])) - mean(vb.map(() => vb[Math.floor(rand() * vb.length)])));
+  draws.sort((x, y) => x - y);
+  return draws[Math.floor(0.025 * draws.length)] > t;
+}
+
 /** Session-level metric (one value per session), bootstrapped the same way. */
 function measureSessions(before: Session[], after: Session[], value: (s: Session) => number | null, seed: number): Measured | null {
   const vb = before.map(value).filter((v): v is number => v != null), va = after.map(value).filter((v): v is number => v != null);
@@ -156,7 +177,18 @@ function attributeOffThread(run: Run, R: RentRequest[]): void {
   for (const r of R) offThread.set(r, (rest - (delegating.length ? sub : 0)) / R.length);
   for (const r of delegating) offThread.set(r, offThread.get(r)! + sub / delegating.length);
 }
-const costOf = (r: RentRequest) => r.costUsd + (offThread.get(r) ?? 0);
+/** The request's tokens at `model`'s prices; its off-thread share scales with it. */
+function pricedAt(r: RentRequest, model: string): number {
+  const p = pricingFor(model);
+  const main = (r.input * p.inputPerM + (r.cacheWrite - r.cacheWrite1h) * p.inputPerM * 1.25 + r.cacheWrite1h * p.inputPerM * 2
+    + r.cacheRead * p.inputPerM * (p.cacheReadMult ?? 0.1) + r.output * p.outputPerM) / 1_000_000;
+  return main + (offThread.get(r) ?? 0) * (r.costUsd > 0 ? main / r.costUsd : 1);
+}
+function mainModel(xs: Session[]): string | null {
+  const n = new Map<string, number>();
+  for (const s of xs) for (const r of s.R) n.set(r.model, (n.get(r.model) ?? 0) + 1);
+  return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
 
 /** The MECHANISM each change is supposed to move — lower is better for all of them. */
 function mechanismFor(recId: string, threshold?: number): { name: string; kind: 'request' | 'session'; value: (...args: never[]) => number | null } | null {
@@ -173,6 +205,13 @@ function mechanismFor(recId: string, threshold?: number): { name: string; kind: 
       let w = 0;
       for (let k = 1; k < s.R.length; k++) { const a = s.R[k - 1], b = s.R[k]; if (a.timestamp && b.timestamp && Date.parse(b.timestamp) - Date.parse(a.timestamp) > 3_300_000 && b.cacheWrite > 0.5 * a.context) w += b.cacheWrite; }
       return w;
+    }) as never };
+  }
+  if (recId === 'ship-skill') {
+    // the plan's claim: a commit/push/deploy ask takes ~13 requests improvised, ~2 with the skill
+    return { name: 'requests spent per delivery (commit, push, PR)', kind: 'session', value: ((s: Session) => {
+      const delivered = (s.run.events ?? []).filter((e) => e.kind === 'commit' || e.kind === 'push' || e.kind === 'pr').length;
+      return delivered ? s.R.filter((r, k) => requestReason(r, s.R[k - 1]) === 'deliver').length / delivered : null;
     }) as never };
   }
   if (recId === 'verify-hook') {
@@ -201,16 +240,22 @@ export function measureEffect(allRuns: Run[], appliedAt: string, recId = 'generi
     denialsPerSession: [perSession(before, denials), perSession(after, denials)] as [number, number],
     ok: true,
   };
-  quality.ok = quality.errorsPerRequest[1] <= quality.errorsPerRequest[0] * 1.25 + 0.005
-    && quality.interruptionsPerSession[1] <= quality.interruptionsPerSession[0] * 1.25 + 0.25
-    && quality.denialsPerSession[1] <= quality.denialsPerSession[0] * 1.25 + 0.5;
+  // A rise counts only when its 95% interval clears the tolerance: on real sessions, point
+  // estimates of these small counts (0 → 0.3 interruptions/session is one or two events)
+  // tripped the guard in about a quarter of placebo cuts.
+  const errOf = (s: Session) => s.R.reduce((b, r) => b + r.tools.filter((x) => x.isError).length, 0) / s.R.length;
+  quality.ok = !rises(before, after, errOf, (b) => b * 0.25 + 0.005, 11)
+    && !rises(before, after, interrupts, (b) => b * 0.25 + 0.25, 12)
+    && !rises(before, after, denials, (b) => b * 0.25 + 0.5, 13);
 
-  const base = { appliedAt, before: { sessions: before.length, requests: reqs(before) }, after: { sessions: after.length, requests: reqs(after) }, quality };
+  const models = { before: mainModel(before), after: mainModel(after), repricedAt: mainModel(after) ?? mainModel(before) };
+  const base = { appliedAt, before: { sessions: before.length, requests: reqs(before) }, after: { sessions: after.length, requests: reqs(after) }, quality, models };
   if (before.length < 3 || after.length < 3) {
     return { ...base, tokensPerRequest: null, costPerRequest: null, primary: null, verdict: 'collecting', inEffect: null, sessionsNeeded: null, realizedPerMonthUsd: null };
   }
   const tokensPerRequest = measure(before, after, ctxOf, 1);
-  const costPerRequest = measure(before, after, costOf, 2);
+  const ref = models.repricedAt!;
+  const costPerRequest = measure(before, after, (r) => pricedAt(r, ref), 2);
   const mech = mechanismFor(recId, opts.threshold);
   const mechM = mech
     ? (mech.kind === 'request' ? measure(before, after, mech.value as (r: RentRequest) => number, 3) : measureSessions(before, after, mech.value as (s: Session) => number | null, 3))
@@ -223,9 +268,12 @@ export function measureEffect(allRuns: Run[], appliedAt: string, recId = 'generi
   const money = recId === 'spill-exploration' ? costPerRequest : (tokensPerRequest ?? costPerRequest);
   const moneySaved = !!money && money.ci[1] < 0;
   const moneyWorse = !!money && money.ci[0] > 0;
-  const verdict: EffectMeasurement['verdict'] = !quality.ok ? 'regressed'
+  // A change whose mechanism did not move is not acting, so whatever else moved (drift:
+  // sessions grow, instructions grow) is not its doing — placebo cuts on real sessions read
+  // as "regressed" a third of the time when this came after the quality and money checks.
+  const verdict: EffectMeasurement['verdict'] = inEffect === false ? 'not-in-effect'
+    : !quality.ok ? 'regressed'
     : moneyWorse ? 'regressed'
-    : inEffect === false ? 'not-in-effect'
     : moneySaved ? 'confirmed'
     : inEffect ? 'working'
     : 'inconclusive';
