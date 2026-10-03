@@ -2,6 +2,7 @@ import { gunzipSync } from 'node:zlib';
 import { authenticateKey, persistRun } from '@/lib/agent-auth.ts';
 import { StorageNotProvisioned } from '@/lib/storage.ts';
 import { parseTranscript } from '@/lib/engine/transcript.ts';
+import { getTenantProduct, usesRuntime } from '@/lib/tenant-settings.ts';
 
 const notProvisioned = () =>
   Response.json(
@@ -92,6 +93,15 @@ export async function POST(req: Request) {
   if (!sessionId) return Response.json({ error: 'x-effigent-session-id header required' }, { status: 400 });
   const agentIdHeader =
     req.headers.get('x-effigent-agent-id') ?? req.headers.get('x-ccopt-agent-id') ?? undefined;
+
+  // Runtime-SDK uploads only for workspaces that chose the runtime. CLI/hook captures
+  // are never gated: switching products must not silently drop sessions.
+  if (req.headers.get('x-effigent-source') === 'runtime' && !usesRuntime(await getTenantProduct(auth.tenantId))) {
+    return Response.json(
+      { error: 'the runtime is not enabled for this workspace', hint: 'an org admin can enable it under Workspace → Product' },
+      { status: 403 },
+    );
+  }
 
   // Pre-parsed Run path (large sessions).
   if ((req.headers.get('x-effigent-format') ?? req.headers.get('x-ccopt-format')) === 'run') {

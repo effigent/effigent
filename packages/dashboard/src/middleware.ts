@@ -15,6 +15,7 @@ const isPublic = createRouteMatcher([
   '/api/v1/optimize', // CLI activation bundle — Bearer keys inside the handler
   '/api/v1/recommendations', // `effigent recommendations` — Bearer keys or Clerk, inside the handler
   '/api/v1/experiments', // `effigent applied` — Bearer keys or Clerk, inside the handler (lib/caller.ts)
+  '/api/v1/policies(.*)', // @effigent/runtime policy bundle + /shadow (effigent claude) — Bearer keys or Clerk, inside the handler (lib/caller.ts)
   '/healthz', // liveness probe (effigent doctor) — public, no auth, no DB
 ]);
 

@@ -18,11 +18,13 @@ import { Insights } from '@/components/Insights.tsx';
 import { OverviewLive } from '@/components/OverviewLive.tsx';
 import { Privacy } from '@/components/Privacy.tsx';
 import { Storage } from '@/components/Storage.tsx';
+import { Product, type ProductChoice } from '@/components/Product.tsx';
+import { Runtime } from '@/components/Runtime.tsx';
 import { ThemeToggle } from '@/components/ThemeToggle.tsx';
 import { Ic } from '@/icons.tsx';
-import { ALL_AGENTS } from '@/data.ts';
+import { ALL_AGENTS, insightsViews, runtimeViews } from '@/data.ts';
 
-type View = 'overview' | 'sessions' | 'tools' | 'kg' | 'insights' | 'privacy' | 'storage' | 'install' | 'session-detail';
+type View = 'overview' | 'sessions' | 'tools' | 'kg' | 'insights' | 'privacy' | 'storage' | 'product' | 'runtime' | 'install' | 'session-detail';
 interface AgentInfo { agent_id: string; optimized: boolean; n_runs: number; total_cost_usd: string | number }
 
 const clerkAppearance = {
@@ -54,13 +56,25 @@ export function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { organization } = useOrganization();
   const demo = organization?.id === DEMO_ORG_ID;
+  // null until loaded: hide nothing rather than flash the wrong product's views.
+  const [product, setProduct] = useState<ProductChoice | null>(null);
 
   useEffect(() => {
     fetch('/api/v1/agents')
       .then((r) => (r.ok ? r.json() : { agents: [] }))
       .then((d: { agents?: AgentInfo[] }) => setAgents(d.agents ?? []))
       .catch(() => {});
+    fetch('/api/v1/product')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { product?: ProductChoice } | null) => setProduct(d?.product ?? 'insights'))
+      .catch(() => setProduct('insights'));
   }, []);
+
+  // Workspace → Product hides the other product's views (never its captured sessions).
+  const hiddenViews = useMemo(
+    () => new Set(product === 'runtime' ? insightsViews : product === 'insights' ? runtimeViews : []),
+    [product],
+  );
 
   const optimizedAgents = useMemo(() => new Set(agents.filter((a) => a.optimized).map((a) => a.agent_id)), [agents]);
   const selectedOptimized = agent !== ALL_AGENTS && optimizedAgents.has(agent);
@@ -81,9 +95,11 @@ export function Dashboard() {
     insights: { title: 'Optimization Insights', sub: 'Deterministic steps we can replace, cache, or keep' },
     privacy: { title: 'Privacy & Redaction', sub: 'What never leaves raw — built-in filters plus your workspace rules' },
     storage: { title: 'Run Storage', sub: 'Where your run data lives — Effigent-managed, or a bucket in your own AWS account' },
+    product: { title: 'Product', sub: 'Choose Insights, the Runtime, or both for this workspace' },
+    runtime: { title: 'Runtime', sub: 'Effigent at the model call — your API agents (SDK) and Claude Code (gateway)' },
   };
   const head = heads[view] ?? heads.overview;
-  const showToolbar = view === 'overview' || view === 'sessions' || view === 'kg' || view === 'insights' || view === 'tools';
+  const showToolbar = view === 'overview' || view === 'sessions' || view === 'kg' || view === 'insights' || view === 'tools' || view === 'runtime';
 
   return (
     <div className="app">
@@ -91,6 +107,7 @@ export function Dashboard() {
       <Sidebar
         active={sidebarActive}
         onSelect={(k) => setView(k as View)}
+        hidden={hiddenViews}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -154,6 +171,8 @@ export function Dashboard() {
               )}
               {view === 'privacy' && <Privacy />}
               {view === 'storage' && <Storage />}
+              {view === 'product' && <Product onSaved={setProduct} />}
+              {view === 'runtime' && <Runtime agent={agent} />}
               {view === 'overview' && (demo ? (
                 <>
                   <div className="demo-note">Sample data — demo workspace</div>
@@ -171,7 +190,7 @@ export function Dashboard() {
                   agents={agents}
                   onInstall={() => setView('install')}
                   onSessions={() => setView('sessions')}
-                  onInsights={() => setView('insights')}
+                  onInsights={hiddenViews.has('insights') ? undefined : () => setView('insights')}
                 />
               ))}
             </div>

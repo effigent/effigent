@@ -35,11 +35,20 @@ export const nav = [
   { group: 'Knowledge', items: [
     ['Knowledge Graph', 'graph', 'kg'],
   ] },
+  { group: 'Runtime', items: [
+    ['Runtime', 'cpu', 'runtime'],
+  ] },
   { group: 'Workspace', items: [
     ['Privacy', 'shield', 'privacy'],
     ['Storage', 'database', 'storage'],
+    ['Product', 'layers', 'product'],
   ] },
 ] as const;
+
+/** Views that belong to one product (Workspace → Product hides the other's).
+ *  Home and Sessions belong to both: every product records sessions. */
+export const insightsViews: readonly string[] = ['insights', 'tools', 'kg'];
+export const runtimeViews: readonly string[] = ['runtime'];
 
 export const kpis: Kpi[] = [
   { key: 'token', label: 'Token Reduction', icon: 'layers', tint: 'var(--purple)', kind: 'pct', value: 62.4,

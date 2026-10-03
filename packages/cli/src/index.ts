@@ -14,7 +14,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { analyzeRuns, renderReportHtml } from '@effigent/core';
+import {
+  SUBAGENT_ROUTING_POLICY_ID,
+  SUBAGENT_ROUTING_TARGET,
+  SubagentRoutingShadow,
+  analyzeRuns,
+  renderReportHtml,
+  summarizeShadow,
+  type PolicyBundle,
+} from '@effigent/core';
 import {
   EFFIGENT_HOME,
   EFFIGENT_STORE,
@@ -34,6 +42,7 @@ import {
   UNATTRIBUTED_AGENT,
 } from './store.js';
 import { uploadSessionFile } from './upload.js';
+import { launchClaude } from './claude-launch.js';
 import { applySkill, parseAppliedAt, renderForAgent, type RecommendationsResponse } from './recommend.js';
 
 const program = new Command();
@@ -1879,10 +1888,98 @@ async function notifyUpdate(): Promise<void> {
   }
 }
 
+/* ----------------------------------------------------------------------------
+ * effigent claude — Claude Code through the local Effigent gateway. Handled
+ * before commander: every argument after `claude` belongs to Claude Code
+ * (`effigent claude -p "…" --model x` must not be parsed as effigent flags).
+ * The command below is registered only so it shows in `effigent --help`.
+ * -------------------------------------------------------------------------- */
 program
-  .parseAsync()
-  .then(() => notifyUpdate())
-  .catch((err) => {
-    console.error(err instanceof Error ? err.message : err);
-    process.exitCode = 1;
+  .command('claude')
+  .description('Run Claude Code through the Effigent gateway (all arguments go to claude; EFFIGENT_GATEWAY_DEBUG=1 logs to ~/.effigent/gateway.log)')
+  .allowUnknownOption()
+  .allowExcessArguments();
+
+async function runClaudeCommand(args: string[]): Promise<number> {
+  const debug = process.env.EFFIGENT_GATEWAY_DEBUG === '1';
+  const agent = agentOf({});
+  const ep = agent ? endpointFor(agent, {}) : null;
+  const shadow = agent ? new SubagentRoutingShadow(agent) : null;
+  // Fetched alongside the launch — Claude Code never waits on Effigent.
+  const bundle: Promise<{ status: number; body?: PolicyBundle }> = ep && agent
+    ? fetch(`${ep.server}/api/v1/policies?agent=${encodeURIComponent(agent)}`, {
+        headers: { authorization: `Bearer ${ep.apiKey}` },
+        signal: AbortSignal.timeout(5000),
+      })
+        .then(async (r) => ({ status: r.status, body: r.ok ? ((await r.json()) as PolicyBundle) : undefined }))
+        .catch(() => ({ status: 0 }))
+    : Promise.resolve({ status: 0 });
+
+  const upstreamLabel = process.env.ANTHROPIC_BASE_URL || 'api.anthropic.com';
+  const code = await launchClaude({
+    args,
+    debug,
+    banner: `[effigent] Claude Code → Effigent gateway → ${upstreamLabel}${agent ? ` · agent ${agent}` : ' · pass-through (no agent for this directory)'}`,
+    onRecord: (r) => {
+      if (!shadow || !r.model || !r.usage) return;
+      shadow.add({
+        sessionId: r.claudeCode['x-claude-code-session-id'],
+        agentId: r.claudeCode['x-claude-code-agent-id'],
+        model: r.model,
+        usage: r.usage,
+        at: new Date().toISOString(),
+      });
+    },
+    onExit: async () => {
+      if (!shadow || shadow.empty || !ep) return;
+      const b = await bundle;
+      if (b.status === 403) {
+        console.error('[effigent] Runtime is not enabled for this workspace — the gateway ran as pass-through. An org admin can enable it under Workspace → Product.');
+        return;
+      }
+      const policy = b.body?.policies.find((x) => x.policyId === SUBAGENT_ROUTING_POLICY_ID);
+      if (!policy) return; // unreachable server or the policy is off: nothing to report
+      const sessions = shadow.result();
+      const sum = summarizeShadow(sessions);
+      const usd = (n: number) => `$${n < 1 ? n.toFixed(3) : n.toFixed(2)}`;
+      if (sum.premiumSubagents === 0) {
+        console.error(`[effigent] shadow · subagent routing: ${sum.subagents ? `${sum.subagents} subagent(s), none on Opus/Fable` : 'no subagents'} this session — nothing to route.`);
+      } else {
+        console.error(
+          `[effigent] shadow · subagent routing: ${sum.wouldRoute} of ${sum.premiumSubagents} Opus/Fable subagent(s) would move to ${SUBAGENT_ROUTING_TARGET} · est. ${usd(sum.estimatedSavingsUsd)} of ${usd(sum.costUsd)} (same tokens at the cheaper price; turns and quality are not measured until it is enforced). Nothing was changed.`,
+        );
+      }
+      try {
+        const res = await fetch(`${ep.server}/api/v1/policies/shadow`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${ep.apiKey}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ agent, sessions }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) console.error(`[effigent] shadow results not saved (HTTP ${res.status}).`);
+      } catch {
+        console.error('[effigent] shadow results not saved (collector unreachable).');
+      }
+    },
   });
+  return code;
+}
+
+const cliArgs = process.argv.slice(2);
+if (cliArgs[0] === 'claude') {
+  runClaudeCommand(cliArgs.slice(1)).then(
+    (code) => process.exit(code),
+    (err) => {
+      console.error(`[effigent] ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    },
+  );
+} else {
+  program
+    .parseAsync()
+    .then(() => notifyUpdate())
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : err);
+      process.exitCode = 1;
+    });
+}

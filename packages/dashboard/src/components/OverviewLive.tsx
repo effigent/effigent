@@ -15,7 +15,8 @@ export function OverviewLive({
   agents: AgentInfo[];
   onInstall: () => void;
   onSessions: () => void;
-  onInsights: () => void;
+  /** Absent when the workspace doesn't use Insights (Workspace → Product): the card is hidden. */
+  onInsights?: () => void;
 }) {
   const sessions = agents.reduce((s, a) => s + (a.n_runs ?? 0), 0);
   const spend = agents.reduce((s, a) => s + Number(a.total_cost_usd ?? 0), 0);
@@ -57,14 +58,16 @@ export function OverviewLive({
           </div>
           <Ic n="arrowRight" style={{ width: 15, height: 15, color: 'var(--txt-4)' }} />
         </button>
-        <button className="live-card" onClick={onInsights}>
-          <Ic n="bulb" style={{ width: 18, height: 18, color: 'var(--gold)' }} />
-          <div>
-            <div className="t">Optimization Insights</div>
-            <div className="s">Deterministic steps to replace, memoize, template, or route.</div>
-          </div>
-          <Ic n="arrowRight" style={{ width: 15, height: 15, color: 'var(--txt-4)' }} />
-        </button>
+        {onInsights && (
+          <button className="live-card" onClick={onInsights}>
+            <Ic n="bulb" style={{ width: 18, height: 18, color: 'var(--gold)' }} />
+            <div>
+              <div className="t">Optimization Insights</div>
+              <div className="s">Deterministic steps to replace, memoize, template, or route.</div>
+            </div>
+            <Ic n="arrowRight" style={{ width: 15, height: 15, color: 'var(--txt-4)' }} />
+          </button>
+        )}
         <button className="live-card" onClick={onInstall}>
           <Ic n="spark" style={{ width: 18, height: 18, color: 'var(--accent-2)' }} />
           <div>

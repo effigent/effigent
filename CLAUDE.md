@@ -20,7 +20,8 @@ npm workspaces (`packages/*`). TypeScript throughout; ESM (`.js` import specifie
 |---|---|---|
 | `@effigent/core` | Pure TS engine: transcript/OTel → `Run` → `RunGraph` (DAG), clustering, cost, taxonomy, **determinism scoring**. No I/O. | library |
 | `@effigent/server` | Fastify API: ingest, agents/keys, insights (LLM), analyze, reports, viewers. **Being retired** (see §6). | Node (Render) |
-| `@effigent/cli` | `effigent` CLI (npm: `effigent`): `login`, `agent add/list`, `run` (wrap ANY agent command), `recommendations` / `applied <id>` (the plan for the cwd's agent, written for the coding agent, and recording when a change went in), `install claude` (**one** agent-agnostic SessionEnd hook — see §4.1 — plus the user-invoked `/effigent-apply` skill) + `install otel/codex/python/node` (key-filled OTel recipes per harness — table-driven, one entry per new harness), `claude-hook`, upload. | Node |
+| `@effigent/cli` | `effigent` CLI (npm: `effigent`): `login`, `agent add/list`, `run` (wrap ANY agent command), `recommendations` / `applied <id>` (the plan for the cwd's agent, written for the coding agent, and recording when a change went in), `claude [args…]` (Claude Code through the local Anthropic gateway — §2 `routing-shadow.ts`; handled BEFORE commander so every arg goes to `claude`), `install claude` (**one** agent-agnostic SessionEnd hook — see §4.1 — plus the user-invoked `/effigent-apply` skill) + `install otel/codex/python/node` (key-filled OTel recipes per harness — table-driven, one entry per new harness), `claude-hook`, upload. | Node |
+| `@effigent/runtime` | **The Runtime product** (npm: `@effigent/runtime`): `createRuntime().wrap(new Anthropic())` patches the client's `messages.create` in place (covers `stream:true` and `messages.stream()`, which calls `create`), records each call into the same `Run` shape `parseTranscript` produces (tool results from the next request's `messages` → `tool_result` steps; tokens on the first step per request), prices it with core's `usageCostUsd` (stream reading + usage mapping live in core `anthropic.ts`, shared with the CLI gateway), and uploads via the pre-parsed ingest with `x-effigent-source: runtime`. Run boundary = `effigent.run(fn)` (AsyncLocalStorage); calls outside it → an ambient run uploaded by `flush()`/`beforeExit`. Fail-open: returns the SDK's own APIPromise/stream, errors go to `onError`. **Phase 1 = record only**; policies (core `policy.ts`) need a prefix matcher first. Core inlined by esbuild (ESM+CJS); `check-bundle.mjs` forbids analyzer symbols, a >64 kB bundle, and core imports in the public `.d.ts`. Tests run the real SDK against a fake `fetch`. | library (in the customer's agent) |
 | `@effigent/dashboard` | Next.js App Router dashboard + its own API routes. The product UI. | Vercel |
 | `@effigent/site` | Marketing site, Next.js **static export** (`output: 'export'`). Pages: `/` (landing), `/docs` (+7 doc pages incl. `/docs/storage` — managed vs customer-S3 residency), `/developers` (full per-harness install guide), `/about`, `/pricing`, `/security` (redaction + posture), `/terms`, `/privacy`. Endpoints are env-driven: `NEXT_PUBLIC_COLLECTOR_URL` / `NEXT_PUBLIC_DASHBOARD_URL` (set as GitHub `prod` environment Variables `COLLECTOR_URL`/`DASHBOARD_URL`, injected in the deploy workflow; unset → explicit `<placeholder>`) — never hardcode domains. | S3 + CloudFront |
 
@@ -92,6 +93,21 @@ The data contract everything else depends on.
   `changedAt` (the "agent was modified" signal; on drift, validated tools
   should be re-shadowed). Surfaced as `drift` per agent in `/api/v1/insights`
   and a "⚠ behavior changed" badge in the Insights view.
+- **`anthropic.ts` + `routing-shadow.ts`** — **the Claude Code gateway's policy.**
+  `anthropic.ts`: Messages wire types, `anthropicUsage` (usage → TokenUsage, 1h split)
+  and `StreamAccumulator` (SSE events → final message), shared by `@effigent/runtime`
+  and the CLI gateway (`cli/src/gateway.ts`: 127.0.0.1, forwards everything unchanged
+  — body, `x-api-key`/OAuth bearer, `anthropic-version`/`-beta` — drops hop-by-hop +
+  `accept-encoding` up / `content-encoding` down, client abort aborts upstream, records
+  model + usage + `x-claude-code-*` headers only). `routing-shadow.ts`: the first
+  policy, **shadow only** — Opus/Fable SUBAGENT conversations → `claude-sonnet-5-5`,
+  decided once per `x-claude-code-agent-id` (verified on real traffic 2026-10-03: main
+  thread sends no agent id; each subagent sends its own on every request) so the cache
+  is never split mid-conversation. Counterfactual = same usage at the target's price;
+  counted only when cheaper (Opus 5.5 cache reads cost the same as Sonnet 5's).
+  Estimates only: turns/quality unmeasured until enforced. `effigent claude` fetches
+  the bundle alongside the launch, uploads the shadow sessions on exit, and leaves
+  run capture to the SessionEnd hook (no double counting).
 - **`ledger.ts`** — **the waste ledger.** Per-run spend decomposition into
   addressable waste classes, all within-run and deterministic (never empty, no
   clustering precondition): dead context (large tool_results carried past their
@@ -243,9 +259,11 @@ who added/controls an agent; CLI registrations inherit from the registering key;
 reads/writes column-guarded), **`010` `tenants.redaction_rules`** (org custom filters),
 `011` `agent_tools` (injected-tool registry), **`012` `tenants.storage_*`** (per-org
 S3 storage config — bucket/region/prefix/kms/role_arn/external_id; role_arn set ⇒ BYO
-cross-account bucket, null ⇒ Effigent-account bucket).
-Prod ALTERs: `scripts/apply-ownership-redaction.mjs` (009+010) and
-`scripts/apply-org-storage.mjs` (012); per-org buckets via `scripts/provision-org-bucket.mjs` (owner-run).
+cross-account bucket, null ⇒ Effigent-account bucket), **`014` `tenants.product`**
+(`insights` | `runtime` | `both`, default `insights` — which product the workspace uses;
+column-guarded in `lib/tenant-settings.ts`, missing ⇒ `insights`).
+Prod ALTERs: `scripts/apply-ownership-redaction.mjs` (009+010),
+`scripts/apply-org-storage.mjs` (012) and `scripts/apply-tenant-product.mjs` (014; `--set runtime --tenant <ref>`); per-org buckets via `scripts/provision-org-bucket.mjs` (owner-run).
 
 `runs.agent_id` stores the agent **name** (keeps the engine/queries stable); `agents.id`
 binds credentials only.
@@ -325,6 +343,19 @@ Reads Neon directly via a pooled `pg` client (`lib/db.ts`).
   Bearer key OR a Clerk session (`lib/caller.ts`; scoped keys act on their own agent only)
   and are public in middleware. Instructions for the applying agent:
   `docs/applying-recommendations.md`.
+- `GET/PUT /api/v1/product` — the workspace's product (`lib/tenant-settings.ts`; PUT is
+  org-admin-only, 409 until migration 014). **Gating rule:** the product hides SURFACES —
+  views, `/api/v1/policies`, and ingest from the runtime SDK (`x-effigent-source: runtime`
+  → 403 unless runtime/both). CLI/hook/OTel captures are NEVER gated, so switching
+  products can't silently drop sessions.
+- `GET /api/v1/policies?agent=` — the runtime's `PolicyBundle` (core `policy.ts`, vendored);
+  Bearer key or Clerk (`lib/caller.ts`), public in middleware, 403 unless the workspace
+  uses the runtime. Serves the hand-written `routing-shadow.ts` policy (status `shadow`)
+  until the analyzer produces policies.
+- `GET/POST /api/v1/policies/shadow[?agent=]` — shadow results from `effigent claude`
+  (metadata only; whitelisted shape; savings recomputed server-side). One JSON doc per
+  agent in the org bucket (`effigent/shadow/<agent>.json`, newest 200 sessions); same
+  gating as `/policies`. Middleware entry is `/api/v1/policies(.*)`.
 - `GET /api/v1/sessions[?agent=]` — the tenant's runs, newest first.
 - `GET /api/v1/sessions/[id]` — one run (with `parsed`) for the DAG deep-dive.
 - `GET /api/v1/insights[?agent=&window=]` — **the determinism brain (v3)**: a thin
@@ -335,7 +366,7 @@ Reads Neon directly via a pooled `pg` client (`lib/db.ts`).
   synthesized ToolSpecs with replay validation (`tools[]` in the response:
   params, arg previews, savings incl. context-carriage, `replay.status` ready/shadow).
 
-**Views** (`Dashboard.tsx` drives `view` state; sidebar in `data.ts` `nav`):
+**Views** (`Dashboard.tsx` drives `view` state; sidebar in `data.ts` `nav`, filtered by the workspace product):
 - **Overview** — KPI tiles, per-agent **Execution Graph** (original vs optimized), and
   the demo analytics rail/bottom.
 - **Sessions** — one-stop shop: totals strip (agents / sessions / spend), per-agent totals
@@ -349,6 +380,12 @@ Reads Neon directly via a pooled `pg` client (`lib/db.ts`).
   bucket) vs customer S3 (BYO via CloudFormation/Terraform), switch modes,
   access probe. **Live** (see §6).
 - **Tool Synthesis** / **Knowledge Graph** (per-agent) — currently demo-backed.
+- **Runtime** (`Runtime.tsx`, agent-filtered) — `@effigent/runtime` install snippet
+  (collector from `collectorBase()`), the `effigent claude` snippet, and the subagent
+  routing policy's shadow results (totals + per-session table) + the policy lifecycle.
+- **Product** (`Product.tsx`, Workspace nav) — choose insights / runtime / both. The sidebar
+  hides the other product's views (`insightsViews` / `runtimeViews` in `data.ts`); Home
+  and Sessions show for both.
 - **Install** — how to put Optimizer on an agent (see §6 for real vs aspirational).
 
 **What is real vs demo, today:**
@@ -384,7 +421,7 @@ auth inside the handlers):
 - `GET /api/v1/reports` — key validation (`effigent login` probes it).
 The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
 (types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/loops/predictability/summary/runmap/experiments/graph-svg/redact/jsonb — copies of core with `.js`→`.ts` import specifiers;
+synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/loops/predictability/summary/runmap/experiments/graph-svg/redact/jsonb/policy/routing-shadow — copies of core with `.js`→`.ts` import specifiers;
 re-vendor after core changes:
 `for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
 `lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb
