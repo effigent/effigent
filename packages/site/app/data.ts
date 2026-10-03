@@ -65,7 +65,7 @@ export const INSTALL_CODE: Record<string, string> = {
 
 /** Harness strip shown with the install section. */
 export const supportedHarnesses = [
-  'Claude Code', 'OpenAI Codex', 'LangGraph', 'CrewAI', 'AutoGen', 'OpenAI Agents SDK', 'n8n', 'MCP agents',
+  'Claude Code', 'OpenAI Codex', 'LangGraph', 'CrewAI', 'AutoGen', 'OpenAI Agents SDK', 'MCP agents',
 ];
 
 export const originalStats = [

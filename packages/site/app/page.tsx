@@ -223,7 +223,7 @@ export default function Page() {
           <div className="marquee-track">
             {[0, 1].map((dup) => (
               <div key={dup} style={{ display: 'flex', gap: 56 }} aria-hidden={dup === 1}>
-                {['Claude Code', 'OpenAI Codex', 'LangGraph', 'CrewAI', 'AutoGen', 'OpenAI Agents SDK', 'n8n', 'MCP agents', 'OpenTelemetry'].map((h) => (
+                {['Claude Code', 'OpenAI Codex', 'LangGraph', 'CrewAI', 'AutoGen', 'OpenAI Agents SDK', 'MCP agents', 'OpenTelemetry'].map((h) => (
                   <span key={h} className="marquee-item"><span className="mdot" />{h}</span>
                 ))}
               </div>
