@@ -27,3 +27,6 @@ effigent-mvp-spec.md
 
 # research datasets are private session content — never commit
 research/**/*.json
+
+# Go
+bin/

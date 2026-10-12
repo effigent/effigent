@@ -1,0 +1,183 @@
+// Package tetragon is the Linux sensor + enforcer: it streams Tetragon events
+// over gRPC and loads/unloads effigentd's per-agent TracingPolicies.
+package tetragon
+
+import (
+	"context"
+	"net"
+	"strconv"
+	"strings"
+	"time"
+
+	tg "github.com/cilium/tetragon/api/v1/tetragon"
+	"github.com/effigent/effigent/internal/endpoint/event"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+type Client struct {
+	conn *grpc.ClientConn
+	api  tg.FineGuidanceSensorsClient
+}
+
+func Dial(addr string) (*Client, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	return &Client{conn: conn, api: tg.NewFineGuidanceSensorsClient(conn)}, nil
+}
+
+func (c *Client) Close() error { return c.conn.Close() }
+
+func (c *Client) Add(ctx context.Context, yaml []byte) error {
+	_, err := c.api.AddTracingPolicy(ctx, &tg.AddTracingPolicyRequest{Yaml: string(yaml)})
+	return err
+}
+
+func (c *Client) Delete(ctx context.Context, name string) error {
+	_, err := c.api.DeleteTracingPolicy(ctx, &tg.DeleteTracingPolicyRequest{Name: name})
+	return err
+}
+
+// OwnedPolicies lists TracingPolicies created by effigentd.
+func (c *Client) Owned(ctx context.Context) ([]string, error) {
+	res, err := c.api.ListTracingPolicies(ctx, &tg.ListTracingPoliciesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range res.GetPolicies() {
+		if strings.HasPrefix(p.GetName(), PolicyPrefix) {
+			out = append(out, p.GetName())
+		}
+	}
+	return out, nil
+}
+
+// Events streams translated events until ctx is done or the stream breaks.
+// onConnect runs once the stream is established (used to reconcile policies).
+func (c *Client) Events(ctx context.Context, out chan<- event.Raw, onConnect func()) error {
+	stream, err := c.api.GetEvents(ctx, &tg.GetEventsRequest{})
+	if err != nil {
+		return err
+	}
+	if onConnect != nil {
+		onConnect()
+	}
+	for {
+		res, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if r, ok := translate(res); ok {
+			select {
+			case out <- r:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+// Run keeps the event stream alive across Tetragon restarts.
+func (c *Client) Run(ctx context.Context, out chan<- event.Raw, onConnect func(), logf func(string, ...any)) {
+	backoff := time.Second
+	for ctx.Err() == nil {
+		err := c.Events(ctx, out, onConnect)
+		if ctx.Err() != nil {
+			return
+		}
+		logf("tetragon stream: %v (retrying in %s)", err, backoff)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func proc(p *tg.Process) event.Proc {
+	if p == nil {
+		return event.Proc{}
+	}
+	return event.Proc{
+		PID:    p.GetPid().GetValue(),
+		ExecID: p.GetExecId(),
+		Binary: p.GetBinary(),
+		Args:   p.GetArguments(),
+		CWD:    p.GetCwd(),
+		UID:    p.GetUid().GetValue(),
+	}
+}
+
+func procs(ps []*tg.Process) []event.Proc {
+	out := make([]event.Proc, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, proc(p))
+	}
+	return out
+}
+
+func translate(res *tg.GetEventsResponse) (event.Raw, bool) {
+	r := event.Raw{Time: res.GetTime().AsTime(), Node: res.GetNodeName()}
+	switch {
+	case res.GetProcessExec() != nil:
+		e := res.GetProcessExec()
+		r.Kind, r.Process, r.Parent, r.Ancestors = event.Exec, proc(e.GetProcess()), proc(e.GetParent()), procs(e.GetAncestors())
+		r.Container = e.GetProcess().GetDocker()
+	case res.GetProcessExit() != nil:
+		e := res.GetProcessExit()
+		r.Kind, r.Process, r.Parent, r.Ancestors = event.Exit, proc(e.GetProcess()), proc(e.GetParent()), procs(e.GetAncestors())
+		r.Container = e.GetProcess().GetDocker()
+	case res.GetProcessLsm() != nil:
+		e := res.GetProcessLsm()
+		if !strings.HasPrefix(e.GetPolicyName(), PolicyPrefix) {
+			return r, false
+		}
+		r.Process, r.Ancestors, r.Policy = proc(e.GetProcess()), procs(e.GetAncestors()), e.GetPolicyName()
+		r.Container = e.GetProcess().GetDocker()
+		blocked := e.GetAction() == tg.KprobeAction_KPROBE_ACTION_OVERRIDE
+		switch e.GetFunctionName() {
+		case "bprm_check_security":
+			r.Kind = event.WouldBlock
+			if blocked {
+				r.Kind = event.Blocked
+			}
+			if len(e.GetArgs()) > 0 {
+				r.Target = "exec " + e.GetArgs()[0].GetLinuxBinprmArg().GetPath()
+			}
+		case "file_open":
+			r.Kind = event.FileOpen
+			if blocked {
+				r.Kind = event.Blocked
+			}
+			if len(e.GetArgs()) > 0 {
+				r.Target = fileTarget(e.GetArgs()[0].GetFileArg())
+			}
+		default:
+			return r, false
+		}
+	case res.GetProcessKprobe() != nil:
+		e := res.GetProcessKprobe()
+		if !strings.HasPrefix(e.GetPolicyName(), PolicyPrefix) || e.GetFunctionName() != "tcp_connect" {
+			return r, false
+		}
+		r.Kind, r.Process, r.Parent, r.Ancestors, r.Policy = event.Connect, proc(e.GetProcess()), proc(e.GetParent()), procs(e.GetAncestors()), e.GetPolicyName()
+		r.Container = e.GetProcess().GetDocker()
+		if len(e.GetArgs()) > 0 {
+			s := e.GetArgs()[0].GetSockArg()
+			r.Target = net.JoinHostPort(s.GetDaddr(), strconv.Itoa(int(s.GetDport())))
+		}
+	default:
+		return r, false
+	}
+	return r, true
+}
+
+func fileTarget(f *tg.KprobeFile) string {
+	return f.GetPath()
+}

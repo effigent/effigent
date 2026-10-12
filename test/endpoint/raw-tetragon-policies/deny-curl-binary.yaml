@@ -1,0 +1,22 @@
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: raw-deny-curl-binary
+spec:
+  lsmhooks:
+  - hook: "bprm_check_security"
+    args:
+    - index: 0
+      type: "linux_binprm"
+    selectors:
+    - matchBinaries:
+      - operator: "In"
+        values: ["/tmp/ag/claude"]
+        followChildren: true
+      matchArgs:
+      - index: 0
+        operator: "Postfix"
+        values: ["/curl"]
+      matchActions:
+      - action: Override
+        argError: -1

@@ -1,0 +1,79 @@
+# effigentd policy
+#
+# Modes (per agent, falling back to `defaults`):
+#   monitor   - observe only; matches of the deny/allow lists are reported as `would_block`
+#   learn     - monitor + record every binary the agent runs (GET /learned -> ready-made allowlist)
+#   denylist  - the kernel blocks exec of `exec_deny` and opens of `file_deny`
+#   allowlist - the kernel blocks exec of anything NOT in `exec_allow` (and opens of `file_deny`)
+#
+# Exec lists are matched on the resolved binary path (symlinks followed), so on
+# merged-/usr distros /bin/curl is reported and matched as /usr/bin/curl.
+# Blocking is per binary, not per argv: `node good.js` and `node evil.js` are
+# the same binary. Argument-level checks are alert-only.
+
+defaults:
+  mode: denylist
+  exec_deny:            # demo rule: agents may not run curl & friends
+    - /usr/bin/curl
+    - /usr/bin/wget
+    - /usr/bin/nc
+    - /usr/bin/ncat
+    - /usr/bin/netcat
+    - /usr/bin/socat
+    - /usr/bin/telnet
+    - /bin/curl         # non-merged-/usr distros
+    - /bin/nc
+  file_alert:           # path suffixes reported when an agent opens them
+    - /.env
+    - /.env.local
+    - /.env.production
+    - /.ssh/id_rsa
+    - /.ssh/id_ed25519
+    - /.ssh/id_ecdsa
+    - /.aws/credentials
+    - /.config/gcloud/application_default_credentials.json
+    - /.config/gcloud/credentials.db
+    - /.kube/config
+    - /.docker/config.json
+    - /.netrc
+    - /.git-credentials
+    - /.npmrc
+    - /.pypirc
+    - /etc/shadow
+  file_deny:            # path suffixes the kernel refuses to open for agents
+    - /etc/shadow
+  network: true         # report outbound TCP connects
+
+agents:
+  - name: claude-code
+    binary_names: [claude]
+    args_contains: ["@anthropic-ai/claude-code", "claude-code/cli.js"]
+  - name: codex
+    binary_names: [codex]
+    args_contains: ["@openai/codex"]
+  - name: gemini-cli
+    binary_names: [gemini]
+    args_contains: ["@google/gemini-cli"]
+  - name: cursor-agent
+    binary_names: [cursor-agent]
+  - name: aider
+    binary_names: [aider]
+  - name: opencode
+    binary_names: [opencode]
+  - name: goose
+    binary_names: [goose]
+  - name: hermes          # verify the binary/args on the hermes CT and adjust
+    binary_names: [hermes]
+    args_contains: ["hermes_agent", "hermes-agent"]
+
+# Labels for MCP servers inside an agent's tree. The first capture group names the server.
+mcp_servers:
+  - pattern: '@modelcontextprotocol/server-([\w.-]+)'
+  - pattern: 'mcp[-_]server[-_]([\w.]+)'
+  - pattern: '([\w.]+)[-_]mcp(?:[-_]server)?\b'
+  - pattern: '\bmcp-remote\b'
+    name: remote
+
+# An MCP server with no known agent above it (e.g. launched by an unknown
+# client) becomes its own tracked root and gets the `defaults` rule.
+track_orphan_mcp: true
