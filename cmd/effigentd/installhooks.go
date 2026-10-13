@@ -62,7 +62,7 @@ func installHooksCmd(args []string) {
 	}
 	if !*remove {
 		kept = append(kept, map[string]any{
-			"matcher": "*",
+			"matcher": ".*", // a regex: a bare "*" is not valid and matches nothing
 			"hooks": []any{map[string]any{
 				"type": "command", "command": command,
 				// The daemon answers in milliseconds; this bounds a hung daemon.
