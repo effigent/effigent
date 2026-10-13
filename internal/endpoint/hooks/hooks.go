@@ -19,6 +19,7 @@ type Decision struct {
 	Report string `json:"report,omitempty"`
 	Kind   string `json:"kind,omitempty"`   // exec | file_open | connect | tool
 	Target string `json:"target,omitempty"` // e.g. "exec /usr/bin/curl", "/work/.env"
+	Rule   string `json:"rule,omitempty"`   // the policy list that matched, e.g. "exec_deny"
 }
 
 // ClaudeInput is the part of Claude Code's PreToolUse payload effigentd uses.
@@ -34,7 +35,7 @@ type ClaudeInput struct {
 // It is the plug-in point for the decision logic (see CLAUDE.md, "macOS").
 type ClaudeEvaluator func(rule policy.Rule, in ClaudeInput) Decision
 
-// Claude is nil until a decision implementation is registered.
+// Claude is the registered decision logic (EvaluateClaude); nil means watch mode.
 var Claude ClaudeEvaluator
 
 // ErrNoEvaluator is returned when this build has no decision logic for the agent.
@@ -65,7 +66,7 @@ func FailClosed(why string) []byte {
 		Reason: "Blocked by Effigent: " + why + ". Ask your IT team, or check: effigentd status"})
 }
 
-// Summary describes a tool call for an observe-only event, e.g.
+// Summary describes a tool call for its event, e.g.
 // "Bash: git status", "Read: /work/.env", "WebFetch: https://…".
 func Summary(in ClaudeInput) string {
 	for _, k := range []string{"command", "file_path", "notebook_path", "url", "pattern", "query"} {

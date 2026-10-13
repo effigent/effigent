@@ -88,7 +88,19 @@ npm run -w @effigent/site build                     # site
 - Kernel blocking is per resolved binary path and file path suffix; argument-level rules alert only.
 - Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet).
 - `domain_deny` (hostnames) is enforced by address: `internal/endpoint/domains` resolves each name every `-dns-refresh` (30s) via the system resolver + `-dns-servers` (1.1.1.1, 8.8.8.8, 9.9.9.9), keeps every address seen in the last 15 min (max 64 per name; a failed lookup never shrinks the set; loopback/link-local answers are dropped), and the engine adds them to `network_deny` at apply time, re-applying only agents whose names changed. While it is in force, a DNS bypass guard blocks agents from DoT (:853 anywhere) and from well-known public resolvers on :53/:443/:853, except the nameservers in effigentd's and the agent's own `resolv.conf` and single addresses listed in `network_allow`. effigentd itself queries the public resolvers every 30s; `-dns-servers ""` limits it to the system resolver. Limits: shared CDN IPs over-block or miss; names are exact (no wildcards, `www.` separate); private DoH, hard-coded IPs, `/etc/hosts` pins and proxies evade it; effigentd resolves from its own vantage point (split-horizon DNS can differ). `network_allow` is the stronger control. e2e section 6.
-- macOS: no kernel enforcement (needs an Endpoint Security entitlement); observe only.
+- macOS / Windows: no kernel enforcement (macOS needs an Endpoint Security entitlement).
+  `-sensor hooks`: Claude Code's PreToolUse hook (`effigentd hook claude`, matcher `.*`)
+  asks the daemon before every tool call; `internal/endpoint/hooks.EvaluateClaude` denies
+  in denylist/allowlist mode and reports `would_block` in monitor/learn. It checks Bash
+  commands (a small shell reader: pipes, `&&`, `$( )`, `sh -c`, sudo/env/xargs wrappers)
+  against `exec_deny`/`exec_allow` **by program name** (`/opt/homebrew/bin/curl` matches
+  `/usr/bin/curl`), named/redirected files plus directories and globs that would reach
+  them against `file_deny`/`file_alert`, and hosts/IPs named in commands or WebFetch
+  against `domain_deny` (name + subdomains), `network_deny`, `network_allow` (IPs only).
+  Limits: it reads the command, not what runs — scripts, interpreters (`python -c`),
+  variables, aliases and tools that connect on their own aren't followed; MCP tools aren't
+  checked yet; only Claude Code has a hook. If the daemon is down the hook denies.
+  Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
 

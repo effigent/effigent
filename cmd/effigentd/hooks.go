@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,19 +43,31 @@ func hookHandler(eng *engine.Engine) func(agent string, payload []byte) ([]byte,
 			eng.Emit(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: "claude-code",
 				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: "Claude Code session " + short(in.SessionID)})
 		}
+		// One event per tool call, so the console sees everything the agent
+		// did; a policy match makes it blocked / would_block / file_open.
+		ev := event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: "claude-code",
+			Kind: "tool", Target: hooks.Summary(in), Rule: "hook", Message: "session " + short(in.SessionID)}
 		if hooks.Claude == nil {
 			// No decision logic in this build: watch mode. Record the call,
 			// block nothing, and leave the user's own permission prompts as is.
-			eng.Emit(event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: "claude-code",
-				Kind: "tool", Target: hooks.Summary(in), Rule: "hook", Mode: "monitor",
-				Message: "session " + short(in.SessionID)})
+			ev.Mode = "monitor"
+			eng.Emit(ev)
 			return hooks.ClaudeOutput(hooks.Decision{}), nil
 		}
-		d := hooks.Claude(eng.RuleFor("claude-code"), in)
+		rule := eng.RuleFor("claude-code")
+		d := hooks.Claude(rule, in)
+		ev.Mode = string(rule.Mode)
 		if t := reportType(d); t != "" {
-			eng.Emit(event.Event{Time: time.Now(), Type: t, Severity: severity(t), Agent: "claude-code",
-				Kind: d.Kind, Target: d.Target, Rule: "hook", Message: d.Reason})
+			ev.Type, ev.Severity = t, severity(t)
+			if d.Rule != "" {
+				ev.Rule = d.Rule
+			}
+			ev.Message = d.Reason
+			if d.Target != "" && !strings.Contains(d.Reason, d.Target) {
+				ev.Message += " (" + d.Target + ")"
+			}
 		}
+		eng.Emit(ev)
 		return hooks.ClaudeOutput(d), nil
 	}
 }
