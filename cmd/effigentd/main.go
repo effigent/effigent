@@ -59,6 +59,14 @@ func main() {
 			return
 		}
 	}
+	if runAsServiceIfNeeded(daemon) {
+		return
+	}
+	daemon()
+}
+
+// daemon is the long-running endpoint agent.
+func daemon() {
 	var (
 		tetragonAddr = flag.String("tetragon", "127.0.0.1:54321", "Tetragon gRPC address")
 		sensor       = flag.String("sensor", defaultSensor(), "tetragon (Linux kernel enforcement) | hooks (agent pre-tool hooks only, e.g. macOS)")
@@ -128,6 +136,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() { <-serviceStop; stop() }() // Windows service stop/shutdown
 
 	eng := engine.New(pol, raw, enf, sinks.Write, logger.Printf, *verbose)
 	var upstreams []string

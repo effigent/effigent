@@ -114,14 +114,14 @@ const (
 	Completed       State = "completed"
 	Failed          State = "failed"
 
-	Expired               State = "expired"
-	Cancelled             State = "cancelled"
-	ApprovalDenied        State = "approval_denied"
-	RevalidationFailed    State = "revalidation_failed"
-	EnforcementFailed     State = "enforcement_failed"
-	AttributionUncertain  State = "attribution_uncertain"
-	Unsupported           State = "unsupported"
-	OutcomeUnknown        State = "outcome_unknown"
+	Expired              State = "expired"
+	Cancelled            State = "cancelled"
+	ApprovalDenied       State = "approval_denied"
+	RevalidationFailed   State = "revalidation_failed"
+	EnforcementFailed    State = "enforcement_failed"
+	AttributionUncertain State = "attribution_uncertain"
+	Unsupported          State = "unsupported"
+	OutcomeUnknown       State = "outcome_unknown"
 )
 
 // transitions lists the legal next states. Terminal states have none.

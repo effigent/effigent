@@ -33,10 +33,25 @@ type State struct {
 func statePath(dir string) string  { return filepath.Join(dir, "endpoint.json") }
 func policyPath(dir string) string { return filepath.Join(dir, "policy.json") }
 
-// DefaultStateDir is /var/lib/effigent for root, ~/.effigent otherwise.
+// DefaultStateDir is where a system install keeps its enrollment:
+// /var/lib/effigent (Linux), /Library/Application Support/Effigent (macOS),
+// %ProgramData%\Effigent (Windows). Non-root runs on Unix use ~/.effigent.
 func DefaultStateDir() string {
-	if os.Geteuid() == 0 {
-		return "/var/lib/effigent"
+	switch runtime.GOOS {
+	case "windows":
+		pd := os.Getenv("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		return filepath.Join(pd, "Effigent")
+	case "darwin":
+		if os.Geteuid() == 0 {
+			return "/Library/Application Support/Effigent"
+		}
+	default:
+		if os.Geteuid() == 0 {
+			return "/var/lib/effigent"
+		}
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".effigent")

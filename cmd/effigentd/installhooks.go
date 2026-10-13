@@ -68,7 +68,7 @@ func installHooksCmd(args []string) {
 				// The daemon answers in milliseconds; this bounds a hung daemon.
 				"timeout": 30,
 				// A crash or timeout must not let the tool call through.
-				"onFailure": "block",
+				"onFailure":     "block",
 				"statusMessage": "Checking with Effigent",
 			}},
 		})
