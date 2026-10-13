@@ -1,13 +1,13 @@
 /**
- * Deployment endpoints — env-driven, never hardcoded domains.
+ * Deployment endpoints — env-driven, never hardcoded in pages.
  * NEXT_PUBLIC_* vars are inlined at build time:
  *  - site (static export): set in the GitHub Action build step
  *  - local: .env.local
- * When unset, snippets show an explicit placeholder instead of a fake domain.
+ * The fallbacks below are only used when a var is unset at build time.
  */
-// Agents send captured runs to the collector; humans browse the dashboard. Kept
-// as separate subdomains so ingestion can move to its own infra later (DNS-only).
-export const COLLECTOR_URL = process.env.NEXT_PUBLIC_COLLECTOR_URL || 'https://collector.effigent.ai';
+// Endpoints (effigentd) talk to the control-plane API; humans use the console.
+// The env var keeps its historical name so the deploy workflow needs no change.
+export const COLLECTOR_URL = process.env.NEXT_PUBLIC_COLLECTOR_URL || 'https://api.effigent.ai';
+export const API_URL = COLLECTOR_URL;
 export const DASHBOARD_URL = process.env.NEXT_PUBLIC_DASHBOARD_URL || 'https://app.effigent.ai';
 export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || 'sales@your-domain';
-export const TRACES_URL = `${COLLECTOR_URL}/v1/traces`;

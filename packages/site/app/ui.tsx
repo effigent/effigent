@@ -13,7 +13,7 @@ export function Nav({ cta = true }: { cta?: boolean }) {
       <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 36, fontSize: 14, color: 'var(--ink-2)', fontWeight: 500 }}>
         <Link href="/#how">How it works</Link>
         <Link href="/docs">Docs</Link>
-        <Link href="/developers">Developers</Link>
+        <Link href="/docs/enforcement">Coverage</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security</Link>
       </div>
@@ -22,8 +22,8 @@ export function Nav({ cta = true }: { cta?: boolean }) {
           Log in
         </a>
         {cta && (
-          <Link href="/developers" className="btn btn-primary" style={{ padding: '9px 18px', fontSize: 13.5, display: 'inline-block' }}>
-            Install in 2 minutes
+          <Link href="/docs/quickstart" className="btn btn-primary" style={{ padding: '9px 18px', fontSize: 13.5, display: 'inline-block' }}>
+            Enroll a machine
           </Link>
         )}
       </div>
@@ -34,10 +34,10 @@ export function Nav({ cta = true }: { cta?: boolean }) {
 export function Footer() {
   return (
     <div className="site-footer" style={{ borderTop: '1px solid var(--line)', padding: '28px 56px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, fontSize: 13, color: 'var(--ink-4)' }}>
-      <div>© 2026 Effigent — the compiler for AI agents</div>
+      <div>© 2026 Effigent — control plane for coding agents</div>
       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
         <Link href="/docs">Docs</Link>
-        <Link href="/developers">Developer guide</Link>
+        <Link href="/developers">Agent setup</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/about">About</Link>
         <Link href="/security">Security</Link>
@@ -84,5 +84,34 @@ export function DocSection({ children, id }: { children: ReactNode; id?: string 
 export function StepBadge({ n }: { n: number }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: '50%', background: 'var(--ink)', color: 'var(--cream)', fontFamily: 'var(--mono)', fontSize: 12.5, fontWeight: 700, marginRight: 12, flexShrink: 0 }}>{n}</span>
+  );
+}
+
+/** Docs table of contents — single source for the index page and the pager. */
+export const DOCS: Array<[string, string, string]> = [
+  ['Quickstart', '/docs/quickstart', 'Install effigentd, enroll a machine, and watch your first agent session in monitor mode.'],
+  ['Policies', '/docs/policies', 'Scope, rules, decisions and precedence — and how one policy becomes kernel rules and hook checks.'],
+  ['Approvals', '/docs/approvals', 'How a paused action reaches a reviewer, what an approval is bound to, and when it expires.'],
+  ['Enforcement & coverage', '/docs/enforcement', 'The layers, the per-OS coverage matrix, fail-closed start, offline behaviour and emergency suspend.'],
+  ['API', '/docs/api', 'effigentd’s local API, the event stream it sends to the control plane, and what the console exposes.'],
+];
+
+export function DocsPager({ current }: { current: string }) {
+  const i = DOCS.findIndex(([, href]) => href === current);
+  const prev = i > 0 ? DOCS[i - 1] : null;
+  const next = i >= 0 && i < DOCS.length - 1 ? DOCS[i + 1] : null;
+  return (
+    <div className="docsec" style={{ maxWidth: 880, margin: '0 auto', padding: '30px 32px 56px', borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', fontSize: 14 }}>
+      {prev ? <Link href={prev[1]} style={{ fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>&larr; {prev[0]}</Link> : <Link href="/docs" style={{ fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>&larr; All docs</Link>}
+      {next ? <Link href={next[1]} style={{ fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>{next[0]} &rarr;</Link> : <Link href="/developers" style={{ fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>Agent setup guide &rarr;</Link>}
+    </div>
+  );
+}
+
+export function H2({ children, n }: { children: ReactNode; n?: number }) {
+  return (
+    <h2 className="h-serif" style={{ fontSize: 26, margin: '0 0 14px', display: 'flex', alignItems: 'center' }}>
+      {n !== undefined && <StepBadge n={n} />}{children}
+    </h2>
   );
 }

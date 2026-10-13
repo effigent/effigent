@@ -8,21 +8,21 @@ const sans = Roboto_Flex({ subsets: ['latin'], variable: '--font-sans', display:
 const mono = IBM_Plex_Mono({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--font-mono', display: 'swap' });
 
 const description =
-  'Effigent runs alongside your agents, learns which steps are always the same, and automatically replaces them with efficient deterministic code — dramatically reducing LLM token consumption while eliminating non-deterministic outputs.';
+  'Effigent is a control plane for coding agents. A small daemon on each Linux and macOS machine sees what Claude Code, Cursor and Codex run, enforces allow/deny rules on the machine, pauses risky actions until a named reviewer approves, and keeps a tamper-evident audit trail.';
 
 export const metadata: Metadata = {
-  title: 'Effigent — the compiler for AI agents',
+  title: 'Effigent — control plane for coding agents',
   description,
-  keywords: ['AI agents', 'agent cost optimization', 'LLM caching', 'determinism', 'agent runtime', 'token cost'],
+  keywords: ['AI agent security', 'coding agents', 'Claude Code', 'Cursor', 'Codex', 'agent policy', 'eBPF', 'MCP', 'approvals', 'audit trail'],
   openGraph: {
-    title: 'Effigent — the compiler for AI agents',
+    title: 'Effigent — control plane for coding agents',
     description,
     type: 'website',
     siteName: 'Effigent',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Effigent — the compiler for AI agents',
+    title: 'Effigent — control plane for coding agents',
     description,
   },
 };

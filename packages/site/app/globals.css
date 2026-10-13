@@ -80,7 +80,7 @@ a:hover { color: oklch(0.4 0.14 250); }
   .problems-grid { grid-template-columns: 1fr !important; }
 }
 
-/* "How it works" on mobile: a swipeable Original → Optimized slider.
+/* "How it works" on mobile: a swipeable two-panel slider (gateway view → effigentd view).
    Scroll-snap does the sliding; page.tsx adds the segmented switch and a
    one-time animated old→new sweep when the section enters the viewport. */
 .arch-switch { display: none; }
@@ -154,4 +154,41 @@ h1, h2, h3 { font-weight: 700; }
   .hero-graph { padding: 12px !important; }
   .hero-graph .gnode { font-size: 9px !important; padding: 4px 7px !important; }
   .prev-id { width: 74px !important; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ---------------------------------------------------------------------------
+ * v2 additions: tables (coverage matrix), approval card, event rows.
+ * ------------------------------------------------------------------------- */
+.tbl-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.cov { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 620px; }
+.cov th { text-align: left; font-family: var(--mono); font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--ink-3); padding: 10px 12px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.cov td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.cov tr:last-child td { border-bottom: none; }
+.cov .pill { display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600; border-radius: 10px;
+  padding: 2px 9px; border: 1px solid; white-space: nowrap; }
+.doc-tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 520px; }
+.doc-tbl th { text-align: left; font-size: 12px; font-weight: 700; color: var(--ink-2); padding: 9px 12px; border-bottom: 1px solid var(--line-2); }
+.doc-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-2); line-height: 1.55; }
+.doc-tbl code, .doc-p code { font-family: var(--mono); font-size: 0.92em; background: oklch(0.955 0.006 260); border-radius: 4px; padding: 1px 5px; }
+.doc-p { font-size: 14.5px; color: var(--ink-2); line-height: 1.7; margin: 0 0 14px; max-width: 700px; }
+.doc-p a { font-weight: 600; color: oklch(0.4 0.14 250); }
+.doc-list { margin: 0 0 14px; padding-left: 20px; font-size: 14.5px; color: var(--ink-2); line-height: 1.7; max-width: 700px; }
+.doc-list li { margin-bottom: 6px; }
+.doc-list code { font-family: var(--mono); font-size: 0.92em; background: oklch(0.955 0.006 260); border-radius: 4px; padding: 1px 5px; }
+
+@media (max-width: 900px) {
+  .approval-grid { grid-template-columns: 1fr !important; }
+  .suspend-grid { grid-template-columns: 1fr !important; }
+  .suspend-text { order: -1; }
+}
+@media (max-width: 640px) {
+  .approval-card { padding: 16px !important; }
+  .approval-cmd { font-size: 12.5px !important; }
+  .ev-row { flex-wrap: wrap !important; row-gap: 4px !important; }
+  .ev-target { flex-basis: 100% !important; order: 5; }
+}
+.scroll-hint { display: none; }
+@media (max-width: 640px) {
+  .scroll-hint { display: block; font-family: var(--mono); font-size: 11px; color: var(--ink-4); padding: 8px 12px 4px; }
 }

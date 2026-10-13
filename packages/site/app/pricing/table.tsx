@@ -8,8 +8,8 @@ interface Tier {
   monthly: number | null; // null = custom
   annual: number | null;
   tagline: string;
-  agents: string;
-  storage: string;
+  seats: string;
+  endpoints: string;
   features: string[];
   cta: string;
   href: string;
@@ -21,10 +21,10 @@ const TIERS: Tier[] = [
     name: 'Free',
     monthly: 0,
     annual: 0,
-    tagline: 'Kick the tires on a couple of agents.',
-    agents: '2 agents',
-    storage: '1 GB stored data',
-    features: ['All capture methods', 'Execution graphs & cost', 'Determinism insights', 'Community support'],
+    tagline: 'One developer, a couple of machines.',
+    seats: '1 seat',
+    endpoints: '2 endpoints',
+    features: ['Agent graph & events', 'Allow / deny policies', 'Monitor and learn modes', '7-day audit history', 'Community support'],
     cta: 'Start free',
     href: `${DASHBOARD_URL}/sign-up`,
   },
@@ -32,10 +32,10 @@ const TIERS: Tier[] = [
     name: 'Starter',
     monthly: 15,
     annual: 150,
-    tagline: 'For a small fleet in production.',
-    agents: '5 agents',
-    storage: '20 GB stored data',
-    features: ['Everything in Free', 'Session-level cost breakdown', 'Optimization action items', 'Email support'],
+    tagline: 'A small team trying policies on real work.',
+    seats: '5 seats',
+    endpoints: '10 endpoints',
+    features: ['Everything in Free', 'Require-approval rules', 'Emergency suspend', '30-day audit history', 'Email support'],
     cta: 'Get started',
     href: `${DASHBOARD_URL}/sign-up`,
   },
@@ -43,10 +43,10 @@ const TIERS: Tier[] = [
     name: 'Pro',
     monthly: 80,
     annual: 800,
-    tagline: 'Serious agent fleets, serious savings.',
-    agents: '20 agents',
-    storage: '100 GB stored data',
-    features: ['Everything in Starter', 'Multi-workspace organizations', 'Advanced determinism window', 'Priority support'],
+    tagline: 'Teams enforcing policy across machines.',
+    seats: '20 seats',
+    endpoints: '40 endpoints',
+    features: ['Everything in Starter', 'Team-scoped policies & reviewers', 'Policy simulation', '1-year audit history & export', 'Priority support'],
     cta: 'Go Pro',
     href: `${DASHBOARD_URL}/sign-up`,
     highlight: true,
@@ -56,9 +56,9 @@ const TIERS: Tier[] = [
     monthly: null,
     annual: null,
     tagline: 'Your scale, your controls.',
-    agents: 'Unlimited agents',
-    storage: 'Custom storage & retention',
-    features: ['Everything in Pro', 'SSO / SAML', 'Run data in your own S3 bucket (your KMS, your retention)', 'Self-hosted collector option', 'Custom DPA & SLA', 'Dedicated support'],
+    seats: 'Custom seats',
+    endpoints: 'Custom endpoints',
+    features: ['Everything in Pro', 'SSO / SAML', 'Self-hosted control plane', 'Audit export to your SIEM', 'Custom retention, DPA & SLA', 'Dedicated support'],
     cta: 'Talk to us',
     href: `mailto:${CONTACT_EMAIL}?subject=Effigent%20Enterprise`,
   },
@@ -133,8 +133,8 @@ export function PricingTable() {
 
             <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16, marginBottom: 18 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t.agents}</div>
-                <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t.storage}</div>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t.seats}</div>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t.endpoints}</div>
               </div>
             </div>
 
@@ -158,7 +158,7 @@ export function PricingTable() {
       </div>
 
       <div style={{ textAlign: 'center', marginTop: 28, fontSize: 13, color: 'var(--ink-3)' }}>
-        Data stored = compressed transcripts, execution graphs and analysis. Every plan includes redaction, scoped keys and all harnesses.
+        A seat is a person in the console or an owner of enrolled machines. An endpoint is one machine running effigentd. Every plan supports Linux and macOS and every agent effigentd recognises.
       </div>
     </div>
   );

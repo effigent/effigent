@@ -6,14 +6,14 @@ import { CONTACT_EMAIL } from '../config';
 export const metadata: Metadata = {
   title: 'About — Effigent',
   description:
-    'Effigent is the compiler for AI agents: parse every execution into a graph, run optimization passes, validate against history, execute the optimized result.',
+    'Effigent builds a control plane for coding agents: see what Claude Code, Cursor and Codex do on developer machines, enforce policy there, and keep a record of every decision.',
 };
 
 const PRINCIPLES: Array<[string, string]> = [
-  ['Standalone, always', 'Effigent never asks you to change agent code. Capture is a hook or an exporter; optimizations arrive as configuration the agent loads — and can be removed by deleting a folder.'],
-  ['Validated before activated', 'Nothing activates on a hunch. Synthesized tools are replayed against the recorded history and must reproduce the agent’s actual behavior before they earn "ready".'],
-  ['Private by default', 'Capture is opt-in per agent, secrets and PII are redacted before anything is stored, and capture keys are scoped, hashed, and least-privilege.'],
-  ['Honest numbers', 'Savings are measured from per-step token usage, confidence is a statistical lower bound, and when a knowledge graph isn’t worth injecting, the engine says so.'],
+  ['Enforce where the action happens', 'A rule about what a shell may run belongs on the machine running the shell, not in front of the model API. effigentd decides locally and keeps deciding when the network is gone.'],
+  ['Say what you can’t do', 'Every layer has blind spots. The coverage matrix says which actions are blocked, paused or only observed on each OS, and the console marks rules that an endpoint can’t enforce.'],
+  ['A name on every exception', 'An approval comes from a person, covers one action, and is in the audit log next to the action it allowed. Nothing is approved by default or by timeout.'],
+  ['Don’t slow developers down by default', 'Start in monitor mode, read what would have been blocked, then enforce. Most actions are allowed and recorded without anyone noticing.'],
 ];
 
 export default function About() {
@@ -22,22 +22,27 @@ export default function About() {
       <Nav />
       <PageHero
         eyebrow="About"
-        title="The compiler for AI agents."
-        sub="Treat an AI agent as a program, not a sequence of prompts. Parse every execution into a universal graph, run compiler-like optimization passes, validate against history, and execute the optimized result."
+        title="Agents got shell access. Controls should follow."
+        sub="Coding agents now run commands, edit files, call MCP tools and push code on developer machines, with the developer’s credentials. Effigent gives engineering teams a way to see that, set rules for it, and prove what happened."
       />
 
       <DocSection>
         <h2 className="h-serif" style={{ fontSize: 26, margin: '0 0 14px' }}>Why this exists</h2>
         <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.75, maxWidth: 680 }}>
           <p style={{ margin: '0 0 12px' }}>
-            Production agents re-derive the same answers run after run — the same repo exploration, the same lookups, the
-            same reasoning over unchanged inputs. That waste is invisible in any single run and enormous across a fleet.
+            A year ago an AI assistant suggested code and a person ran it. Today Claude Code, Cursor and Codex run the
+            commands themselves: install packages, read config, open connections, start MCP servers, push branches. They do it
+            as the developer, with the developer&apos;s SSH keys and cloud credentials.
+          </p>
+          <p style={{ margin: '0 0 12px' }}>
+            Most of the existing controls sit in the wrong place for this. An API gateway sees the prompt and the model call. It
+            doesn&apos;t see the <code style={{ fontFamily: 'var(--mono)', fontSize: 13.5 }}>sh -c</code> that ran next, or the
+            postinstall script under it.
           </p>
           <p style={{ margin: 0 }}>
-            Compilers solved this problem for programs decades ago: observe, find what&apos;s invariant, optimize, verify.
-            Effigent applies the same discipline at the LLM/tool boundary — progressively converting repeated reasoning into
-            deterministic execution, with every optimization validated against the agent&apos;s own history before it
-            activates.
+            Effigent puts a small daemon on each machine. It sees the agents and their process trees, enforces policy through
+            the agents&apos; own hooks and, on Linux, the kernel, and sends every decision to one place where a team can set the
+            rules and review the exceptions.
           </p>
         </div>
       </DocSection>
@@ -57,9 +62,9 @@ export default function About() {
       <DocSection>
         <h2 className="h-serif" style={{ fontSize: 26, margin: '0 0 14px' }}>Who builds it</h2>
         <p style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.75, maxWidth: 680, margin: 0 }}>
-          Effigent is built by engineers who run production agents and got tired of paying them to think twice. The engine is
-          dogfooded on our own agents daily — every feature you see shipped because our own runs demanded it. We work closely
-          with a small group of design partners; if your agent fleet has a real bill,{' '}
+          Effigent is built by engineers who use coding agents every day and wanted to know what those agents were doing on
+          their own machines. We work closely with a small group of design partners. If your team runs coding agents and
+          someone has asked you what they can touch,{' '}
           <a href={`mailto:${CONTACT_EMAIL}`} style={{ fontWeight: 600, color: 'oklch(0.4 0.14 250)' }}>we want to hear about it</a>.
         </p>
       </DocSection>
@@ -68,7 +73,7 @@ export default function About() {
         <h2 className="h-serif" style={{ fontSize: 26, margin: '0 0 14px' }}>Get in touch</h2>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           <a href={`mailto:${CONTACT_EMAIL}`} className="btn btn-primary" style={{ padding: '12px 22px', fontSize: 14, display: 'inline-block' }}>Email us</a>
-          <Link href="/developers" className="btn btn-ghost" style={{ padding: '12px 20px', fontSize: 14, display: 'inline-block' }}>Install it instead</Link>
+          <Link href="/docs/quickstart" className="btn btn-ghost" style={{ padding: '12px 20px', fontSize: 14, display: 'inline-block' }}>Enroll a machine instead</Link>
         </div>
       </DocSection>
       <Footer />

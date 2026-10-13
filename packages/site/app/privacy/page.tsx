@@ -6,41 +6,51 @@ import { CONTACT_EMAIL } from '../config';
 export const metadata: Metadata = {
   title: 'Privacy Policy — Effigent',
   description:
-    'What Effigent collects and why: agent execution data only, personal data redacted before storage, used solely to analyze and optimize your own agents. Never sold, never used across tenants.',
+    'What Effigent collects and why: metadata about AI coding agents’ actions on enrolled machines, used only to enforce and audit your own policies. No file contents, no model prompts. Never sold, never used across tenants.',
 };
 
 const SECTIONS: Array<[string, string | string[]]> = [
   [
     'The short version',
-    'Effigent captures how your AI agents execute — model turns, tool calls, token usage, cost — in order to analyze and optimize those same agents for your workspace. Personal and sensitive data is removed before anything is stored. We do not sell data, we do not use one customer’s data for another customer, and we do not train models on your content.',
+    'effigentd records what AI coding agents do on machines you enroll (which programs they run, which files they open, which hosts they connect to, which MCP tools they call) so your team can enforce policy and keep an audit trail. It does not collect file contents or model prompts and responses. We do not sell data, we do not use one customer’s data for another customer, and we do not train models on your data.',
   ],
   [
     'What we collect',
     [
-      'Agent execution data: the structure and content of agent runs your capture keys upload — model turns, tool inputs/outputs, token usage, model names, timing, and computed cost. This is the product; it exists so we can show you your runs and find optimizations.',
-      'Account data: your email address and name via our authentication provider (Clerk), used to sign you in and manage workspace membership.',
+      'Agent activity metadata from enrolled endpoints: agent type and process ids, executed binaries with their arguments and working directory, file paths opened, destination hosts and ports, MCP server and tool names, the OS user, the machine name, and the policy decision with the rule that made it. The agent’s raw tool input is redacted on the machine before it is sent.',
+      'Approval and audit records: who requested, who approved or denied, notes they added, and timestamps.',
+      'Endpoint data: hostname, operating system, effigentd version, sensor type, policy version and heartbeat.',
+      'Account data: your name and email address via our authentication provider (Clerk), used to sign you in, manage workspace membership and identify approvers.',
       'Operational data: standard service logs (request timestamps, status codes) needed to run and secure the service.',
     ],
   ],
   [
-    'Personal data is removed before storage',
-    'Every captured payload passes through an automated redaction layer at the single point of ingestion — before it is stored, indexed, or analyzed. Removed and replaced with typed placeholders: API keys and platform credentials, cloud access keys, bearer tokens and JWTs, database connection strings, private-key material, password/token key-value pairs, email addresses, phone numbers, government-ID-like numbers, and card-like numbers. Person names are preserved — they are routine agent context (ticket assignees, commit authors) and essential to the analysis. We designed the pipeline so that contactable and credential data inside agent payloads is not retained.',
+    'What we don’t collect',
+    'File contents, source code, model prompts and completions, keystrokes, screen contents, and activity of processes that are not part of an AI agent’s process tree. effigentd tracks agent process trees, not everything the developer does.',
   ],
   [
-    'What we use it for — and nothing else',
-    'Captured execution data is used exclusively to provide the service to the workspace that uploaded it: rendering your runs, computing costs, and generating optimization recommendations (caching, deterministic replacement, model routing) for your own agents. It is never used to build cross-customer models, never shared between workspaces, and never sold or rented to anyone.',
+    'Command lines',
+    'Arguments are part of what a rule matches and what the audit trail must show, so they are collected as they appear. If a secret is passed as an argument, it will be in the record, the same way it would be in shell history. We recommend keeping credentials in environment variables or files.',
+  ],
+  [
+    'What we use it for, and nothing else',
+    'Data from your endpoints is used only to provide the service to your workspace: evaluating and enforcing your policies, routing approvals, showing the agent graph and events, and keeping your audit trail. It is never used to build cross-customer models, never shared between workspaces, and never sold or rented.',
+  ],
+  [
+    'Your obligations to the people on those machines',
+    'Your organisation decides which machines to enroll. Developers whose machines are enrolled should know that agent activity on them is recorded. Effigent is designed to record agent activity, not to monitor people, and the data it collects reflects that.',
   ],
   [
     'Tenant isolation',
-    'Every record is bound to your workspace. Queries are workspace-scoped end to end; there is no cross-tenant read path. Capture keys are write-only, scoped to a single agent, and stored as one-way hashes.',
+    'Every record is bound to your workspace and every query is workspace-scoped; there is no cross-tenant read path. Enterprise customers can run the control plane in their own infrastructure, in which case endpoint data does not reach us at all.',
   ],
   [
     'Subprocessors',
-    'We run on a small set of infrastructure providers who process data on our behalf: Vercel (application hosting), Neon (database), Clerk (authentication), and Amazon Web Services / CloudFront (website delivery). Each processes data only as needed to provide their service.',
+    'We run on a small set of infrastructure providers who process data on our behalf: Vercel (application hosting), Neon (database), Clerk (authentication), and Amazon Web Services (storage and website delivery). Each processes data only as needed to provide their service.',
   ],
   [
     'Retention & deletion',
-    'Execution data is retained while your workspace is active so the optimization engine can learn from history. You may request deletion of any agent’s data or your entire workspace at any time, and we will remove it from live systems promptly.',
+    'Events and audit records are kept for the retention period of your plan. You may request deletion of an endpoint’s data or your entire workspace at any time, and we will remove it from live systems promptly.',
   ],
   [
     'Cookies',
@@ -57,9 +67,9 @@ export default function PrivacyPage() {
     <div style={{ width: '100%', overflowX: 'hidden' }}>
       <Nav />
       <PageHero
-        eyebrow="Privacy Policy · v1.0 · July 2026"
-        title="Your agents’ data works for you. Only for you."
-        sub="Effigent exists to make your agents cheaper and faster. That requires seeing how they run — so the pipeline removes personal data before storage and uses what remains for exactly one purpose: optimizing your own agents."
+        eyebrow="Privacy Policy · v2.0 · October 2026"
+        title="We record what agents do. Not what’s in your files."
+        sub="Enforcing policy on coding agents means seeing what they run, open and connect to. This page lists exactly what that is, what we never collect, and the one thing we use it for: your own policies and audit trail."
       />
       <DocSection>
         {SECTIONS.map(([title, body]) => (

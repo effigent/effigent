@@ -2,7 +2,7 @@
   "name": "@effigent/site",
   "version": "0.1.0",
   "private": true,
-  "description": "Optimizer marketing site — Next.js (static export for S3/CloudFront).",
+  "description": "Effigent marketing site (AI Agent Control Plane) — Next.js (static export for S3/CloudFront).",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
