@@ -60,10 +60,13 @@ export function EnvTag({ env }: { env: Env }) {
   return <span className="env-tag"><span className="env-dot" style={{ background: m.color }} />{m.short}</span>;
 }
 
-export function AgentGlyph({ type, size = 30 }: { type: AgentType; size?: number }) {
+// tip: true shows the agent's name on hover/focus; a string is appended after it as detail.
+export function AgentGlyph({ type, size = 30, tip }: { type: AgentType; size?: number; tip?: boolean | string }) {
   const m = AGENT_TYPES[type];
+  const label = tip ? (typeof tip === 'string' ? `${m.label} · ${tip}` : m.label) : undefined;
   return (
-    <span className="agent-glyph" style={{ width: size, height: size, color: m.color, background: `color-mix(in srgb, ${m.color} 16%, var(--panel-2))` }}>
+    <span className={`agent-glyph${label ? ' has-tip' : ''}`} data-tip={label} aria-label={label} role={label ? 'img' : undefined} tabIndex={label ? 0 : undefined}
+      style={{ width: size, height: size, color: m.color, background: `color-mix(in srgb, ${m.color} 16%, var(--panel-2))` }}>
       <Ic n={m.icon} size={Math.round(size * 0.55)} />
     </span>
   );

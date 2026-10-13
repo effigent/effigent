@@ -64,7 +64,7 @@ export function Identity({ initialUser }: { initialUser?: string }) {
                     <td>{u.team}</td>
                     <td className="mono-sm">{u.osUsers.join(', ')}</td>
                     <td className="mono-sm">{eps.map((e) => e.hostname).join(', ') || '—'}</td>
-                    <td><span style={{ display: 'inline-flex', gap: 4 }}>{agents.map((a) => <AgentGlyph key={a.id} type={a.type} size={22} />)}{agents.length === 0 && <span className="muted">—</span>}</span></td>
+                    <td><span style={{ display: 'inline-flex', gap: 4 }}>{agents.map((a) => <AgentGlyph key={a.id} type={a.type} size={22} tip={eps.find((e) => e.id === a.endpoint)?.hostname ?? true} />)}{agents.length === 0 && <span className="muted">—</span>}</span></td>
                     <td>{u.mfa ? <Ic n="check" size={16} style={{ color: 'var(--green)' }} /> : <span className="badge b-gold">Off</span>}</td>
                     <td className="muted">{u.lastSeen}</td>
                     <td>
