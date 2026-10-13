@@ -17,7 +17,25 @@ permissions:
   contents: read
 
 jobs:
+  macos:
+    # pkgbuild and lipo only exist on macOS.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build universal binary + pkg
+        run: |
+          v="${{ github.event.inputs.version }}"; [ -n "$v" ] || v="${GITHUB_REF_NAME#effigentd-}"
+          ./deploy/macos/build-pkg.sh "$v"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/releases/effigentd/
+
   release:
+    needs: macos
     runs-on: ubuntu-latest
     environment: prod
     steps:
@@ -33,6 +51,10 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Test
         run: go test ./... && go vet ./...
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: dist/releases/effigentd/
       - name: Build
         run: |
           sed -i 's/shasum -a 256/sha256sum/' deploy/release/build-effigentd.sh

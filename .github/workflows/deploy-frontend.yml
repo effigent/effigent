@@ -47,7 +47,7 @@ jobs:
           # Next.js static export outputs to out/. Assets (_next/*) are hashed →
           # cache forever; HTML is entry-point → never cache.
           aws s3 sync packages/site/out "s3://${{ vars.SITE_BUCKET }}" \
-            --delete --exclude "*.html" --exclude "icon*" --exclude "logo_*" --exclude "install.sh" --exclude "releases/*" \
+            --delete --exclude "*.html" --exclude "icon*" --exclude "logo_*" --exclude "install.sh" --exclude "install.ps1" --exclude "releases/*" \
             --cache-control "public,max-age=31536000,immutable"
           # entry-point files with stable URLs (html, favicon, logos) — never cache hard
           aws s3 sync packages/site/out "s3://${{ vars.SITE_BUCKET }}" \
@@ -56,6 +56,8 @@ jobs:
           # public installer (curl https://effigent.ai/install.sh | sh) — updatable, so never cache hard
           aws s3 cp packages/site/out/install.sh "s3://${{ vars.SITE_BUCKET }}/install.sh" \
             --content-type "text/x-shellscript" --cache-control "no-cache"
+          aws s3 cp packages/site/out/install.ps1 "s3://${{ vars.SITE_BUCKET }}/install.ps1" \
+            --content-type "text/plain" --cache-control "no-cache"
       - name: Publish extensionless routes
         run: |
           # CloudFront only resolves the ROOT default object — /pricing does not
