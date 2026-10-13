@@ -22,6 +22,9 @@ type Server struct {
 	Engine *engine.Engine
 	Token  string // required as "Authorization: Bearer <token>" when set; without it the API is read-only
 	Stats  func() map[string]any
+	// Managed is set when the endpoint is enrolled: policy then comes only
+	// from the control plane, and local PUT /policy is refused.
+	Managed bool
 }
 
 func (s *Server) Handler() http.Handler {
@@ -46,6 +49,10 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write(s.Engine.PolicyRaw())
 	})
 	mux.HandleFunc("PUT /policy", func(w http.ResponseWriter, r *http.Request) {
+		if s.Managed {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "this endpoint is enrolled; change the policy in the control plane"})
+			return
+		}
 		if s.Token == "" {
 			// The governed agents run on this host and can reach localhost, so an
 			// unauthenticated write API would let an agent lift its own policy.

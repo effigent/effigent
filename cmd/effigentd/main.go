@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/api"
+	"github.com/effigent/effigent/internal/endpoint/cpclient"
 	"github.com/effigent/effigent/internal/endpoint/engine"
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
@@ -24,9 +26,15 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "run" {
-		runAgent(os.Args[2:])
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "run":
+			runAgent(os.Args[2:])
+			return
+		case "enroll":
+			enrollCmd(os.Args[2:])
+			return
+		}
 	}
 	var (
 		tetragonAddr = flag.String("tetragon", "127.0.0.1:54321", "Tetragon gRPC address")
@@ -39,6 +47,8 @@ func main() {
 		procfs       = flag.String("procfs", defaultProcfs(), "host /proc for detecting already-running agents (\"\" to disable)")
 		verbose      = flag.Bool("v", false, "also report exits of tools inside agent trees")
 		keepPolicies = flag.Bool("keep-policies-on-exit", false, "leave agents' kernel policies loaded when effigentd stops (fail-closed); they are reconciled on next start")
+		stateDir     = flag.String("state-dir", cpclient.DefaultStateDir(), "enrollment state; when enrolled, policy comes from the control plane")
+		syncEvery    = flag.Duration("sync-interval", 5*time.Second, "how often an enrolled endpoint checks for a new policy")
 	)
 	flag.Parse()
 	logger := log.New(os.Stderr, "effigentd: ", log.LstdFlags)
@@ -70,6 +80,12 @@ func main() {
 		backend = sink.NewHTTP(sink.HTTPConfig{URL: *backendURL, Token: os.Getenv("EFFIGENT_BACKEND_TOKEN"), MinSeverity: *backendMin})
 		sinks = append(sinks, backend)
 	}
+	cp, _ := cpclient.LoadState(*stateDir)
+	if cp != nil {
+		// Enrolled: ship every event to the control plane too.
+		sinks = append(sinks, sink.NewHTTP(sink.HTTPConfig{URL: cp.Server + "/ep/v1/events", Token: cp.Secret, Interval: 2 * time.Second}))
+		logger.Printf("enrolled as %s with %s", cp.EndpointID, cp.Server)
+	}
 	defer sinks.Close()
 
 	tg, err := tetragon.Dial(*tetragonAddr)
@@ -85,7 +101,7 @@ func main() {
 
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
-			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"),
+			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
 			Stats: func() map[string]any {
 				if backend == nil {
 					return nil
@@ -101,6 +117,25 @@ func main() {
 		}()
 		defer srv.Shutdown(context.Background())
 		logger.Printf("API on http://%s", *listen)
+	}
+
+	if cp != nil {
+		client := &cpclient.Client{
+			State: cp, Dir: *stateDir, Logf: logger.Printf,
+			Apply: func(ctx context.Context, body []byte) error {
+				_, err := eng.SetPolicy(ctx, body)
+				return err
+			},
+			OnApply: func(v int64) {
+				logger.Printf("applied policy v%d from the control plane", v)
+				sinks.Write(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "info",
+					Rule: fmt.Sprintf("v%d", v), Message: fmt.Sprintf("policy v%d from the control plane is active", v)})
+			},
+		}
+		if err := client.LoadCached(ctx); err != nil {
+			logger.Printf("cached policy: %v", err)
+		}
+		go client.Run(ctx, *syncEvery)
 	}
 
 	events := make(chan event.Raw, 4096)
