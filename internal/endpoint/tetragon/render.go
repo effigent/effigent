@@ -3,6 +3,7 @@ package tetragon
 import (
 	"fmt"
 
+	"github.com/effigent/effigent/internal/endpoint/domains"
 	"github.com/effigent/effigent/internal/endpoint/engine"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 	"gopkg.in/yaml.v3"
@@ -131,8 +132,9 @@ func Render(name string, rootPID uint32, r policy.Rule) ([]engine.Doc, error) {
 		})
 	}
 
-	// Outbound connections by destination IP/CIDR. For a sockaddr argument
-	// Tetragon calls the struct's address "SAddr"; on connect that is the
+	// Outbound connections by destination IP/CIDR (domain_deny arrives here
+	// already resolved into NetDeny). For a sockaddr argument Tetragon calls
+	// the struct's address "SAddr" and port "SPort"; on connect that is the
 	// destination. Allow mode only applies to IP families, so local unix
 	// sockets keep working, and loopback is always allowed.
 	var netSel []selector
@@ -140,6 +142,27 @@ func Render(name string, rootPID uint32, r policy.Rule) ([]engine.Doc, error) {
 		netSel = append(netSel, selector{MatchPIDs: pids,
 			MatchArgs:    []matchArg{{Index: 1, Operator: "SAddr", Values: cidrs(r.NetDeny)}},
 			MatchActions: act(true)})
+	}
+	if r.DNSGuard != nil {
+		// domain_deny is only as good as the answers effigentd sees, so while
+		// it is in force agents may not ask anyone else: no DNS over TLS
+		// anywhere, and no well-known public resolver on DNS ports (plain,
+		// DoH, DoT). The agent's own configured resolver is never listed.
+		ip := []string{"AF_INET", "AF_INET6"}
+		netSel = append(netSel, selector{MatchPIDs: pids,
+			MatchArgs: []matchArg{
+				{Index: 1, Operator: "Family", Values: ip},
+				{Index: 1, Operator: "SPort", Values: []string{"853"}},
+			},
+			MatchActions: act(true)})
+		if len(r.DNSGuard) > 0 {
+			netSel = append(netSel, selector{MatchPIDs: pids,
+				MatchArgs: []matchArg{
+					{Index: 1, Operator: "SAddr", Values: cidrs(r.DNSGuard)},
+					{Index: 1, Operator: "SPort", Values: domains.DNSPorts},
+				},
+				MatchActions: act(true)})
+		}
 	}
 	if len(r.NetAllow) > 0 {
 		allowed := append(cidrs(r.NetAllow), "127.0.0.0/8", "::1/128")

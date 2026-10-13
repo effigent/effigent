@@ -45,6 +45,9 @@ defaults:
   network: true         # report outbound TCP connects
   # network_deny: [203.0.113.7, 10.0.0.0/8]   # block connections to these IPs/CIDRs
   # network_allow: [140.82.112.0/20]          # or: allow ONLY these (loopback always allowed)
+  # domain_deny: [pastebin.com]               # block these hostnames: effigentd re-resolves them
+  #                                           # every 30s and blocks the addresses. Shared CDN IPs
+  #                                           # can over-block or miss; network_allow is stronger.
   # require_launcher: true                    # stop agents not started with `effigentd run --agent <name> -- <cmd>`
 
 agents:

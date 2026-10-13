@@ -46,8 +46,14 @@ type Rule struct {
 	NetDeny  []string `yaml:"network_deny,omitempty" json:"network_deny"`
 	NetAllow []string `yaml:"network_allow,omitempty" json:"network_allow"`
 	// DomainDeny blocks connections to these hostnames: effigentd resolves
-	// them continuously and blocks every IP they resolve to.
+	// them continuously and blocks every IP they resolve to (exact names;
+	// list www.example.com separately). Shared CDN addresses can over-block
+	// or miss; NetAllow is the stronger control.
 	DomainDeny []string `yaml:"domain_deny,omitempty" json:"domain_deny"`
+	// DNSGuard is set by effigentd, never by policy authors: while
+	// domain_deny is in force, agents may not reach these resolver
+	// addresses on DNS ports, nor any address on port 853 (DNS over TLS).
+	DNSGuard []string `yaml:"-" json:"-"`
 	// RequireLauncher stops agents that were not started with `effigentd run`
 	// (which guarantees enforcement from the agent's first instruction).
 	RequireLauncher *bool `yaml:"require_launcher,omitempty" json:"require_launcher"`
@@ -102,6 +108,10 @@ func (p *Policy) validate() error {
 	if p.Defaults.Mode == "" {
 		p.Defaults.Mode = Monitor
 	}
+	p.Defaults.DomainDeny = normalizeHosts(p.Defaults.DomainDeny)
+	for i := range p.Agents {
+		p.Agents[i].DomainDeny = normalizeHosts(p.Agents[i].DomainDeny)
+	}
 	seen := map[string]bool{}
 	for _, a := range p.Agents {
 		if !nameRE.MatchString(a.Name) {
@@ -141,10 +151,10 @@ func (r Rule) check() error {
 	default:
 		return fmt.Errorf("unknown mode %q", r.Mode)
 	}
-	if len(r.DomainDeny) > 0 {
-		// Not enforced yet. Refuse it rather than let a policy look stricter
-		// than what the kernel actually applies.
-		return fmt.Errorf("domain_deny is not supported yet; block the destination IPs/CIDRs with network_deny or allow only known destinations with network_allow")
+	for _, h := range r.DomainDeny {
+		if err := checkHost(h); err != nil {
+			return err
+		}
 	}
 	for _, list := range [][]string{r.NetDeny, r.NetAllow} {
 		for _, c := range list {
@@ -161,6 +171,52 @@ func (r Rule) check() error {
 		}
 	}
 	return nil
+}
+
+var hostRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func normalizeHosts(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	for i, h := range in {
+		out[i] = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+	}
+	return out
+}
+
+func checkHost(h string) error {
+	switch {
+	case net.ParseIP(h) != nil || strings.Contains(h, "/") && net.ParseIP(strings.SplitN(h, "/", 2)[0]) != nil:
+		return fmt.Errorf("domain_deny %q is an address; put IPs and CIDRs in network_deny", h)
+	case strings.HasPrefix(h, "*."):
+		return fmt.Errorf("domain_deny %q: subdomains can't be discovered through DNS; list each hostname (e.g. www.%s)", h, h[2:])
+	case strings.Contains(h, "://") || strings.ContainsAny(h, "/:"):
+		return fmt.Errorf("domain_deny %q: use a bare hostname like example.com (no scheme, port or path)", h)
+	case len(h) > 253 || !hostRE.MatchString(h):
+		return fmt.Errorf("domain_deny %q: not a valid hostname (e.g. pastebin.com)", h)
+	}
+	return nil
+}
+
+// Domains returns every hostname any rule denies.
+func (p *Policy) Domains() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(r Rule) {
+		for _, h := range r.DomainDeny {
+			if !seen[h] {
+				seen[h] = true
+				out = append(out, h)
+			}
+		}
+	}
+	add(p.Defaults)
+	for _, a := range p.Agents {
+		add(p.RuleFor(a.Name))
+	}
+	return out
 }
 
 // Launcher reports whether the rule requires agents to start via `effigentd run`.

@@ -32,7 +32,7 @@ export default function Enforcement() {
         <H2>The two layers</H2>
         <ul className="doc-list">
           <li><b>Agent hooks.</b> Claude Code and Cursor call a hook before each tool runs. The hook sees the full command, file path, URL or MCP tool name, so it can allow, deny, or pause for approval. It only sees the agent&apos;s own tool calls, not what a script started by that call does afterwards.</li>
-          <li><b>Kernel (Linux).</b> effigentd loads a policy scoped to each agent&apos;s process tree through eBPF (Tetragon). It sees every exec, file open and outbound connection from the agent and all of its children, including scripts and package hooks. It blocks exec by resolved binary path and file opens by path. It cannot pause, and it does not match on arguments.</li>
+          <li><b>Kernel (Linux).</b> effigentd loads a policy scoped to each agent&apos;s process tree through eBPF (Tetragon). It sees every exec, file open and outbound connection from the agent and all of its children, including scripts and package hooks. It blocks exec by resolved binary path, file opens by path, and connections by destination address (<code>network_deny</code>, <code>network_allow</code>, and hostnames in <code>domain_deny</code>, which effigentd resolves to addresses). It cannot pause, and it does not match on arguments.</li>
           <li><b>Endpoint Security (macOS).</b> effigentd reads exec, file and network events for agent trees. On macOS the OS layer observes; enforcement comes from hooks.</li>
         </ul>
       </DocSection>
@@ -43,7 +43,8 @@ export default function Enforcement() {
         <ul className="doc-list" style={{ marginTop: 18 }}>
           <li><b>Block</b>: stopped before it runs. <b>Pause</b>: held until a reviewer approves; hooks can also deny outright. <b>Observe</b>: recorded, and reported as <code>would_block</code> when a rule would have stopped it. <b>—</b>: that layer does not see it.</li>
           <li>Hook cells apply to the agent&apos;s own tool calls (for Claude Code: Bash, Read, Edit, WebFetch and <code>mcp__*</code> tools). Cursor&apos;s hook covers shell commands.</li>
-          <li>Kernel network events are reported, not blocked. Use a deny rule on the binary (<code>/usr/bin/nc</code>) or a hook rule on the host to stop a connection.</li>
+          <li>The kernel blocks connections by destination address, not by name. <code>network_deny</code> and <code>network_allow</code> take IPs and CIDRs. <code>domain_deny</code> takes hostnames: effigentd re-resolves them every 30 seconds through the system resolver and public resolvers, and blocks every address it has seen for each name in the last 15 minutes.</li>
+          <li><code>domain_deny</code> has limits. Sites behind a shared CDN share addresses, so blocking one can block unrelated sites on the same address, and the agent can get an address effigentd never saw. Each name is exact: list <code>www.example.com</code> separately, and wildcards are refused. While it is in force, agents can&apos;t reach well-known public resolvers on DNS ports or use DNS over TLS, but a private DoH server, a hard-coded address or a proxy still gets through. For a guarantee, use <code>network_allow</code> so agents can reach only the destinations you list.</li>
           <li>An MCP server shows up in the kernel layer as a process under the agent: its execs, files and connections follow the agent&apos;s rules. Tool-level MCP rules need a hook.</li>
         </ul>
       </DocSection>

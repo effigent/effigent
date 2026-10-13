@@ -5,14 +5,19 @@ package engine
 import (
 	"context"
 	"fmt"
+	"net"
 	"path"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/effigent/effigent/internal/endpoint/domains"
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 	"github.com/effigent/effigent/internal/endpoint/redact"
@@ -62,6 +67,9 @@ type Engine struct {
 	learned  map[string]map[string]int // agent -> binary -> exec count
 	recent   map[string]time.Time      // dedup of repeated kernel events
 	gen      uint64
+	dns      *domains.Resolver // domain_deny hostnames -> addresses
+	procfs   string            // to read each agent's own resolv.conf
+	empty    map[string]bool   // domain_deny names currently resolving to nothing (reported once)
 }
 
 // stop ends a process. A variable so tests and non-Linux builds can replace it.
@@ -74,7 +82,21 @@ func New(pol *policy.Policy, raw []byte, enf Enforcer, emit func(event.Event), l
 		pol: pol, polRaw: raw, enf: enf, emit: func(ev event.Event) { emit(scrub(ev)) }, logf: logf, verbose: verbose,
 		roots: map[uint32]*Root{}, byPolicy: map[string]*Root{},
 		mcp: map[string]string{}, learned: map[string]map[string]int{}, recent: map[string]time.Time{},
+		empty: map[string]bool{},
 	}
+}
+
+// UseResolver enables domain_deny: its hostnames are resolved by r and
+// blocked by address. procfs ("" if unavailable) is used to find each
+// agent's own nameservers, which the DNS bypass guard never blocks.
+// Call before the policy is applied to any agent.
+func (e *Engine) UseResolver(ctx context.Context, r *domains.Resolver, procfs string) {
+	e.mu.Lock()
+	e.dns, e.procfs = r, procfs
+	pol := e.pol
+	e.mu.Unlock()
+	r.Set(ctx, pol.Domains())
+	e.reportEmpty(pol.Domains())
 }
 
 // scrub removes secrets from every free-text field of an event before any
@@ -248,6 +270,7 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 	if e.enf == nil {
 		return
 	}
+	rule = e.expand(root, rule)
 	docs, err := e.enf.Render(e.enf.PolicyName(root.Agent, root.PID, gen), root.PID, rule)
 	if err != nil {
 		e.logf("render policy for %s[%d]: %v", root.Agent, root.PID, err)
@@ -357,6 +380,9 @@ func (e *Engine) onPolicyEvent(r event.Raw) {
 	}
 	ev := e.base(r, root, kind, sev)
 	ev.Target, ev.Rule = r.Target, r.Policy
+	if kind == event.Blocked || kind == event.WouldBlock {
+		ev.Message = e.connectNote(root, r.Target)
+	}
 	ev.Kind = "tool"
 	if e.mcpLabel(r.Process.ExecID) != "" {
 		ev.Kind = "mcp"
@@ -513,6 +539,14 @@ func (e *Engine) SetPolicy(ctx context.Context, raw []byte) (int, error) {
 		return 0, err
 	}
 	e.mu.Lock()
+	dns := e.dns
+	e.mu.Unlock()
+	if dns != nil {
+		// Resolve new hostnames first, so the policies below already block them.
+		dns.Set(ctx, p.Domains())
+		e.reportEmpty(p.Domains())
+	}
+	e.mu.Lock()
 	e.pol, e.polRaw = p, raw
 	pids := make([]uint32, 0, len(e.roots))
 	for pid := range e.roots {
@@ -523,6 +557,92 @@ func (e *Engine) SetPolicy(ctx context.Context, raw []byte) (int, error) {
 		e.reapply(ctx, pid)
 	}
 	return len(pids), nil
+}
+
+// expand turns a rule's domain_deny into addresses the kernel can match:
+// the hostnames' current IPs join NetDeny, and the DNS bypass guard is
+// switched on (minus the resolvers this agent is configured to use).
+func (e *Engine) expand(root *Root, rule policy.Rule) policy.Rule {
+	e.mu.Lock()
+	dns, procfs := e.dns, e.procfs
+	e.mu.Unlock()
+	if len(rule.DomainDeny) == 0 || dns == nil {
+		return rule
+	}
+	deny := slices.Clone(rule.NetDeny)
+	for _, h := range rule.DomainDeny {
+		for _, ip := range dns.IPs(h) {
+			if !slices.Contains(deny, ip) {
+				deny = append(deny, ip)
+			}
+		}
+	}
+	rule.NetDeny = deny
+	files := []string{"/etc/resolv.conf"}
+	if procfs != "" {
+		files = append(files, filepath.Join(procfs, strconv.Itoa(int(root.PID)), "root/etc/resolv.conf"))
+	}
+	rule.DNSGuard = domains.Guarded(domains.Nameservers(files...))
+	return rule
+}
+
+// OnDomainsChanged re-applies the policy of every agent whose domain_deny
+// lists a hostname whose addresses changed.
+func (e *Engine) OnDomainsChanged(ctx context.Context, names []string) {
+	e.logf("domain_deny: addresses changed for %s", strings.Join(names, ", "))
+	e.reportEmpty(names)
+	for _, root := range e.Agents() {
+		e.mu.Lock()
+		rule := e.ruleFor(&root)
+		e.mu.Unlock()
+		if slices.ContainsFunc(rule.DomainDeny, func(h string) bool { return slices.Contains(names, h) }) {
+			e.reapply(ctx, root.PID)
+		}
+	}
+}
+
+// reportEmpty makes "listed but nothing to block" visible: a domain_deny
+// hostname that resolves to no address is reported once, until it resolves.
+func (e *Engine) reportEmpty(names []string) {
+	e.mu.Lock()
+	dns := e.dns
+	e.mu.Unlock()
+	if dns == nil {
+		return
+	}
+	for _, h := range names {
+		none := len(dns.IPs(h)) == 0
+		e.mu.Lock()
+		was := e.empty[h]
+		e.empty[h] = none
+		e.mu.Unlock()
+		if none && !was {
+			e.emit(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "medium", Target: h,
+				Message: "domain_deny " + h + " resolves to no address; nothing is blocked for it until it does"})
+		}
+	}
+}
+
+// connectNote explains a blocked connect that came from domain_deny.
+func (e *Engine) connectNote(root *Root, target string) string {
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(target, "connect "))
+	if err != nil || !strings.HasPrefix(target, "connect ") {
+		return ""
+	}
+	e.mu.Lock()
+	dns := e.dns
+	rule := e.ruleFor(root)
+	e.mu.Unlock()
+	if dns == nil || len(rule.DomainDeny) == 0 {
+		return ""
+	}
+	if names := dns.Names(host); len(names) > 0 {
+		return "domain_deny: " + strings.Join(names, ", ")
+	}
+	if port == "853" || slices.Contains(domains.PublicResolvers, host) && slices.Contains(domains.DNSPorts, port) {
+		return "DNS bypass guard: agents may not use outside resolvers while domain_deny is in force"
+	}
+	return ""
 }
 
 func (e *Engine) PolicyRaw() []byte {

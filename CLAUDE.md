@@ -18,7 +18,7 @@ Keep this file current when architecture, data model or deployment change.
 | `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
 | `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). **Still demo**: Approvals, Allow/Deny Lists, Identity, Agent Graph. Dev bypass serves `src/lib/fixture-api.ts`. | Vercel, app.effigent.ai |
 | `packages/site` | Marketing site + docs, Next.js static export. | S3 + CloudFront, effigent.ai |
-| `test/endpoint` | Endpoint e2e against Tetragon (24 checks). | Docker Desktop |
+| `test/endpoint` | Endpoint e2e against Tetragon (36 checks). | Docker Desktop |
 | `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
 
 ## 2. How policy reaches the kernel
@@ -55,6 +55,8 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   check on compiled documents and stay on their current version (fail closed, logged every
   sync). Upgrade endpoints before a tenant's first central-policy publish. A machine whose
   compile fails gets 422 and keeps its version; it shows as a lagging `policy_version`.
+  effigentd builds older than `domain_deny` support refuse a policy that uses it (parse
+  error) and also stay on their current version: upgrade endpoints before publishing one.
 
 ## 3. Auth
 
@@ -84,7 +86,8 @@ npm run -w @effigent/site build                     # site
 ## 5. Known limits (keep honest; the site's coverage matrix follows these)
 
 - Kernel blocking is per resolved binary path and file path suffix; argument-level rules alert only.
-- Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet). Hostnames are not blocked (`domain_deny` is refused).
+- Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet).
+- `domain_deny` (hostnames) is enforced by address: `internal/endpoint/domains` resolves each name every `-dns-refresh` (30s) via the system resolver + `-dns-servers` (1.1.1.1, 8.8.8.8, 9.9.9.9), keeps every address seen in the last 15 min (max 64 per name; a failed lookup never shrinks the set; loopback/link-local answers are dropped), and the engine adds them to `network_deny` at apply time, re-applying only agents whose names changed. While it is in force, a DNS bypass guard blocks agents from DoT (:853 anywhere) and from well-known public resolvers on :53/:443/:853, except the nameservers in effigentd's and the agent's own `resolv.conf`. Limits: shared CDN IPs over-block or miss; names are exact (no wildcards, `www.` separate); private DoH, hard-coded IPs, `/etc/hosts` pins and proxies evade it; effigentd resolves from its own vantage point (split-horizon DNS can differ). `network_allow` is the stronger control. e2e section 6.
 - macOS: no kernel enforcement (needs an Endpoint Security entitlement); observe only.
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.

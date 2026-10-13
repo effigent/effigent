@@ -24,7 +24,7 @@ done
 ./bin/mockbackend -out "$OUT/backend.jsonl" -token testtoken >"$OUT/backend.log" 2>&1 & BPID=$!
 EFFIGENT_API_TOKEN=apitoken EFFIGENT_BACKEND_TOKEN=testtoken ./bin/effigentd -output json -log-file "$OUT/events.jsonl" \
   -backend-url http://127.0.0.1:9999/ingest >/dev/null 2>"$OUT/effigent.err" & EPID=$!
-trap 'kill $EPID $BPID 2>/dev/null; docker rm -f eff-longlived >/dev/null 2>&1' EXIT
+trap 'kill $EPID $BPID 2>/dev/null; docker rm -f eff-longlived eff-domain >/dev/null 2>&1' EXIT
 sleep 2
 
 echo "== 1. denylist scenario (agent waits 1s before acting)"
@@ -100,7 +100,43 @@ check "$OUT/allow-run.txt" "curl exit=126"                            "non-allow
 check "$OUT/events.jsonl" '"type":"blocked".*"agent":"allowtest".*"mode":"allowlist"' "allowlist block reported"
 api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
 
-echo "== 6. backend"
+echo "== 6. domain_deny: [example.com]"
+# curl stays allowed here so the network rule, not exec_deny, is what blocks.
+awk '/\/bin\/curl( |$)/ {next} {print} /^  network: true/ {print "  domain_deny: [example.com]"}' \
+  internal/endpoint/policy/default.yaml > "$OUT/domain.yaml"
+api -X PUT --data-binary @"$OUT/domain.yaml" $API/policy > "$OUT/put-domain.json"
+check "$OUT/put-domain.json" '"ok": true'                             "policy with domain_deny accepted"
+docker run -d --name eff-domain effigent-scenario /opt/ag/claude -c '
+  while :; do [ -e /tmp/go ] && { rm /tmp/go; echo "round"
+    curl -s -o /dev/null --max-time 10 https://example.com; echo "example.com exit=$?"
+    getent hosts github.com >/dev/null; echo "dns exit=$?"
+    curl -s -o /dev/null --max-time 10 https://github.com; echo "github exit=$?"
+    (exec 3<>/dev/tcp/8.8.8.8/53) 2>/dev/null; echo "dns-bypass 8.8.8.8:53 exit=$?"
+    (exec 3<>/dev/tcp/1.1.1.1/853) 2>/dev/null; echo "dot 1.1.1.1:853 exit=$?"; }; sleep 0.2; done' >/dev/null
+sleep 3; docker exec eff-domain touch /tmp/go; sleep 8
+docker exec eff-domain curl -s -o /dev/null -w 'outside http=%{http_code}\n' --max-time 10 https://example.com > "$OUT/domain-outside.txt" 2>&1
+check "$OUT/domain-outside.txt" "outside http=200"                    "example.com outside any agent still works"
+api -X PUT --data-binary @"$OUT/no-curl.yaml" $API/policy > "$OUT/put-nodomain.json"
+check "$OUT/put-nodomain.json" '"reapplied_to_agents": 1'             "removing domain_deny re-applied to the live agent"
+sleep 1; docker exec eff-domain touch /tmp/go; sleep 6
+docker logs eff-domain > "$OUT/domain.txt" 2>&1
+sed 's/^/        /' "$OUT/domain.txt"
+first() { awk '/^round/{n++} n==1' "$OUT/domain.txt" | grep -q -- "$1"; }
+second() { awk '/^round/{n++} n==2' "$OUT/domain.txt" | grep -q -- "$1"; }
+first "example.com exit=7"        && ok "agent's connect to example.com refused"     || bad "agent's connect to example.com refused"
+first "dns exit=0"                && ok "agent's ordinary DNS still works"           || bad "agent's ordinary DNS still works"
+first "github exit=0"             && ok "agent's unrelated HTTPS still works"        || bad "agent's unrelated HTTPS still works"
+first "8.8.8.8:53 exit=1"         && ok "agent can't ask a public resolver"          || bad "agent can't ask a public resolver"
+first "1.1.1.1:853 exit=1"        && ok "agent can't use DNS over TLS"               || bad "agent can't use DNS over TLS"
+second "example.com exit=0"       && ok "after removal: example.com reachable again" || bad "after removal: example.com reachable again"
+second "8.8.8.8:53 exit=0"        && ok "after removal: DNS guard lifted"            || bad "after removal: DNS guard lifted"
+check "$OUT/events.jsonl" '"type":"blocked".*"target":"connect [0-9a-f.:]*:443".*"message":"domain_deny: example.com"' \
+                                                                       "reported as blocked connect <ip>:443 (domain_deny: example.com)"
+check "$OUT/events.jsonl" '"type":"blocked".*"target":"connect 8.8.8.8:53".*DNS bypass guard' "bypass attempt reported"
+docker rm -f eff-domain >/dev/null; sleep 2
+api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
+
+echo "== 7. backend"
 sleep 6
 check "$OUT/backend.log" "received batch"                            "backend received batches (bearer token)"
 check "$OUT/backend.jsonl" '"type":"blocked"'                         "blocked events shipped to backend"

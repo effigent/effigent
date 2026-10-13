@@ -19,6 +19,7 @@ import (
 
 	"github.com/effigent/effigent/internal/endpoint/api"
 	"github.com/effigent/effigent/internal/endpoint/cpclient"
+	"github.com/effigent/effigent/internal/endpoint/domains"
 	"github.com/effigent/effigent/internal/endpoint/engine"
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
@@ -65,6 +66,8 @@ func main() {
 		keepPolicies = flag.Bool("keep-policies-on-exit", false, "leave agents' kernel policies loaded when effigentd stops (fail-closed); they are reconciled on next start")
 		stateDir     = flag.String("state-dir", cpclient.DefaultStateDir(), "enrollment state; when enrolled, policy comes from the control plane")
 		syncEvery    = flag.Duration("sync-interval", 5*time.Second, "how often an enrolled endpoint checks for a new policy")
+		dnsRefresh   = flag.Duration("dns-refresh", 30*time.Second, "how often domain_deny hostnames are re-resolved")
+		dnsServers   = flag.String("dns-servers", strings.Join(domains.DefaultUpstreams, ","), "resolvers queried for domain_deny next to the system resolver (comma-separated host:port, \"\" for the system resolver only)")
 	)
 	flag.Parse()
 	logger := log.New(os.Stderr, "effigentd: ", log.LstdFlags)
@@ -114,6 +117,15 @@ func main() {
 	defer stop()
 
 	eng := engine.New(pol, raw, tg, sinks.Write, logger.Printf, *verbose)
+	var upstreams []string
+	for _, u := range strings.Split(*dnsServers, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			upstreams = append(upstreams, u)
+		}
+	}
+	resolver := domains.New(upstreams, logger.Printf)
+	eng.UseResolver(ctx, resolver, *procfs)
+	go resolver.Run(ctx, *dnsRefresh, eng.OnDomainsChanged)
 
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{

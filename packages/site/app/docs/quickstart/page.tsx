@@ -103,6 +103,7 @@ sudo reboot`}</CodeBlock>
   network_deny:             # destinations agents may not connect to
     - 203.0.113.7
     - 10.0.0.0/8
+  domain_deny: [pastebin.com]  # hostnames, re-resolved every 30s (see Coverage)
   network: true             # report every outbound connection
 
 agents:
@@ -117,7 +118,7 @@ agents:
 
 { "version": 1 }`}</CodeBlock>
         <p className="doc-p" style={{ marginTop: 14 }}>
-          An invalid policy (unknown mode, relative path, bad IP or CIDR) is rejected before any machine sees it. <code>GET /api/v1/policy/history</code> lists every version with its author and comment. The full format is in <Link href="/docs/policies">Policies</Link>.
+          An invalid policy (unknown mode, relative path, bad IP, CIDR or hostname) is rejected before any machine sees it. <code>GET /api/v1/policy/history</code> lists every version with its author and comment. The full format is in <Link href="/docs/policies">Policies</Link>.
         </p>
       </DocSection>
 

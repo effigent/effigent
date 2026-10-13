@@ -55,7 +55,7 @@ export const COVERAGE: Array<{ what: string; example: string; cells: [Cover, Cov
   { what: 'Specific arguments', example: 'git push --force origin main', cells: ['observe', 'observe', 'pause', 'pause'] },
   { what: 'Child processes & scripts', example: 'postinstall → sh → nc', cells: ['block', 'observe', 'none', 'none'] },
   { what: 'Open a file', example: '~/.ssh/id_ed25519', cells: ['block', 'observe', 'pause', 'none'] },
-  { what: 'Outbound connection', example: 'paste.example.net:443', cells: ['observe', 'observe', 'pause', 'none'] },
+  { what: 'Outbound connection', example: 'paste.example.net:443', cells: ['block', 'observe', 'pause', 'none'] },
   { what: 'MCP tool call', example: 'github.delete_branch', cells: ['observe', 'observe', 'pause', 'none'] },
 ];
 export const COVER_STYLE: Record<Cover, { label: string; fg: string; bg: string; border: string }> = {
