@@ -30,6 +30,7 @@ var builtins = map[string]bool{
 	"until": true, "do": true, "done": true, "case": true, "esac": true, "in": true,
 	"function": true, "{": true, "}": true, "!": true, "trap": true, "umask": true,
 	"pushd": true, "popd": true, "dirs": true, "hash": true, "ulimit": true, "eval": true,
+	"command": true, "builtin": true, "exec": true, "time": true,
 }
 
 var pathTools = map[string]bool{
@@ -112,7 +113,12 @@ func str(m map[string]any, k string) string {
 func checkCommand(rule policy.Rule, line, cwd string) finding {
 	var f finding
 	for _, c := range splitShell(line) {
-		args := program(c.args)
+		args, wrappers := unwrap(c.args)
+		for _, w := range wrappers {
+			if !builtins[progName(w)] {
+				f = f.or(checkProgram(rule, w))
+			}
+		}
 		if len(args) > 0 {
 			f = f.or(checkProgram(rule, args[0]))
 			args = args[1:]

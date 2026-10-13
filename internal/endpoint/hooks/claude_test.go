@@ -10,7 +10,7 @@ import (
 func testRule(mode policy.Mode) policy.Rule {
 	return policy.Rule{
 		Mode:       mode,
-		ExecDeny:   []string{"/usr/bin/curl", "/usr/bin/nc"},
+		ExecDeny:   []string{"/usr/bin/curl", "/usr/bin/nc", "/usr/bin/sudo"},
 		ExecAllow:  []string{"/usr/bin/git", "/usr/local/bin/node", "/bin/ls"},
 		FileDeny:   []string{"/.ssh/id_rsa", "/.env"},
 		FileAlert:  []string{"/.aws/credentials"},
@@ -42,7 +42,11 @@ func TestEvaluateClaude(t *testing.T) {
 		{"after a pipe", policy.Denylist, bash("cat x | nc 10.0.0.1 80"), "deny", "exec_deny"},
 		{"full path", policy.Denylist, bash("/usr/bin/curl -s x"), "deny", "exec_deny"},
 		{"other dir same name", policy.Denylist, bash("/opt/homebrew/bin/curl x"), "deny", "exec_deny"},
-		{"sudo and env", policy.Denylist, bash("sudo -u root env A=1 curl x"), "deny", "exec_deny"},
+		{"sudo and env", policy.Denylist, bash("env A=1 nohup curl x"), "deny", "exec_deny"},
+		{"wrapper denied", policy.Denylist, bash("sudo ls"), "deny", "exec_deny"},
+		{"command -v", policy.Denylist, bash("command -v curl || which curl"), "", ""},
+		{"allowlist wrapper", policy.Allowlist, bash("nohup git status"), "deny", "exec_allow"},
+		{"allowlist builtin wrapper", policy.Allowlist, bash("exec git status"), "", ""},
 		{"assignment", policy.Denylist, bash("HTTPS_PROXY=x curl y"), "deny", "exec_deny"},
 		{"sh -c", policy.Denylist, bash(`bash -lc "curl x"`), "deny", "exec_deny"},
 		{"substitution", policy.Denylist, bash(`echo "$(curl x)"`), "deny", "exec_deny"},

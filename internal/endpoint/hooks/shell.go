@@ -219,8 +219,12 @@ var wrappers = map[string]map[string]bool{
 }
 
 // program strips variable assignments and wrappers (sudo, env, xargs, …) from
-// the front of a command's words, so args[0] is the program that runs.
-func program(args []string) []string {
+// the front of a command's words, so args[0] is the program that runs. It
+// also returns the wrappers it stripped: they run too, and policy applies to
+// them as well. `command -v x` only looks x up, so it runs nothing.
+func program(args []string) []string { a, _ := unwrap(args); return a }
+
+func unwrap(args []string) (prog, wrappersRun []string) {
 	for len(args) > 0 {
 		a := args[0]
 		if isAssignment(a) {
@@ -229,10 +233,14 @@ func program(args []string) []string {
 		}
 		flags, ok := wrappers[progName(a)]
 		if !ok {
-			return args
+			return args, wrappersRun
 		}
 		name := progName(a)
+		wrappersRun = append(wrappersRun, a)
 		args = args[1:]
+		if name == "command" && len(args) > 0 && (args[0] == "-v" || args[0] == "-V") {
+			return nil, wrappersRun
+		}
 		for len(args) > 0 {
 			f := args[0]
 			if f == "--" {
@@ -256,7 +264,7 @@ func program(args []string) []string {
 			args = args[1:] // the duration
 		}
 	}
-	return args
+	return args, wrappersRun
 }
 
 func isAssignment(w string) bool {
