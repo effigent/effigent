@@ -31,3 +31,4 @@ research/**/*.json
 # Go
 bin/
 *.key
+dist/

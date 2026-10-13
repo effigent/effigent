@@ -1,33 +1,139 @@
 #!/bin/sh
-# Effigent installer — installs the `effigent` CLI from npm (needs Node.js 20+).
-# Served publicly from https://effigent.ai/install.sh (the source repo stays private).
+# Effigent endpoint installer (Linux). Installs Tetragon and effigentd as
+# services, enrolls this machine with your organization, and starts enforcing.
 #
-#   curl -fsSL https://effigent.ai/install.sh | sh
-#   curl -fsSL https://effigent.ai/install.sh | sh -s -- --join <token>
+#   curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token eft_...
 #
+# Options:
+#   --token TOKEN        one-time enrollment token from the console (Settings -> Machines)
+#   --server URL         control plane (default https://api.effigent.ai)
+#   --version VERSION    effigentd version (default: latest)
+#   --skip-tetragon      Tetragon is already installed and running
+#   --uninstall          stop and remove effigentd (leaves Tetragon)
 set -eu
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "error: Node.js is required (>= 20). Install it from https://nodejs.org" >&2
-  exit 1
-fi
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  echo "error: Node.js >= 20 required, found $(node --version)" >&2
-  exit 1
-fi
-if ! command -v npm >/dev/null 2>&1; then
-  echo "error: npm is required (it ships with Node.js)." >&2
-  exit 1
+SERVER="https://api.effigent.ai"
+RELEASES="${EFFIGENT_RELEASES:-https://effigent.ai/releases/effigentd}"
+TETRAGON_VERSION="v1.7.1"
+VERSION="latest"
+TOKEN=""
+SKIP_TETRAGON=0
+UNINSTALL=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --token) TOKEN="$2"; shift 2 ;;
+    --server) SERVER="$2"; shift 2 ;;
+    --version) VERSION="$2"; shift 2 ;;
+    --skip-tetragon) SKIP_TETRAGON=1; shift ;;
+    --uninstall) UNINSTALL=1; shift ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+say()  { printf '\033[1m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "run as root: curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token ..."
+[ "$(uname -s)" = Linux ] || die "this installer is for Linux. macOS support is coming."
+command -v systemctl >/dev/null 2>&1 || die "systemd is required"
+command -v curl >/dev/null 2>&1 || die "curl is required"
+
+if [ "$UNINSTALL" = 1 ]; then
+  say "Removing effigentd"
+  systemctl disable --now effigentd 2>/dev/null || true
+  rm -f /etc/systemd/system/effigentd.service /usr/local/bin/effigentd
+  systemctl daemon-reload
+  echo "effigentd removed. Enrollment state kept in /var/lib/effigent (delete it to unenroll this machine)."
+  exit 0
 fi
 
-echo "Installing the effigent CLI from npm…"
-npm install -g effigent
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) die "unsupported CPU architecture: $(uname -m)" ;;
+esac
 
-# One-shot workspace onboarding:  ... | sh -s -- --join <token>
-# The token (from `effigent invite`) embeds the server URL + key, so join is self-contained.
-if [ "${1:-}" = "--join" ] && [ -n "${2:-}" ]; then
-  effigent join "$2"
+# ---- kernel checks -------------------------------------------------------
+say "Checking the kernel"
+KREL="$(uname -r)"
+[ -e /sys/kernel/btf/vmlinux ] || die "kernel $KREL has no BTF (/sys/kernel/btf/vmlinux). Use a distro kernel 5.8+ (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023)."
+# Some minimal images don't mount securityfs; it's where the active LSMs are listed.
+[ -e /sys/kernel/security/lsm ] || mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
+LSM_OK=0
+if grep -qw bpf /sys/kernel/security/lsm 2>/dev/null; then LSM_OK=1; fi
+if [ "$LSM_OK" = 0 ]; then
+  warn "BPF LSM is not enabled, so effigentd can watch agents but cannot block them yet."
+  warn "Enable it: add 'lsm=$(cat /sys/kernel/security/lsm 2>/dev/null),bpf' to GRUB_CMDLINE_LINUX in /etc/default/grub, run update-grub (or grub2-mkconfig), reboot."
+fi
+
+# ---- Tetragon ------------------------------------------------------------
+if [ "$SKIP_TETRAGON" = 0 ] && ! systemctl is-active --quiet tetragon; then
+  say "Installing Tetragon $TETRAGON_VERSION"
+  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+  TGZ="tetragon-$TETRAGON_VERSION-$ARCH.tar.gz"
+  curl -fsSL -o "$TMP/$TGZ" "https://github.com/cilium/tetragon/releases/download/$TETRAGON_VERSION/$TGZ"
+  curl -fsSL -o "$TMP/$TGZ.sha256sum" "https://github.com/cilium/tetragon/releases/download/$TETRAGON_VERSION/$TGZ.sha256sum"
+  (cd "$TMP" && sha256sum -c "$TGZ.sha256sum" >/dev/null) || die "Tetragon download failed its checksum"
+  tar -xzf "$TMP/$TGZ" -C "$TMP"
+  install -d /etc/tetragon/tetragon.conf.d
+  # effigentd attributes every event to its agent through the ancestor chain.
+  echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
+  "$TMP/tetragon-$TETRAGON_VERSION-$ARCH/install.sh" >/dev/null
 else
-  effigent --version >/dev/null 2>&1 && echo "Installed. Verify your setup with: effigent doctor"
+  say "Tetragon is already running"
+  if [ ! -s /etc/tetragon/tetragon.conf.d/enable-ancestors ]; then
+    echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
+    systemctl restart tetragon
+  fi
 fi
+
+# ---- effigentd ------------------------------------------------------------
+say "Installing effigentd ($VERSION)"
+if [ "$VERSION" = latest ]; then VERSION="$(curl -fsSL "$RELEASES/latest")"; fi
+BIN="effigentd-linux-$ARCH"
+TMPB="$(mktemp -d)"
+curl -fsSL -o "$TMPB/$BIN" "$RELEASES/$VERSION/$BIN"
+curl -fsSL -o "$TMPB/$BIN.sha256" "$RELEASES/$VERSION/$BIN.sha256"
+(cd "$TMPB" && sha256sum -c "$BIN.sha256" >/dev/null) || die "effigentd download failed its checksum"
+install -m 0755 "$TMPB/$BIN" /usr/local/bin/effigentd
+rm -rf "$TMPB"
+
+install -d -m 0700 /var/lib/effigent
+install -d -m 0750 /var/log/effigent
+if [ -s /var/lib/effigent/endpoint.json ]; then
+  say "Already enrolled; keeping the existing enrollment"
+else
+  [ -n "$TOKEN" ] || die "--token is required for the first install (console: Settings -> Machines -> Add a machine)"
+  say "Enrolling this machine with $SERVER"
+  /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --state-dir /var/lib/effigent
+fi
+
+cat > /etc/systemd/system/effigentd.service <<'UNIT'
+[Unit]
+Description=Effigent endpoint agent (AI agent monitoring and enforcement)
+Documentation=https://effigent.ai/docs/quickstart
+After=network-online.target tetragon.service
+Wants=network-online.target
+Requires=tetragon.service
+
+[Service]
+ExecStart=/usr/local/bin/effigentd --tetragon unix:///var/run/tetragon/tetragon.sock --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl --keep-policies-on-exit
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now effigentd >/dev/null 2>&1
+systemctl restart effigentd
+
+say "Waiting for effigentd"
+i=0
+until /usr/local/bin/effigentd status >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
+/usr/local/bin/effigentd status || die "effigentd did not come up: journalctl -u effigentd"
+echo
+echo "Done. This machine now appears in the console under Machines."
+[ "$LSM_OK" = 1 ] || echo "Blocking turns on after you enable BPF LSM and reboot (see the warning above)."

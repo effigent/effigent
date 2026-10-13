@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,6 +27,17 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/tetragon"
 )
 
+var (
+	tgConnected   atomic.Bool
+	policyVersion atomic.Int64
+)
+
+// bpfLSMEnabled reports whether the kernel can enforce (not just observe).
+func bpfLSMEnabled() bool {
+	b, err := os.ReadFile("/sys/kernel/security/lsm")
+	return err == nil && strings.Contains(","+strings.TrimSpace(string(b))+",", ",bpf,")
+}
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -33,6 +46,9 @@ func main() {
 			return
 		case "enroll":
 			enrollCmd(os.Args[2:])
+			return
+		case "status":
+			statusCmd(os.Args[2:])
 			return
 		}
 	}
@@ -103,11 +119,20 @@ func main() {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
 			Stats: func() map[string]any {
-				if backend == nil {
-					return nil
+				out := map[string]any{
+					"tetragon_connected": tgConnected.Load(),
+					"bpf_lsm":            bpfLSMEnabled(),
+					"policy_version":     policyVersion.Load(),
+					"version":            version,
 				}
-				s, d := backend.Stats()
-				return map[string]any{"backend_sent": s, "backend_dropped": d}
+				if cp != nil {
+					out["endpoint_id"], out["control_plane"], out["tenant"] = cp.EndpointID, cp.Server, cp.Tenant
+				}
+				if backend != nil {
+					s, d := backend.Stats()
+					out["backend_sent"], out["backend_dropped"] = s, d
+				}
+				return out
 			},
 		}).Handler()}
 		go func() {
@@ -127,6 +152,7 @@ func main() {
 				return err
 			},
 			OnApply: func(v int64) {
+				policyVersion.Store(v)
 				logger.Printf("applied policy v%d from the control plane", v)
 				sinks.Write(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "info",
 					Rule: fmt.Sprintf("v%d", v), Message: fmt.Sprintf("policy v%d from the control plane is active", v)})
@@ -142,6 +168,7 @@ func main() {
 	first := true
 	go tg.Run(ctx, events, func() {
 		logger.Printf("connected to Tetragon at %s", *tetragonAddr)
+		tgConnected.Store(true)
 		if first && *procfs != "" {
 			if procs, ppid, err := procscan.Scan(*procfs); err != nil {
 				logger.Printf("procfs scan: %v", err)
