@@ -1,6 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { pool } from './db.ts';
-import { hasOwnershipColumns } from './agent-auth.ts';
 
 const hashKey = (k: string) => createHash('sha256').update(k).digest('hex');
 
@@ -33,4 +32,21 @@ export async function resolveTenant({ userId, orgId }: { userId: string; orgId: 
     )
     .catch(() => {});
   return tid;
+}
+
+/** Whether migration 009's ownership columns exist (cached). Moved here from the
+ *  retired agent-auth.ts (v2 pivot) so tenant provisioning keeps working on both
+ *  pre- and post-migration schemas. */
+let ownershipCols: boolean | null = null;
+async function hasOwnershipColumns(): Promise<boolean> {
+  if (ownershipCols !== null) return ownershipCols;
+  try {
+    const r = await pool.query(
+      `select 1 from information_schema.columns where table_name = 'api_keys' and column_name = 'created_by'`,
+    );
+    ownershipCols = (r.rowCount ?? 0) > 0;
+  } catch {
+    ownershipCols = false;
+  }
+  return ownershipCols;
 }

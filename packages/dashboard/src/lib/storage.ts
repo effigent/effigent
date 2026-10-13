@@ -6,7 +6,8 @@ import {
 } from '@aws-sdk/client-s3';
 import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
 import { pool } from './db.ts';
-import type { Run } from './engine/types.ts';
+/** A stored run document (JSON). The Optimizer engine's typed `Run` was removed in the v2 pivot. */
+type Run = Record<string, unknown>;
 
 /**
  * Per-org run storage (S3-only residency). Each org's run blobs live in ITS OWN

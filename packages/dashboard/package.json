@@ -2,7 +2,7 @@
   "name": "@effigent/dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "Optimizer dashboard — full-stack Next.js app (UI + API + Clerk auth) for Vercel.",
+  "description": "Effigent console — AI Agent Control Plane web UI (Next.js + Clerk) for Vercel.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
