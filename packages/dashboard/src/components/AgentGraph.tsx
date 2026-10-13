@@ -10,25 +10,28 @@ import { AGENTS, AGENT_TYPES, RESOURCES, resourceById, userById } from '@/data.t
 import { Ic } from '@/icons.tsx';
 import type { AgentType, Env, Flow } from '@/types.ts';
 
-export type Outcome = Flow['outcome'];
+/** Demo flows use the first four; live (event-built) edges add would_block. */
+export type Outcome = Flow['outcome'] | 'would_block';
 export const EDGE_COLOR: Record<Outcome, string> = {
   allowed: '#34d399',
   blocked: '#fb7185',
   flow: '#5b8bff',
   pending: '#fbbf24',
+  would_block: '#fb923c',
 };
 
-type NodeKind = 'user' | 'agent' | 'resource';
-type GNodeData = {
+/** user/agent/resource: the demo graph; machine/mcp: the live graph. */
+export type NodeKind = 'user' | 'agent' | 'resource' | 'machine' | 'mcp';
+export type GNodeData = {
   kind: NodeKind; label: string; sub: string; icon: string; size: number;
   tone: 'user' | 'agent' | 'ok' | 'bad' | 'warn'; labelPos: 'right' | 'below' | 'left';
   color?: string; dim?: boolean; selected?: boolean;
 };
-type GNode = Node<GNodeData, 'circle'>;
-type GEdgeData = { outcome: Outcome; label: string; curve: number; showLabel: boolean; dim?: boolean; count: number };
-type GEdge = Edge<GEdgeData, 'float'>;
+export type GNode = Node<GNodeData, 'circle'>;
+export type GEdgeData = { outcome: Outcome; label: string; curve: number; showLabel: boolean; dim?: boolean; count: number };
+export type GEdge = Edge<GEdgeData, 'float'>;
 
-const SIZE: Record<NodeKind, number> = { user: 58, agent: 86, resource: 62 };
+const SIZE: Record<NodeKind, number> = { user: 58, agent: 86, resource: 62, machine: 58, mcp: 54 };
 
 function CircleNode({ data }: NodeProps<GNode>) {
   // The node box is the circle plus (for side labels) the label, so fitView
@@ -72,7 +75,7 @@ function FloatEdge({ id, source, target, markerEnd, data }: EdgeProps<GEdge>) {
   const lx = 0.25 * p0.x + 0.5 * c.x + 0.25 * p2.x;
   const ly = 0.25 * p0.y + 0.5 * c.y + 0.25 * p2.y;
   const color = EDGE_COLOR[data.outcome];
-  const dashed = data.outcome === 'blocked' || data.outcome === 'pending';
+  const dashed = data.outcome === 'blocked' || data.outcome === 'pending' || data.outcome === 'would_block';
   const live = !data.dim && (data.outcome === 'allowed' || data.outcome === 'flow');
   return (
     <>
@@ -226,19 +229,30 @@ export function AgentGraph({
   flows, focus, env, hero, selected, onSelect, height, background,
 }: GraphOptions & { flows: Flow[]; onSelect?: (id: string | null) => void; height: number | string; background?: boolean }) {
   const { nodes, edges } = useMemo(() => buildGraph(flows, { focus, env, hero, selected }), [flows, focus, env, hero, selected]);
-  const interactive = !hero;
+  return (
+    <GraphCanvas key={`${focus}-${env ?? 'all'}-${hero ? 'h' : 'f'}`} nodes={nodes} edges={edges} interactive={!hero}
+      fitPadding={hero ? 0.06 : 0.14} selected={selected} onSelect={onSelect} height={height} background={background} />
+  );
+}
+
+/** The React Flow canvas both graphs render into (demo flows and live events). */
+export function GraphCanvas({
+  nodes, edges, interactive, fitPadding = 0.14, minZoom = 0.3, selected, onSelect, height, background,
+}: {
+  nodes: GNode[]; edges: GEdge[]; interactive: boolean; fitPadding?: number; minZoom?: number;
+  selected?: string | null; onSelect?: (id: string | null) => void; height: number | string; background?: boolean;
+}) {
   return (
     <div className="graph-canvas" style={{ height }}>
       <ReactFlow
-        key={`${focus}-${env ?? 'all'}-${hero ? 'h' : 'f'}`}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         colorMode="dark"
         fitView
-        fitViewOptions={{ padding: hero ? 0.06 : 0.14, maxZoom: 1.15 }}
-        minZoom={0.3}
+        fitViewOptions={{ padding: fitPadding, maxZoom: 1.15 }}
+        minZoom={minZoom}
         maxZoom={2}
         nodesConnectable={false}
         nodesDraggable={interactive}
@@ -258,7 +272,17 @@ export function AgentGraph({
   );
 }
 
-export function Legend() {
+export function Legend({ live }: { live?: boolean }) {
+  if (live) {
+    return (
+      <div className="legend">
+        <span><i className="lg-dot" style={{ background: EDGE_COLOR.allowed }} /> Allowed</span>
+        <span><i className="lg-dash" style={{ color: EDGE_COLOR.blocked }} /> Blocked</span>
+        <span><i className="lg-dash" style={{ color: EDGE_COLOR.would_block }} /> Would block</span>
+        <span><i className="lg-line" style={{ background: EDGE_COLOR.flow }} /> Machine → agent</span>
+      </div>
+    );
+  }
   return (
     <div className="legend">
       <span><i className="lg-dot" style={{ background: EDGE_COLOR.allowed }} /> Allowed</span>

@@ -8,5 +8,5 @@ const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 export default async function GraphPage({ searchParams }: { searchParams: SP }) {
   const sp = await searchParams;
-  return <GraphView key={`${one(sp.agent) ?? ''}|${one(sp.view) ?? ''}`} initialAgent={one(sp.agent)} initialView={one(sp.view)} />;
+  return <GraphView key={`${one(sp.agent) ?? ''}|${one(sp.view) ?? ''}|${one(sp.node) ?? ''}`} initialAgent={one(sp.agent)} initialView={one(sp.view)} initialNode={one(sp.node)} />;
 }

@@ -226,7 +226,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
         )}
       </Card>
 
-      <Enroll />
+      <div id="enroll" style={{ scrollMarginTop: 88 }}><Enroll /></div>
 
       <div className="grid-2">
         <Card>

@@ -6,7 +6,8 @@
  * console audit trail. Fetched on mount and whenever the active Clerk org (=
  * tenant) changes; endpoints, events and policy are polled every 15s while the
  * tab is visible. Views read this through `useLive()`; features the control
- * plane does not serve yet (approvals, lists, identity, graph) read `useStore()`.
+ * plane does not serve yet (approvals, lists, identity) read `useStore()`; the agent
+ * graph is built client-side from `events` (lib/live-graph.ts).
  *
  * Demo Mode (demo.tsx) swaps the real API for the in-memory fixture
  * (lib/fixture-api.ts): same routes, same views, sample data — and no request
@@ -24,7 +25,7 @@ import { ago, toConsoleEvent, toEndpointRow, type EndpointRow } from '@/lib/live
 import type { ConsoleEvent } from '@/types.ts';
 
 const POLL_MS = 15_000;
-const EVENT_LIMIT = 300; // the API has no time filter; 300 keeps a 15s poll small (server default 200, max 1000)
+const EVENT_LIMIT = 500; // the API has no time filter; 500 feeds the agent graph and keeps a 15s poll small (server default 200, max 1000)
 const AUDIT_LIMIT = 200;
 
 interface Data {

@@ -465,6 +465,10 @@ a.feed-body:hover .feed-title { color: var(--accent-2); }
   background: radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--agent, #e07a52) 22%, #0b1430), #0b1430 72%);
   box-shadow: 0 0 0 6px color-mix(in srgb, var(--agent, #e07a52) 8%, transparent), 0 0 34px -6px color-mix(in srgb, var(--agent, #e07a52) 70%, transparent);
 }
+.gnode-machine .gnode-circle { color: #8fb0ff; border: 2px solid rgba(79, 124, 255, 0.75); box-shadow: 0 0 18px -4px rgba(79,124,255,0.6); }
+.gnode-mcp .gnode-circle { color: #c4b5fd; border: 2px solid rgba(139, 92, 246, 0.75); box-shadow: 0 0 18px -5px rgba(139,92,246,0.6); }
+.gnode-mcp.tone-bad .gnode-circle { border-color: rgba(251, 113, 133, 0.8); box-shadow: 0 0 20px -5px rgba(251,113,133,0.65); }
+.gnode-mcp.tone-warn .gnode-circle { border-color: rgba(251, 146, 60, 0.75); box-shadow: 0 0 18px -6px rgba(251,146,60,0.6); }
 .gnode.sel .gnode-circle { outline: 2px solid #fff; outline-offset: 4px; }
 .gnode-label { white-space: nowrap; pointer-events: none; line-height: 1.25; text-align: left; }
 .gnode.lp-below .gnode-label { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); text-align: center; }
