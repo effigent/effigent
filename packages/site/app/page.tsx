@@ -96,12 +96,6 @@ const APPROVAL_STATES: Array<[string, string, string]> = [
   ['resumed', 'The push runs once', SCHEMES.green.dot],
 ];
 
-const SUSPEND_STEPS: Array<[string, string, string]> = [
-  ['requested', '14:41:07', 'You clicked Suspend in the console.'],
-  ['delivered', '14:41:08', 'effigentd on alex-mbp received it.'],
-  ['confirmed', '14:41:08', 'Process tree stopped; the endpoint reported back.'],
-];
-
 const EVENTS: Array<[string, keyof typeof OUTCOME | 'would', string, string, string]> = [
   ['14:32', 'blocked', 'claude-code', 'exec', '/usr/bin/curl https://paste.example.net'],
   ['14:30', 'pending', 'cursor-agent', 'exec', 'npm install left-pad-pro@2.1.0'],
@@ -488,53 +482,6 @@ export default function Page() {
             </div>
             <Link href="/docs/enforcement" style={{ fontSize: 14, fontWeight: 600, color: 'oklch(0.4 0.14 250)', whiteSpace: 'nowrap' }}>Full coverage notes &rarr;</Link>
           </div>
-        </Reveal>
-      </Section>
-
-      {/* SUSPEND + OFFLINE */}
-      <Section>
-        <Reveal>
-        <div className="suspend-grid" style={{ display: 'grid', gridTemplateColumns: '1.05fr 0.95fr', gap: 60, alignItems: 'center' }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ border: '1px solid var(--line-2)', borderRadius: 14, background: 'oklch(0.995 0.002 90)', overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', padding: '14px 18px', borderBottom: '1px solid var(--line)' }}>
-                <div>
-                  <div style={{ fontSize: 13.5, fontWeight: 700 }}>Suspend session</div>
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-4)', marginTop: 2 }}>codex · ci-runner-07 · process tree of pid 9132</div>
-                </div>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, fontWeight: 700, color: SCHEMES.red.text, background: SCHEMES.red.bg, border: `1px solid ${SCHEMES.red.border}`, borderRadius: 10, padding: '3px 10px' }}>SUSPENDED</span>
-              </div>
-              <div style={{ padding: '18px 18px 8px' }}>
-                {SUSPEND_STEPS.map(([state, time, note], i) => (
-                  <div key={state} style={{ display: 'flex', gap: 14, paddingBottom: 16 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                      <div style={{ width: 11, height: 11, borderRadius: '50%', background: 'var(--green-dot)', animation: i === SUSPEND_STEPS.length - 1 ? 'pulseGlow 2.2s ease-in-out infinite' : undefined }} />
-                      {i < SUSPEND_STEPS.length - 1 && <div style={{ width: 1, flex: 1, minHeight: 22, background: LINE, marginTop: 4 }} />}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 12.5, fontWeight: 600 }}>{state}</span>
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-4)' }}>{time}</span>
-                      </div>
-                      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 2 }}>{note}</div>
-                      <div style={{ height: 3, borderRadius: 2, background: 'var(--green-dot)', marginTop: 8, transformOrigin: 'left', animation: `growIn .8s cubic-bezier(0.22,1,0.36,1) ${0.3 + i * 0.35}s both` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="suspend-text">
-            <Eyebrow hue="25">Emergency stop</Eyebrow>
-            <h2 className="h-serif" style={{ fontSize: 'clamp(24px, 5.5vw, 30px)', lineHeight: 1.25, margin: '0 0 16px' }}>Stop a session, <b>and know it stopped</b>.</h2>
-            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.65, marginBottom: 14 }}>
-              Suspend one session or a whole process tree from the console. You see three states, not one: <b>requested</b>, <b>delivered</b> to the machine, <b>confirmed</b> by the machine. If the laptop is asleep, it says requested, not done.
-            </div>
-            <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.65 }}>
-              Policies are enforced locally and cached on the endpoint, so a lost connection doesn&apos;t switch anything off. The last policy keeps enforcing; events and approval requests queue until the machine reconnects.
-            </div>
-          </div>
-        </div>
         </Reveal>
       </Section>
 
