@@ -1,0 +1,23 @@
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: raw-deny-ip-95846
+spec:
+  lsmhooks:
+  - hook: "socket_connect"
+    args:
+    - index: 1
+      type: "sockaddr"
+    selectors:
+    - matchPIDs:
+      - operator: In
+        followForks: true
+        isNamespacePID: false
+        values: [95846]
+      matchArgs:
+      - index: 1
+        operator: "SAddr"   # for sockaddr, SAddr is the address in the struct = the connect destination
+        values: ["1.1.1.1/32", "10.0.0.0/8"]
+      matchActions:
+      - action: Override
+        argError: -1

@@ -150,6 +150,16 @@ func translate(res *tg.GetEventsResponse) (event.Raw, bool) {
 			if len(e.GetArgs()) > 0 {
 				r.Target = "exec " + e.GetArgs()[0].GetLinuxBinprmArg().GetPath()
 			}
+		case "socket_connect":
+			r.Kind = event.WouldBlock
+			if blocked {
+				r.Kind = event.Blocked
+			}
+			if len(e.GetArgs()) > 0 {
+				if sa := e.GetArgs()[0].GetSockaddrArg(); sa != nil {
+					r.Target = "connect " + net.JoinHostPort(sa.GetAddr(), strconv.Itoa(int(sa.GetPort())))
+				}
+			}
 		case "file_open":
 			r.Kind = event.FileOpen
 			if blocked {

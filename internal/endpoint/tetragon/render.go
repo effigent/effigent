@@ -131,6 +131,31 @@ func Render(name string, rootPID uint32, r policy.Rule) ([]engine.Doc, error) {
 		})
 	}
 
+	// Outbound connections by destination IP/CIDR. For a sockaddr argument
+	// Tetragon calls the struct's address "SAddr"; on connect that is the
+	// destination. Allow mode only applies to IP families, so local unix
+	// sockets keep working, and loopback is always allowed.
+	var netSel []selector
+	if len(r.NetDeny) > 0 {
+		netSel = append(netSel, selector{MatchPIDs: pids,
+			MatchArgs:    []matchArg{{Index: 1, Operator: "SAddr", Values: cidrs(r.NetDeny)}},
+			MatchActions: act(true)})
+	}
+	if len(r.NetAllow) > 0 {
+		allowed := append(cidrs(r.NetAllow), "127.0.0.0/8", "::1/128")
+		netSel = append(netSel, selector{MatchPIDs: pids,
+			MatchArgs: []matchArg{
+				{Index: 1, Operator: "Family", Values: []string{"AF_INET", "AF_INET6"}},
+				{Index: 1, Operator: "NotSAddr", Values: allowed},
+			},
+			MatchActions: act(true)})
+	}
+	if netSel != nil {
+		p.Spec.LSMHooks = append(p.Spec.LSMHooks, hook{
+			Hook: "socket_connect", Args: []arg{{Index: 1, Type: "sockaddr"}}, Selectors: netSel,
+		})
+	}
+
 	if r.Network == nil || *r.Network {
 		no := false
 		p.Spec.Kprobes = append(p.Spec.Kprobes, hook{
@@ -159,4 +184,15 @@ func Render(name string, rootPID uint32, r policy.Rule) ([]engine.Doc, error) {
 		docs = append(docs, engine.Doc{Name: one.Metadata.Name, YAML: y})
 	}
 	return docs, nil // empty: nothing to load; exec/exit events still flow
+}
+
+// cidrs normalizes IPs/CIDRs (already validated by the policy parser).
+func cidrs(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if c, err := policy.ParseCIDR(s); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }

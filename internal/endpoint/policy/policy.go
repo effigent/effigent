@@ -6,6 +6,7 @@ package policy
 import (
 	_ "embed"
 	"fmt"
+	"net"
 	"os"
 	"path"
 	"regexp"
@@ -40,6 +41,10 @@ type Rule struct {
 	FileAlert []string `yaml:"file_alert,omitempty" json:"file_alert"` // path suffixes
 	FileDeny  []string `yaml:"file_deny,omitempty" json:"file_deny"`   // path suffixes
 	Network   *bool    `yaml:"network,omitempty" json:"network"`       // report outbound TCP connects
+	// NetDeny blocks connections to these IPs/CIDRs. NetAllow, when set,
+	// blocks every destination outside it (loopback is always allowed).
+	NetDeny  []string `yaml:"network_deny,omitempty" json:"network_deny"`
+	NetAllow []string `yaml:"network_allow,omitempty" json:"network_allow"`
 }
 
 type Agent struct {
@@ -130,6 +135,13 @@ func (r Rule) check() error {
 	default:
 		return fmt.Errorf("unknown mode %q", r.Mode)
 	}
+	for _, list := range [][]string{r.NetDeny, r.NetAllow} {
+		for _, c := range list {
+			if _, err := ParseCIDR(c); err != nil {
+				return err
+			}
+		}
+	}
 	for _, list := range [][]string{r.ExecDeny, r.ExecAllow} {
 		for _, b := range list {
 			if !strings.HasPrefix(b, "/") {
@@ -138,6 +150,22 @@ func (r Rule) check() error {
 		}
 	}
 	return nil
+}
+
+// ParseCIDR accepts "1.2.3.4", "10.0.0.0/8" or IPv6 forms and returns the
+// canonical CIDR the kernel matcher expects.
+func ParseCIDR(s string) (string, error) {
+	if ip := net.ParseIP(s); ip != nil {
+		if ip.To4() != nil {
+			return ip.String() + "/32", nil
+		}
+		return ip.String() + "/128", nil
+	}
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		return "", fmt.Errorf("network address %q: use an IP or CIDR like 10.0.0.0/8", s)
+	}
+	return n.String(), nil
 }
 
 // RuleFor merges an agent's overrides onto Defaults. "" returns Defaults.
@@ -161,6 +189,12 @@ func (p *Policy) RuleFor(agent string) Rule {
 		}
 		if a.FileDeny != nil {
 			r.FileDeny = a.FileDeny
+		}
+		if a.NetDeny != nil {
+			r.NetDeny = a.NetDeny
+		}
+		if a.NetAllow != nil {
+			r.NetAllow = a.NetAllow
 		}
 		if a.Network != nil {
 			r.Network = a.Network
