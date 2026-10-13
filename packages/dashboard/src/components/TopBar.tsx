@@ -7,7 +7,8 @@ import { agentMeta } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
-import { AgentGlyph } from './ui.tsx';
+import { useDemoMode } from '@/demo.tsx';
+import { AgentGlyph, Switch } from './ui.tsx';
 
 interface Hit { group: string; label: string; sub: string; href: string; icon: ReactNode }
 
@@ -99,6 +100,7 @@ function Search() {
 
 function Bell() {
   const { pending } = useStore();
+  const { demo } = useDemoMode();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useOutside(box, () => setOpen(false));
@@ -110,8 +112,8 @@ function Bell() {
       </button>
       {open && (
         <div className="pop bell-pop">
-          <div className="pop-head">Pending approvals <span className="muted" style={{ fontWeight: 400 }}>· demo</span></div>
-          {pending.length === 0 && <div className="search-none">Nothing waiting on you.</div>}
+          <div className="pop-head">Pending approvals</div>
+          {pending.length === 0 && <div className="search-none">{demo ? 'Nothing waiting on you.' : 'No approval requests yet.'}</div>}
           {pending.slice(0, 5).map((a) => (
             <Link key={a.id} href={`/approvals?id=${a.id}`} className="pop-row" onClick={() => setOpen(false)}>
               <AgentGlyph type={a.agentType} size={26} />
@@ -121,6 +123,17 @@ function Bell() {
           <Link href="/approvals" className="pop-foot" onClick={() => setOpen(false)}>Open approvals <Ic n="arrowRight" size={13} /></Link>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The Demo Mode switch as a user-menu row. */
+export function DemoModeSwitch() {
+  const { demo, setDemo } = useDemoMode();
+  return (
+    <div className="pop-switch">
+      <div><div className="setting-title">Demo Mode</div><div className="setting-desc">Show a sample workspace</div></div>
+      <Switch on={demo} onChange={setDemo} label="Demo Mode" />
     </div>
   );
 }
@@ -147,6 +160,7 @@ function DevUserMenu() {
             Clerk is bypassed because <code>EFFIGENT_DEV_NOAUTH=1</code> and this is not a production build.
             “{viewer.name}” is a fixed demo identity.
           </p>
+          <DemoModeSwitch />
         </div>
       )}
     </div>

@@ -5,15 +5,21 @@
  * (/me), endpoints, the endpoint policy and its history, agent events and the
  * console audit trail. Fetched on mount and whenever the active Clerk org (=
  * tenant) changes; endpoints, events and policy are polled every 15s while the
- * tab is visible. Views read this through `useLive()`; demo-only features
- * (approvals, lists, identity, graph) still read `useStore()`.
+ * tab is visible. Views read this through `useLive()`; features the control
+ * plane does not serve yet (approvals, lists, identity, graph) read `useStore()`.
+ *
+ * Demo Mode (demo.tsx) swaps the real API for the in-memory fixture
+ * (lib/fixture-api.ts): same routes, same views, sample data — and no request
+ * ever leaves the browser, so nothing real can be published, enrolled or
+ * revoked from the demo.
  */
 import { useAuth } from '@clerk/nextjs';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  apiErrorText, canWrite as roleCanWrite, createApi, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiPolicyVersion,
+  ApiError, apiErrorText, canWrite as roleCanWrite, createApi, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiPolicyVersion,
 } from '@/lib/api.ts';
 import { createFixtureApi } from '@/lib/fixture-api.ts';
+import { useDemoMode } from '@/demo.tsx';
 import { ago, toConsoleEvent, toEndpointRow, type EndpointRow } from '@/lib/live-map.ts';
 import type { ConsoleEvent } from '@/types.ts';
 
@@ -34,7 +40,7 @@ const EMPTY: Data = { me: null, endpoints: [], events: [], policy: null, history
 
 export interface Live extends Data {
   api: Api;
-  /** true while running on the in-memory dev fixture (auth bypass), not the real API */
+  /** true in Demo Mode: the in-memory sample fixture answers, not the real API */
   fixture: boolean;
   loaded: boolean; // the first full load finished (successfully or not)
   error: string | null; // the last refresh's failure, shown as a banner
@@ -130,23 +136,42 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-/** Real API: Clerk session token per request; the active org is the tenant. */
-function ClerkLiveProvider({ children }: { children: ReactNode }) {
+/** Real API: Clerk session token per request; the active org is the tenant.
+ *  `gate` holds every request until Demo Mode has been read from storage. */
+function ClerkLiveProvider({ gate, children }: { gate: boolean; children: ReactNode }) {
   const { getToken, orgId, userId, isLoaded, isSignedIn } = useAuth();
   const tokenRef = useRef(getToken);
   tokenRef.current = getToken;
   const api = useMemo(() => createApi(() => tokenRef.current()), []);
-  return <LiveProvider api={api} scope={`${userId ?? ''}/${orgId ?? 'personal'}`} ready={isLoaded && !!isSignedIn} fixture={false}>{children}</LiveProvider>;
+  return <LiveProvider api={api} scope={`${userId ?? ''}/${orgId ?? 'personal'}`} ready={gate && isLoaded && !!isSignedIn} fixture={false}>{children}</LiveProvider>;
 }
 
-/** Dev auth bypass: there is no Clerk (useAuth would throw), so serve the fixture. */
+/** Demo Mode: a fresh sample workspace each time it is switched on. */
 function FixtureLiveProvider({ children }: { children: ReactNode }) {
   const api = useMemo(() => createFixtureApi(), []);
-  return <LiveProvider api={api} scope="dev" ready fixture>{children}</LiveProvider>;
+  return <LiveProvider api={api} scope="demo" ready fixture>{children}</LiveProvider>;
 }
 
+const NO_CONTROL_PLANE = 'There is no control plane in this dev build (auth is bypassed) — turn on Demo Mode to try this on sample data.';
+
+/** Dev auth bypass with Demo Mode off: there is no Clerk session to call the
+ *  real API with, so reads come back empty (the honest empty states) and
+ *  writes are refused. */
+const devEmptyApi: Api = {
+  get<T>(path: string): Promise<T> {
+    const p = path.split('?')[0];
+    if (p === '/endpoints' || p === '/events' || p === '/policy/history' || p === '/audit') return Promise.resolve([] as T);
+    if (p === '/me' || p === '/policy') return Promise.resolve(null as T);
+    return Promise.reject(new ApiError(503, NO_CONTROL_PLANE));
+  },
+  send: () => Promise.reject(new ApiError(503, NO_CONTROL_PLANE)),
+};
+
 export function LiveDataProvider({ dev, children }: { dev: boolean; children: ReactNode }) {
-  return dev ? <FixtureLiveProvider>{children}</FixtureLiveProvider> : <ClerkLiveProvider>{children}</ClerkLiveProvider>;
+  const { demo, ready } = useDemoMode();
+  if (demo) return <FixtureLiveProvider>{children}</FixtureLiveProvider>;
+  if (dev) return <LiveProvider api={devEmptyApi} scope="dev" ready={ready} fixture={false}>{children}</LiveProvider>;
+  return <ClerkLiveProvider gate={ready}>{children}</ClerkLiveProvider>;
 }
 
 export function useLive(): Live {

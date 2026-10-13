@@ -3,6 +3,8 @@
 import { useEffect } from 'react';
 import { OrganizationSwitcher, UserButton, useOrganization, useUser } from '@clerk/nextjs';
 import { useStore } from '@/store.tsx';
+import { useDemoMode } from '@/demo.tsx';
+import { Ic } from '@/icons.tsx';
 import { initials } from './ui.tsx';
 
 const appearance = {
@@ -26,6 +28,7 @@ export function ClerkUserMenu() {
   const { user } = useUser();
   const { organization, membership } = useOrganization();
   const { dispatch } = useStore();
+  const { demo, setDemo } = useDemoMode();
   const name = user?.fullName || user?.username || user?.primaryEmailAddress?.emailAddress || 'Signed in';
   const role = organization ? roleLabel(membership?.role) : 'Owner';
 
@@ -37,7 +40,15 @@ export function ClerkUserMenu() {
   return (
     <div className="user-menu">
       <OrganizationSwitcher appearance={appearance} afterCreateOrganizationUrl="/" afterSelectOrganizationUrl="/" hidePersonal={false} />
-      <UserButton appearance={appearance} />
+      <UserButton appearance={appearance}>
+        <UserButton.MenuItems>
+          <UserButton.Action
+            label={demo ? 'Turn off Demo Mode' : 'Turn on Demo Mode (sample data)'}
+            labelIcon={<Ic n="eye" size={16} />}
+            onClick={() => setDemo(!demo)}
+          />
+        </UserButton.MenuItems>
+      </UserButton>
       <span className="user-text">
         <span className="user-name">{name}</span>
         <span className="user-role">{role}</span>

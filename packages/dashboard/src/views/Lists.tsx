@@ -6,7 +6,8 @@ import { userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useStore } from '@/store.tsx';
 import type { ListEntry, ListKind } from '@/types.ts';
-import { Card, DemoNote, Empty, PageHead, Seg } from '@/components/ui.tsx';
+import { Card, ComingSoon, Empty, PageHead, Seg } from '@/components/ui.tsx';
+import { useDemoMode } from '@/demo.tsx';
 
 const KINDS: { id: ListKind | 'all'; label: string; icon: string }[] = [
   { id: 'all', label: 'All', icon: 'layers' },
@@ -30,7 +31,36 @@ function validate(kind: ListKind, v: string): string | null {
   return null;
 }
 
+const SUB = 'Org-wide lists every policy can reference — binaries, files, hosts and MCP tools.';
+
+/** Where the lists endpoints actually enforce live today. */
+function PolicyListsNote({ demo }: { demo: boolean }) {
+  return (
+    <div className="callout warn" style={{ margin: 0 }}><Ic n="layers" size={16} /><span>
+      The lists your endpoints actually enforce — <code>exec_deny</code>, <code>exec_allow</code>, <code>file_deny</code>, <code>file_alert</code>, <code>network_deny</code>, <code>network_allow</code> — live in the workspace policy.
+      Edit and publish them on <Link href="/policies" style={{ textDecoration: 'underline' }}>Policies</Link>.{demo && ' Shared org-wide lists below are a preview and are not sent to endpoints.'}
+    </span></div>
+  );
+}
+
+/** Shared org-wide lists are not served by the control plane yet: an honest
+ *  empty state, or the sample workspace in Demo Mode. */
 export function Lists({ initialList }: { initialList?: string }) {
+  const { demo } = useDemoMode();
+  if (demo) return <SharedLists initialList={initialList} />;
+  return (
+    <div className="page">
+      <PageHead title="Allow/Deny Lists" sub={SUB} />
+      <PolicyListsNote demo={false} />
+      <Card>
+        <ComingSoon icon="listCheck" title="No shared lists yet"
+          sub="Org-wide allow and deny lists that every policy can reference are on the way. Until then, the workspace policy holds the lists your endpoints enforce." />
+      </Card>
+    </div>
+  );
+}
+
+function SharedLists({ initialList }: { initialList?: string }) {
   const { lists, dispatch, viewer } = useStore();
   const [list, setList] = useState<'allow' | 'deny'>(initialList === 'deny' ? 'deny' : 'allow');
   const [kind, setKind] = useState<ListKind | 'all'>('all');
@@ -51,18 +81,14 @@ export function Lists({ initialList }: { initialList?: string }) {
 
   return (
     <div className="page">
-      <PageHead title="Allow/Deny Lists" sub="Org-wide lists every policy can reference — binaries, files, hosts and MCP tools.">
-        <DemoNote />
+      <PageHead title="Allow/Deny Lists" sub={SUB}>
         <Seg value={list} onChange={setList} options={[
           { id: 'allow', label: <>Allowlist · {lists.filter((e) => e.list === 'allow').length}</> },
           { id: 'deny', label: <>Denylist · {lists.filter((e) => e.list === 'deny').length}</> },
         ]} />
       </PageHead>
 
-      <div className="callout warn" style={{ margin: 0 }}><Ic n="layers" size={16} /><span>
-        The lists your endpoints actually enforce — <code>exec_deny</code>, <code>exec_allow</code>, <code>file_deny</code>, <code>file_alert</code>, <code>network_deny</code>, <code>network_allow</code> — live in the workspace policy.
-        Edit and publish them on <Link href="/policies" style={{ textDecoration: 'underline' }}>Policies</Link>. Shared org-wide lists below are a preview and are not sent to endpoints.
-      </span></div>
+      <PolicyListsNote demo />
 
       <div className="toolbar">
         <div className="chips">

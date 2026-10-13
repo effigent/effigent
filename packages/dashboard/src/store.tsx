@@ -4,9 +4,12 @@
  * Client UI state shared by every page under the shell: the time range, the
  * environment filter, the toast, the signed-in viewer — plus the features the
  * control plane does not serve yet (approvals, multi-policy rules, allow/deny
- * lists), which stay on the demo dataset in `data.ts`. Everything the API does
- * serve (endpoints, events, the endpoint policy, the audit trail) lives in
- * `live.tsx`.
+ * lists). Those are filled from the sample dataset in `data.ts` only in Demo
+ * Mode (demo.tsx) and are empty otherwise. Everything the API does serve
+ * (endpoints, events, the endpoint policy, the audit trail) lives in `live.tsx`.
+ *
+ * The shell remounts this provider when Demo Mode flips, so sample edits never
+ * survive into the real workspace (or the other way round).
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react';
 import { APPROVALS, LIST_ENTRIES, POLICIES } from './data.ts';
@@ -81,15 +84,15 @@ function reducer(s: State, a: Act): State {
   }
 }
 
-const initial: State = {
-  approvals: APPROVALS,
-  policies: POLICIES,
-  lists: LIST_ENTRIES,
+const initial = (demo: boolean): State => ({
+  approvals: demo ? APPROVALS : [],
+  policies: demo ? POLICIES : [],
+  lists: demo ? LIST_ENTRIES : [],
   env: null,
   range: '24h',
   viewer: { name: 'Jane Doe', role: 'Admin', initials: 'JD' },
   toast: null,
-};
+});
 
 interface Store extends State {
   dispatch: (a: Act) => void;
@@ -101,8 +104,8 @@ interface Store extends State {
 
 const Ctx = createContext<Store | null>(null);
 
-export function StoreProvider({ children }: { children: ReactNode }) {
-  const [s, dispatch] = useReducer(reducer, initial);
+export function StoreProvider({ demo, children }: { demo: boolean; children: ReactNode }) {
+  const [s, dispatch] = useReducer(reducer, demo, initial);
 
   useEffect(() => {
     if (!s.toast) return;

@@ -583,6 +583,17 @@ a.feed-body:hover .feed-title { color: var(--accent-2); }
 .callout.bad svg { color: var(--red); }
 .api-banner { margin: 16px 30px 0; align-items: center; }
 .api-banner > span { flex: 1; }
+/* Demo Mode: persistent banner while the sample workspace is shown */
+.callout.demo { background: rgba(139, 92, 246, 0.13); border-color: rgba(139, 92, 246, 0.4); }
+.callout.demo svg { color: #b6a2ff; }
+.callout.demo strong { font-weight: 650; }
+.coming-soon > svg { color: var(--txt-3); }
+.coming-soon .empty-title { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.coming-soon .btn { margin-top: 6px; }
+.coming-soon .btn svg { color: inherit; }
+.pop-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-top: 1px solid var(--border); margin-top: 4px; }
+.pop-switch .setting-title { font-size: 13px; }
+.pop-switch .setting-desc { font-size: 12px; }
 .policy-editor { width: 100%; min-height: 420px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; tab-size: 2; white-space: pre; }
 tr.revoked td { opacity: 0.55; }
 

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { Ic } from '@/icons.tsx';
+import { useDemoMode } from '@/demo.tsx';
 import { agentMeta, envMeta, MODES, userById } from '@/data.ts';
 import type { ApprovalState, Env, Mode, Outcome, RuleEffect } from '@/types.ts';
 
@@ -157,11 +158,29 @@ export function Empty({ icon = 'checkCircle', title, sub }: { icon?: string; tit
   );
 }
 
-export function DemoNote({ title = 'Not served by the control plane yet — this shows a demo dataset' }: { title?: string }) {
+export function DemoNote({ title = 'Not served by the control plane yet — this shows a demo dataset', label = 'Demo data' }: { title?: string; label?: string }) {
   return (
     <span className="demo-chip" title={title}>
-      <Ic n="eye" size={12} /> Demo data
+      <Ic n="eye" size={12} /> {label}
     </span>
+  );
+}
+
+export function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return <button role="switch" aria-checked={on} aria-label={label} className={`switch ${on ? 'on' : ''}`} onClick={() => onChange(!on)} />;
+}
+
+/** Honest empty state for a feature the control plane does not serve yet
+ *  (Demo Mode off). Offers the sample workspace as a preview. */
+export function ComingSoon({ icon = 'clock', title, sub }: { icon?: string; title: string; sub: string }) {
+  const { setDemo } = useDemoMode();
+  return (
+    <div className="empty coming-soon">
+      <Ic n={icon} size={22} />
+      <div className="empty-title">{title} <span className="badge b-muted">Coming soon</span></div>
+      <div className="empty-sub">{sub}</div>
+      <button className="btn sm" onClick={() => setDemo(true)}><Ic n="eye" size={14} /> Preview with sample data</button>
+    </div>
   );
 }
 

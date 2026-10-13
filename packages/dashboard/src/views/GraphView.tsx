@@ -6,11 +6,12 @@ import { useMemo, useState } from 'react';
 import { AGENTS, AGENT_TYPES, FLOWS, endpointById, envMeta, resourceById, userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useStore } from '@/store.tsx';
+import { useDemoMode } from '@/demo.tsx';
 import type { AgentType } from '@/types.ts';
 import { AgentGraph, EDGE_COLOR, Legend, visibleFlows } from '@/components/AgentGraph.tsx';
 import { FlowList } from '@/components/GraphCard.tsx';
 import {
-  AgentCell, AgentGlyph, Card, CardHead, DemoNote, EnvTag, ModeTag, PageHead, Seg, StatusPill, UserCell, initials,
+  AgentCell, AgentGlyph, Card, CardHead, ComingSoon, EnvTag, ModeTag, PageHead, Seg, StatusPill, UserCell, initials,
 } from '@/components/ui.tsx';
 
 type Focus = AgentType | 'all';
@@ -114,7 +115,25 @@ function Detail({ id, focus }: { id: string | null; focus: Focus }) {
   );
 }
 
+const SUB = 'Every agent on your endpoints, who drives it, and what it touches — with the outcome your policies produced.';
+
+/** The control plane does not serve the agent graph yet: an honest empty
+ *  state, or the sample workspace in Demo Mode. */
 export function GraphView({ initialAgent, initialView }: { initialAgent?: string; initialView?: string }) {
+  const { demo } = useDemoMode();
+  if (demo) return <SampleGraph initialAgent={initialAgent} initialView={initialView} />;
+  return (
+    <div className="page">
+      <PageHead title="Agent Graph" sub={SUB} />
+      <Card>
+        <ComingSoon icon="graph" title="No agent graph yet"
+          sub="A live map of people → agents → resources, built from endpoint events, is on the way. Every agent event your endpoints report is already in Audit." />
+      </Card>
+    </div>
+  );
+}
+
+function SampleGraph({ initialAgent, initialView }: { initialAgent?: string; initialView?: string }) {
   const { env, inEnv, dispatch } = useStore();
   const router = useRouter();
   const [focus, setFocus] = useState<Focus>(initialAgent && initialAgent in AGENT_TYPES ? (initialAgent as AgentType) : 'all');
@@ -140,8 +159,7 @@ export function GraphView({ initialAgent, initialView }: { initialAgent?: string
 
   return (
     <div className="page">
-      <PageHead title="Agent Graph" sub="Every agent on your endpoints, who drives it, and what it touches — with the outcome your policies produced.">
-        <DemoNote />
+      <PageHead title="Agent Graph" sub={SUB}>
         {env && <button className="chip on" onClick={() => dispatch({ t: 'env', env: null })} title="Show all environments"><span className="env-dot" style={{ background: envMeta(env).color }} /> {envMeta(env).label} only <Ic n="x" size={12} /></button>}
         <Seg value={view} onChange={(v) => { setView(v); sync(focus, v); }} options={[{ id: 'graph', label: 'Graph' }, { id: 'list', label: 'List' }]} />
       </PageHead>

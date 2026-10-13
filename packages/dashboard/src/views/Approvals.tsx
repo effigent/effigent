@@ -6,7 +6,8 @@ import { ACTION_CLASS_LABEL, AGENT_TYPES, endpointById, envMeta, userById } from
 import { Ic } from '@/icons.tsx';
 import { useStore } from '@/store.tsx';
 import type { Action, Approval } from '@/types.ts';
-import { AgentGlyph, ApprovalPill, Card, CardHead, DemoNote, Empty, EnvTag, PageHead, RiskTag } from '@/components/ui.tsx';
+import { AgentGlyph, ApprovalPill, Card, CardHead, ComingSoon, Empty, EnvTag, PageHead, RiskTag } from '@/components/ui.tsx';
+import { useDemoMode } from '@/demo.tsx';
 
 export function actionText(a: Action): string {
   if (a.command) return a.command;
@@ -73,7 +74,25 @@ function DetailPanel({ a }: { a: Approval }) {
   );
 }
 
+const SUB = 'Risky actions pause on the endpoint and wait here for a human decision.';
+
+/** The control plane does not route approvals to the console yet: an honest
+ *  empty state, or the sample workspace in Demo Mode. */
 export function Approvals({ initialId }: { initialId?: string }) {
+  const { demo } = useDemoMode();
+  if (demo) return <ApprovalQueue initialId={initialId} />;
+  return (
+    <div className="page">
+      <PageHead title="Approvals" sub={SUB} />
+      <Card>
+        <ComingSoon icon="shield" title="No approval requests yet"
+          sub="When a policy rule requires approval, the paused action will wait here for an approver to allow or deny it. Routing approvals to the console is not live yet." />
+      </Card>
+    </div>
+  );
+}
+
+function ApprovalQueue({ initialId }: { initialId?: string }) {
   const { approvals, inEnv, env } = useStore();
   const [tab, setTab] = useState<'pending' | 'history'>(() => {
     const a = approvals.find((x) => x.id === initialId);
@@ -87,8 +106,7 @@ export function Approvals({ initialId }: { initialId?: string }) {
 
   return (
     <div className="page">
-      <PageHead title="Approvals" sub="Risky actions pause on the endpoint and wait here for a human decision.">
-        <DemoNote />
+      <PageHead title="Approvals" sub={SUB}>
         {env && <span className="muted">Showing {envMeta(env).label} only</span>}
       </PageHead>
 

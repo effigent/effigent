@@ -1,13 +1,14 @@
 /**
- * In-memory stand-in for the control-plane API, used only under the local dev
- * auth bypass (lib/dev-auth.ts) where there is no Clerk session to call the
- * real one with. It answers the same routes with the same JSON shapes, built
- * from the demo dataset, so every view runs its real code path in dev.
+ * In-memory stand-in for the control-plane API, used by Demo Mode (demo.tsx).
+ * It answers the same routes with the same JSON shapes, built from the sample
+ * dataset, so every live view runs its real code path on sample data. Writes
+ * (publish, revoke, enroll) change only this in-memory copy — nothing here
+ * makes a network request.
  */
 import { ENDPOINTS, EVENTS } from '@/data.ts';
-import { ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiPolicyVersion } from './api.ts';
+import { API_BASE, ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiPolicyVersion } from './api.ts';
 
-const DEMO_POLICY = `# effigentd policy (demo — the dev build has no control plane)
+const DEMO_POLICY = `# effigentd policy (Demo Mode — sample workspace, not published anywhere)
 defaults:
   mode: denylist
   exec_deny:
@@ -40,16 +41,16 @@ function minutesAgo(label: string): number {
 export function createFixtureApi(): Api {
   const now = Date.now();
   const iso = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString();
-  const me: ApiMe = { user_id: 'user_dev', tenant: 'org:dev', role: 'admin', via: 'clerk' };
+  const me: ApiMe = { user_id: 'user_demo', tenant: 'org:demo', role: 'admin', via: 'clerk' };
   let version = 3;
-  let policy: ApiPolicyVersion = { version, body: DEMO_POLICY, comment: 'deny curl/wget/nc for every agent', created_by: 'user_dev', created_at: iso(240) };
+  let policy: ApiPolicyVersion = { version, body: DEMO_POLICY, comment: 'deny curl/wget/nc for every agent', created_by: me.user_id, created_at: iso(240) };
   const history: ApiPolicyVersion[] = [
-    { version: 3, comment: policy.comment, created_by: 'user_dev', created_at: iso(240) },
-    { version: 2, comment: 'alert on cloud credentials', created_by: 'user_dev', created_at: iso(60 * 26) },
-    { version: 1, comment: 'initial policy', created_by: 'user_dev', created_at: iso(60 * 72) },
+    { version: 3, comment: policy.comment, created_by: me.user_id, created_at: iso(240) },
+    { version: 2, comment: 'alert on cloud credentials', created_by: me.user_id, created_at: iso(60 * 26) },
+    { version: 1, comment: 'initial policy', created_by: me.user_id, created_at: iso(60 * 72) },
   ];
   const endpoints: ApiEndpoint[] = ENDPOINTS.map((e, i) => ({
-    id: `0000000${i}-dev0-4000-8000-${e.id.padEnd(12, '0').slice(-12)}`, hostname: e.hostname,
+    id: `0000000${i}-dem0-4000-8000-${e.id.padEnd(12, '0').slice(-12)}`, hostname: e.hostname,
     os: e.platform === 'linux' ? 'linux' : 'darwin', arch: e.platform === 'linux' ? 'amd64' : 'arm64', version: e.version,
     enrolled_at: iso(60 * 24 * (10 + i)), last_seen: e.status === 'online' ? iso(0.1) : e.status === 'degraded' ? iso(2) : iso(90),
     policy_version: e.policyVersion >= 42 ? 3 : 2, revoked: false,
@@ -62,10 +63,10 @@ export function createFixtureApi(): Api {
   }));
   const audit: ApiAuditEntry[] = history.slice().reverse().map((h, i) => ({
     seq: i + 1, at: h.created_at, actor: h.created_by, actor_via: 'clerk', actor_role: 'admin', action: 'policy.publish', target: `v${h.version}`,
-    details: { version: h.version, comment: h.comment }, ip: '127.0.0.1', prev_hash: '', hash: `dev${i}`,
+    details: { version: h.version, comment: h.comment }, ip: '127.0.0.1', prev_hash: '', hash: `demo${i}`,
   }));
   const log = (action: string, target: string, details: Record<string, unknown> | null) =>
-    audit.push({ seq: audit.length + 1, at: new Date().toISOString(), actor: me.user_id, actor_via: 'clerk', actor_role: me.role, action, target, details, ip: '127.0.0.1', prev_hash: '', hash: `dev${audit.length}` });
+    audit.push({ seq: audit.length + 1, at: new Date().toISOString(), actor: me.user_id, actor_via: 'clerk', actor_role: me.role, action, target, details, ip: '127.0.0.1', prev_hash: '', hash: `demo${audit.length}` });
 
   const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
   const delay = <T>(v: T) => new Promise<T>((r) => setTimeout(() => r(clone(v)), 120));
@@ -85,7 +86,7 @@ export function createFixtureApi(): Api {
     send<T>(method: string, path: string, body?: unknown): Promise<T> {
       if (method === 'PUT' && path === '/policy') {
         const b = body as { body: string; comment: string };
-        if (!/^\s*defaults:/m.test(b.body)) return Promise.reject(new ApiError(400, 'policy: missing `defaults:` (dev fixture check)'));
+        if (!/^\s*defaults:/m.test(b.body)) return Promise.reject(new ApiError(400, 'policy: missing `defaults:` (Demo Mode check)'));
         version++;
         policy = { version, body: b.body, comment: b.comment, created_by: me.user_id, created_at: new Date().toISOString() };
         history.unshift({ version, comment: b.comment, created_by: me.user_id, created_at: policy.created_at });
@@ -101,10 +102,10 @@ export function createFixtureApi(): Api {
       }
       if (method === 'POST' && path === '/enrollment-tokens') {
         const b = (body ?? {}) as { label?: string; ttl_hours?: number; max_uses?: number };
-        const token = `eft_dev${Math.random().toString(36).slice(2, 14)}`;
+        const token = `eft_demo_${Math.random().toString(36).slice(2, 14)}`; // not a real token
         const t = { id: `tok-${audit.length}`, token, label: b.label ?? '', expires_at: new Date(Date.now() + (b.ttl_hours || 24) * 3600_000).toISOString(), max_uses: b.max_uses || 1, uses: 0 };
         log('enrollment_token.create', t.id, { label: t.label, max_uses: t.max_uses, expires_at: t.expires_at });
-        return delay({ token: t, command: `sudo effigentd enroll --server http://127.0.0.1:8080 --token ${token}` }) as Promise<T>;
+        return delay({ token: t, command: `sudo effigentd enroll --server https://api.demo.invalid --token ${token}` /* demo: unroutable host */ }) as Promise<T>;
       }
       return Promise.reject(new ApiError(404, 'not found'));
     },

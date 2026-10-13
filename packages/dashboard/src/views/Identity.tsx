@@ -5,7 +5,9 @@ import { AGENTS, ENDPOINTS, USERS } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useStore } from '@/store.tsx';
 import type { ConsoleRole } from '@/types.ts';
-import { AgentGlyph, Card, CardHead, DemoNote, PageHead, initials } from '@/components/ui.tsx';
+import Link from 'next/link';
+import { AgentGlyph, Card, CardHead, ComingSoon, PageHead, initials } from '@/components/ui.tsx';
+import { useDemoMode } from '@/demo.tsx';
 
 const ROLES: { id: ConsoleRole; label: string; desc: string }[] = [
   { id: 'admin', label: 'Admin', desc: 'Everything, including identity and settings' },
@@ -23,7 +25,29 @@ const PERMS: { label: string; roles: ConsoleRole[] }[] = [
   { label: 'Export audit evidence', roles: ['admin', 'approver'] },
 ];
 
+const SUB = 'Who the people behind each agent are, how OS accounts map to them, and what they may do in the console.';
+
+/** People, OS-account mapping and console roles are not served by the control
+ *  plane yet: an honest empty state, or the sample workspace in Demo Mode. */
 export function Identity({ initialUser }: { initialUser?: string }) {
+  const { demo } = useDemoMode();
+  if (demo) return <People initialUser={initialUser} />;
+  return (
+    <div className="page">
+      <PageHead title="Identity & Access" sub={SUB} />
+      <Card>
+        <ComingSoon icon="users" title="No people mapped yet"
+          sub="Attributing agent actions to people — via the endpoint's OS accounts — and per-person console roles are on the way." />
+      </Card>
+      <div className="callout" style={{ margin: 0 }}><Ic n="lock" size={16} /><span>
+        Today, console sign-in and organization membership come from Clerk: org admins and security admins can publish policy, revoke endpoints and enroll machines; everyone else is view-only.
+        Your workspace and role are on <Link href="/settings" style={{ textDecoration: 'underline' }}>Settings</Link>.
+      </span></div>
+    </div>
+  );
+}
+
+function People({ initialUser }: { initialUser?: string }) {
   const { inEnv, dispatch } = useStore();
   const [roles, setRoles] = useState<Record<string, ConsoleRole>>(() => Object.fromEntries(USERS.map((u) => [u.id, u.role])));
   const [q, setQ] = useState('');
@@ -32,8 +56,7 @@ export function Identity({ initialUser }: { initialUser?: string }) {
 
   return (
     <div className="page">
-      <PageHead title="Identity & Access" sub="Who the people behind each agent are, how OS accounts map to them, and what they may do in the console.">
-        <DemoNote />
+      <PageHead title="Identity & Access" sub={SUB}>
         <input className="input" style={{ width: 240 }} placeholder="Filter people…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter people" />
       </PageHead>
 

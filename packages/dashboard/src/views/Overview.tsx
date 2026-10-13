@@ -7,10 +7,11 @@ import { Ic } from '@/icons.tsx';
 import { RANGE_MS, useLive } from '@/live.tsx';
 import { ago, summarizePolicy } from '@/lib/live-map.ts';
 import { useStore } from '@/store.tsx';
+import { useDemoMode } from '@/demo.tsx';
 import type { ConsoleEvent, Mode } from '@/types.ts';
 import { GraphCard } from '@/components/GraphCard.tsx';
 import { RangeSelect } from '@/components/RangeSelect.tsx';
-import { AgentCell, AgentGlyph, Card, CardHead, DemoNote, Empty, Loading, ModeTag, OutcomePill, PageHead, StatusPill } from '@/components/ui.tsx';
+import { AgentCell, AgentGlyph, Card, CardHead, Empty, Loading, ModeTag, OutcomePill, PageHead, StatusPill } from '@/components/ui.tsx';
 
 export const EVENT_ICON: Record<ConsoleEvent['outcome'], { icon: string; cls: string }> = {
   blocked: { icon: 'ban', cls: 'ic-red' },
@@ -65,6 +66,7 @@ function RowMenu({ agent }: { agent: SeenAgent }) {
 
 export function Overview() {
   const { env, range, pending, decide } = useStore();
+  const { demo } = useDemoMode();
   const { consoleEvents, endpointRows, policy, latestPolicy, updatedAt, now, loaded } = useLive();
 
   const since = now - RANGE_MS[range];
@@ -190,9 +192,9 @@ export function Overview() {
           </Card>
 
           <Card>
-            <CardHead title="Recent Approval Requests" href="/approvals"><DemoNote /></CardHead>
+            <CardHead title="Recent Approval Requests" href="/approvals" />
             {pending.length === 0 ? (
-              <div className="rail-empty"><Ic n="checkCircle" size={18} /> All caught up — nothing waiting.</div>
+              <div className="rail-empty"><Ic n={demo ? 'checkCircle' : 'clock'} size={18} /> {demo ? 'All caught up — nothing waiting.' : 'No approval requests yet — coming soon.'}</div>
             ) : (
               <ul className="feed">
                 {pending.slice(0, 3).map((a) => (

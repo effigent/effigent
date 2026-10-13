@@ -6,11 +6,13 @@ import { AGENTS, ENVS, nav } from '@/data.ts';
 import { BrandMark, Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
+import { useDemoMode } from '@/demo.tsx';
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const { pending, env, dispatch } = useStore();
   const { endpointRows, loaded, fixture } = useLive();
+  const { demo } = useDemoMode();
   const eps = endpointRows.filter((e) => !e.revoked);
   const online = eps.filter((e) => e.status === 'online').length;
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`));
@@ -34,13 +36,15 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             aria-current={isActive(item.href) ? 'page' : undefined}>
             <Ic n={item.icon} />
             <span>{item.label}</span>
-            {item.href === '/approvals' && pending.length > 0 && <span className="nav-count" title="Demo data — approvals are not served by the control plane yet">{pending.length}</span>}
+            {item.href === '/approvals' && pending.length > 0 && <span className="nav-count" title={`${pending.length} pending`}>{pending.length}</span>}
           </Link>
         ))}
       </nav>
 
+      {/* Environments are not modelled by the control plane yet: sample workspace only. */}
+      {demo && <>
       <div className="nav-sep" />
-      <div className="nav-group" title="Environments are not modelled by the control plane yet; this filter only applies to demo pages">Environments · demo</div>
+      <div className="nav-group">Environments</div>
       <div className="env-list">
         {ENVS.map((e) => {
           const n = AGENTS.filter((a) => a.env === e.id).length;
@@ -56,6 +60,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           );
         })}
       </div>
+      </>}
 
       <div className="deploy-card">
         <div className="deploy-head">
@@ -65,7 +70,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             <div className="deploy-line">
               {loaded ? <><span className="dot" style={online ? undefined : { background: 'var(--txt-4)', boxShadow: 'none' }} /> {online}/{eps.length} endpoints online</> : 'Connecting…'}
             </div>
-            <div className="deploy-line muted">Control plane: {fixture ? 'local fixture (dev)' : 'Cloud'}</div>
+            <div className="deploy-line muted">Control plane: {fixture ? 'Demo Mode (sample)' : 'Cloud'}</div>
           </div>
         </div>
         <Link href="/enforcement" className="deploy-link" onClick={onClose}>Manage deployment <Ic n="arrowRight" size={13} /></Link>

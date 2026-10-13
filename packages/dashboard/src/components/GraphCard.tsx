@@ -5,7 +5,8 @@ import { AGENT_TYPES, FLOWS, resourceById, userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import type { AgentType, Env, Flow } from '@/types.ts';
 import { AgentGraph, EDGE_COLOR, Legend, visibleFlows } from './AgentGraph.tsx';
-import { AgentCell, Card, CardHead, DemoNote, Seg, UserCell } from './ui.tsx';
+import { AgentCell, Card, CardHead, ComingSoon, Seg, UserCell } from './ui.tsx';
+import { useDemoMode } from '@/demo.tsx';
 
 function nodeName(id: string) {
   if (userById(id)) return <UserCell id={id} />;
@@ -49,6 +50,19 @@ export function FlowList({ flows }: { flows: Flow[] }) {
 /** Overview card: the hero Claude Code graph with a Graph/List toggle and a
  *  fullscreen mode (Esc closes). */
 export function GraphCard({ env }: { env: Env | null }) {
+  const { demo } = useDemoMode();
+  if (!demo) {
+    return (
+      <Card className="graph-card">
+        <CardHead title="Agent Graph" sub="See how your AI agents connect, what they access, and where data flows." />
+        <ComingSoon icon="graph" title="No agent graph yet" sub="A live map of people → agents → resources, built from endpoint events, is on the way." />
+      </Card>
+    );
+  }
+  return <SampleGraphCard env={env} />;
+}
+
+function SampleGraphCard({ env }: { env: Env | null }) {
   const [view, setView] = useState<'graph' | 'list'>('graph');
   const [full, setFull] = useState(false);
   useEffect(() => {
@@ -62,7 +76,7 @@ export function GraphCard({ env }: { env: Env | null }) {
   return (
     <Card className={`graph-card ${full ? 'fullscreen' : ''}`}>
       <CardHead
-        title={<>Agent Graph <DemoNote title="The control plane does not serve the agent graph yet — this shows a demo dataset" /></>}
+        title="Agent Graph"
         sub="See how your AI agents connect, what they access, and where data flows."
       >
         <Seg value={view} onChange={setView} options={[{ id: 'graph', label: 'Graph' }, { id: 'list', label: 'List' }]} />
