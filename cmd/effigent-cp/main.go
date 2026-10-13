@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,7 +45,12 @@ func main() {
 	if err != nil {
 		logger.Fatalf("signing key: %v", err)
 	}
-	auth, err := server.NewAuthenticator(ctx, os.Getenv("CLERK_ISSUER"), os.Getenv("EFFIGENT_ADMIN_TOKEN"))
+	auth, err := server.NewAuthenticator(ctx, server.Options{
+		ClerkIssuer:       os.Getenv("CLERK_ISSUER"),
+		AdminToken:        os.Getenv("EFFIGENT_ADMIN_TOKEN"),
+		AdminTenants:      strings.Split(os.Getenv("EFFIGENT_ADMIN_TENANTS"), ","), // "" = admin token disabled
+		AuthorizedParties: strings.Split(os.Getenv("CLERK_AUTHORIZED_PARTIES"), ","),
+	})
 	if err != nil {
 		logger.Fatalf("auth: %v", err)
 	}

@@ -43,6 +43,8 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Logf("enrolled endpoint %s (%s) for %s", id, req.Info.Hostname, tenant)
+	s.audit(r, Principal{UserID: "endpoint:" + id, Tenant: tenant, Via: "enrollment-token"}, "endpoint.enroll", id,
+		map[string]string{"hostname": req.Info.Hostname, "os": req.Info.OS, "arch": req.Info.Arch, "version": req.Info.Version})
 	writeJSON(w, http.StatusOK, EnrollResponse{EndpointID: id, Secret: secret, Tenant: tenant,
 		ServerPublicKey: sign.EncodePublic(s.publicKey())})
 }
@@ -57,6 +59,10 @@ func (s *Server) endpointAuth(next func(http.ResponseWriter, *http.Request, stor
 		ep, err := s.Store.AuthEndpoint(r.Context(), secret)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "unknown or revoked endpoint")
+			return
+		}
+		if ok, wait := s.limits.endpoint.allow("ep:" + ep.ID); !ok {
+			tooMany(w, wait)
 			return
 		}
 		next(w, r, ep)

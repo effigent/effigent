@@ -34,6 +34,7 @@ func (s *Server) createEnrollmentToken(w http.ResponseWriter, r *http.Request, p
 		s.fail(w, err)
 		return
 	}
+	s.audit(r, p, "enrollment_token.create", t.ID, map[string]any{"label": t.Label, "max_uses": t.MaxUses, "expires_at": t.ExpiresAt})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token":   t,
 		"command": fmt.Sprintf("sudo effigentd enroll --server %s --token %s", s.PublicBaseURL, t.Token),
@@ -59,6 +60,7 @@ func (s *Server) revokeEndpoint(w http.ResponseWriter, r *http.Request, p Princi
 		s.fail(w, err)
 		return
 	}
+	s.audit(r, p, "endpoint.revoke", r.PathValue("id"), nil)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -97,6 +99,7 @@ func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, p Principal) 
 		return
 	}
 	s.Logf("policy v%d published for %s by %s", v, p.Tenant, p.UserID)
+	s.audit(r, p, "policy.publish", fmt.Sprintf("v%d", v), map[string]any{"version": v, "comment": req.Comment, "bytes": len(req.Body)})
 	writeJSON(w, http.StatusOK, map[string]any{"version": v})
 }
 

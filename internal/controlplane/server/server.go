@@ -18,11 +18,16 @@ type Server struct {
 	PublicBaseURL string // used in install commands, e.g. https://api.effigent.ai
 	ConsoleOrigin string // CORS origin allowed for the console, e.g. https://app.effigent.ai
 	Logf          func(string, ...any)
+
+	limits *limits
 }
 
 func (s *Server) publicKey() ed25519.PublicKey { return s.Key.Public().(ed25519.PublicKey) }
 
 func (s *Server) Handler() http.Handler {
+	if s.limits == nil {
+		s.limits = newLimits()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -35,15 +40,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /ep/v1/events", s.endpointAuth(s.ingest))
 
 	// console API
-	mux.HandleFunc("GET /api/v1/me", s.console(s.me))
-	mux.HandleFunc("POST /api/v1/enrollment-tokens", s.console(s.createEnrollmentToken))
-	mux.HandleFunc("GET /api/v1/endpoints", s.console(s.listEndpoints))
-	mux.HandleFunc("DELETE /api/v1/endpoints/{id}", s.console(s.revokeEndpoint))
-	mux.HandleFunc("GET /api/v1/policy", s.console(s.getPolicy))
-	mux.HandleFunc("PUT /api/v1/policy", s.console(s.putPolicy))
-	mux.HandleFunc("GET /api/v1/policy/history", s.console(s.policyHistory))
-	mux.HandleFunc("GET /api/v1/events", s.console(s.listEvents))
-	return s.cors(mux)
+	mux.HandleFunc("GET /api/v1/me", s.console(read, s.me))
+	mux.HandleFunc("POST /api/v1/enrollment-tokens", s.console(write, s.createEnrollmentToken))
+	mux.HandleFunc("GET /api/v1/endpoints", s.console(read, s.listEndpoints))
+	mux.HandleFunc("DELETE /api/v1/endpoints/{id}", s.console(write, s.revokeEndpoint))
+	mux.HandleFunc("GET /api/v1/policy", s.console(read, s.getPolicy))
+	mux.HandleFunc("PUT /api/v1/policy", s.console(write, s.putPolicy))
+	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))
+	mux.HandleFunc("GET /api/v1/events", s.console(read, s.listEvents))
+	mux.HandleFunc("GET /api/v1/audit", s.console(read, s.listAudit))
+	mux.HandleFunc("GET /api/v1/audit/verify", s.console(read, s.verifyAudit))
+	return s.rateLimitIP(s.cors(mux))
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
