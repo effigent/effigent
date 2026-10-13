@@ -141,9 +141,9 @@ export function Policies() {
             <dt>Modes</dt><dd><code>monitor</code> observe · <code>learn</code> record binaries · <code>denylist</code> block listed · <code>allowlist</code> block everything else</dd>
             <dt>Exec rules</dt><dd>Matched on the resolved binary path (symlinks followed), per binary — not per argument</dd>
             <dt>File rules</dt><dd>Path suffixes; <code>file_deny</code> is refused by the kernel, <code>file_alert</code> is reported</dd>
-            <dt>Network</dt><dd><code>network: true</code> reports outbound connects; <code>network_deny</code> / <code>network_allow</code> take IPs and CIDRs (no domain rules yet)</dd>
+            <dt>Network</dt><dd><code>network: true</code> reports outbound connects; <code>network_deny</code> / <code>network_allow</code> take IPs and CIDRs ; <code>domain_deny</code> takes hostnames</dd>
             <dt>Delivery</dt><dd>Signed per workspace; endpoints verify, apply live and cache it for offline restarts</dd>
-            <dt>macOS</dt><dd>Observe only — no kernel enforcement</dd>
+            <dt>macOS / Windows</dt><dd>No kernel enforcement; Claude Code's tool calls are checked before they run (agent hook) — programs by name, files, hostnames and IPs. Same modes: <code>monitor</code> reports, <code>denylist</code> / <code>allowlist</code> block</dd>
           </dl>
         </Card>
       </div>

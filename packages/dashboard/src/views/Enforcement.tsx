@@ -149,7 +149,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
               <span><span className="cell-main mono-sm" style={{ color: 'var(--txt)' }}>{e.hostname}</span><span className="cell-sub">{e.os} · {e.arch}</span></span>
             </span>
           </td>
-          <td className="muted">{e.platform === 'linux' ? 'Kernel (Tetragon)' : 'Observe only'}</td>
+          <td className="muted">{e.platform === 'linux' ? 'Kernel (Tetragon)' : 'Agent hooks'}</td>
           <td className="mono-sm" style={{ color: cmpVersion(e.version, newest) < 0 ? 'var(--gold)' : undefined }}>{e.version || '—'}</td>
           <td className="mono-sm" style={{ color: latestPolicy > 0 && e.policyVersion !== latestPolicy && !e.revoked ? 'var(--gold)' : undefined }}>
             {e.policyVersion > 0 ? `v${e.policyVersion}` : 'default'}
@@ -191,7 +191,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
       <div className="grid-4">
         <Card className="mini-stat"><div className="k">Endpoints online</div><div className="v">{online.length}/{eps.length}</div><div className="s">{eps.length - online.length} need attention</div></Card>
         <Card className="mini-stat"><div className="k">Kernel-enforced</div><div className="v">{kernel.length}</div><div className="s">Linux · Tetragon BPF LSM, pid-scoped</div></Card>
-        <Card className="mini-stat"><div className="k">Observe only</div><div className="v">{observe.length}</div><div className="s">macOS · events reported, not blocked</div></Card>
+        <Card className="mini-stat"><div className="k">Agent hooks</div><div className="v">{observe.length}</div><div className="s">macOS / Windows · Claude Code checked before each action</div></Card>
         <Card className="mini-stat"><div className="k">On latest policy</div><div className="v">{current}/{eps.length}</div><div className="s">{latestPolicy > 0 ? `Published v${latestPolicy}` : 'Nothing published yet'}</div></Card>
       </div>
 
@@ -204,7 +204,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
         </div>
         <div className="cov-legend">
           <span><i className="lg-dot" style={{ background: 'var(--green)' }} /> Kernel (exec / file blocked before it happens)</span>
-          <span><i className="lg-dot" style={{ background: 'var(--blue)' }} /> Observe only (macOS, no kernel blocking)</span>
+          <span><i className="lg-dot" style={{ background: 'var(--blue)' }} /> Agent hooks (macOS / Windows, Claude Code tool calls)</span>
           <span><i className="lg-dot" style={{ background: 'var(--red)' }} /> Degraded / offline</span>
         </div>
       </Card>
