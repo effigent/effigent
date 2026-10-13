@@ -40,17 +40,19 @@ var Claude ClaudeEvaluator
 // ErrNoEvaluator is returned when this build has no decision logic for the agent.
 var ErrNoEvaluator = errors.New("this effigentd build has no hook decision logic for this agent")
 
-// ClaudeOutput renders a Decision in Claude Code's PreToolUse output format.
-// "allow" defers to the user's own permission rules; "deny" stops the call
-// and shows Reason to the model.
+// ClaudeOutput renders a Decision in Claude Code's PreToolUse output format:
+// "deny" stops the call and shows Reason to the model.
+//
+// When the call is not denied we say nothing ("{}"): an explicit "allow"
+// would skip the user's own permission prompts, and effigentd must only ever
+// add restrictions, never remove them.
 func ClaudeOutput(d Decision) []byte {
-	decision := "allow"
-	if d.Deny {
-		decision = "deny"
+	if !d.Deny {
+		return []byte("{}")
 	}
 	out := map[string]any{"hookSpecificOutput": map[string]any{
 		"hookEventName":            "PreToolUse",
-		"permissionDecision":       decision,
+		"permissionDecision":       "deny",
 		"permissionDecisionReason": d.Reason,
 	}}
 	b, _ := json.Marshal(out)
@@ -61,4 +63,18 @@ func ClaudeOutput(d Decision) []byte {
 func FailClosed(why string) []byte {
 	return ClaudeOutput(Decision{Deny: true,
 		Reason: "Blocked by Effigent: " + why + ". Ask your IT team, or check: effigentd status"})
+}
+
+// Summary describes a tool call for an observe-only event, e.g.
+// "Bash: git status", "Read: /work/.env", "WebFetch: https://…".
+func Summary(in ClaudeInput) string {
+	for _, k := range []string{"command", "file_path", "notebook_path", "url", "pattern", "query"} {
+		if v, ok := in.ToolInput[k].(string); ok && v != "" {
+			if len(v) > 300 {
+				v = v[:300] + "…"
+			}
+			return in.ToolName + ": " + v
+		}
+	}
+	return in.ToolName
 }

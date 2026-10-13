@@ -25,10 +25,11 @@ func hookHandler(eng *engine.Engine) func(agent string, payload []byte) ([]byte,
 			return hooks.FailClosed("the hook input could not be read"), nil
 		}
 		if hooks.Claude == nil {
-			eng.Emit(event.Event{Time: time.Now(), Type: event.Blocked, Severity: "high", Agent: "claude-code",
-				Kind: "tool", Target: in.ToolName, Rule: "hook",
-				Message: "denied: " + hooks.ErrNoEvaluator.Error()})
-			return hooks.FailClosed(hooks.ErrNoEvaluator.Error()), nil
+			// No decision logic in this build: watch mode. Record the call,
+			// block nothing, and leave the user's own permission prompts as is.
+			eng.Emit(event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: "claude-code",
+				Kind: "tool", Target: hooks.Summary(in), Rule: "hook", Mode: "monitor"})
+			return hooks.ClaudeOutput(hooks.Decision{}), nil
 		}
 		d := hooks.Claude(eng.RuleFor("claude-code"), in)
 		if t := reportType(d); t != "" {
