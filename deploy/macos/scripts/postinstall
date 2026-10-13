@@ -1,0 +1,40 @@
+#!/bin/sh
+# Effigent macOS post-install: enroll (first install only), add the Claude Code
+# hook to managed settings, start the service.
+#
+# Enrollment token, first one found wins:
+#   1. MDM managed preference  ai.effigent  EnrollmentToken  (+ optional Server)
+#   2. /Library/Application Support/Effigent/enroll.token  (+ optional enroll.server)
+# Use a multi-use token from the console for a whole fleet.
+set -u
+LOG=/Library/Logs/Effigent/install.log
+mkdir -p /Library/Logs/Effigent "/Library/Application Support/Effigent"
+chmod 700 "/Library/Application Support/Effigent"
+exec >>"$LOG" 2>&1
+echo "=== $(date) effigent postinstall"
+
+BIN=/usr/local/bin/effigentd
+STATE="/Library/Application Support/Effigent"
+MP="/Library/Managed Preferences/ai.effigent"
+
+TOKEN="$(defaults read "$MP" EnrollmentToken 2>/dev/null || true)"
+SERVER="$(defaults read "$MP" Server 2>/dev/null || true)"
+[ -n "$TOKEN" ] || TOKEN="$(cat "$STATE/enroll.token" 2>/dev/null || true)"
+[ -n "$SERVER" ] || SERVER="$(cat "$STATE/enroll.server" 2>/dev/null || true)"
+[ -n "$SERVER" ] || SERVER="https://api.effigent.ai"
+
+if [ -s "$STATE/endpoint.json" ]; then
+  echo "already enrolled; keeping it"
+elif [ -n "$TOKEN" ]; then
+  "$BIN" enroll --server "$SERVER" --token "$TOKEN" --state-dir "$STATE" || echo "enroll failed; will run with the local default policy until enrolled"
+  rm -f "$STATE/enroll.token"
+else
+  echo "no enrollment token found (set ai.effigent EnrollmentToken in your MDM); running unenrolled"
+fi
+
+"$BIN" install-hooks || echo "could not update Claude Code managed settings"
+
+launchctl bootstrap system /Library/LaunchDaemons/ai.effigent.effigentd.plist 2>/dev/null || launchctl kickstart -k system/ai.effigent.effigentd
+sleep 2
+"$BIN" status || true
+exit 0

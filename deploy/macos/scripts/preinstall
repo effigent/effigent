@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stop a running effigentd before files are replaced (upgrades).
+launchctl bootout system/ai.effigent.effigentd 2>/dev/null || true
+exit 0

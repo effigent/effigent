@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.effigent.effigentd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/effigentd</string>
+    <string>--sensor</string><string>hooks</string>
+    <string>--state-dir</string><string>/Library/Application Support/Effigent</string>
+    <string>--output</string><string>none</string>
+    <string>--log-file</string><string>/Library/Logs/Effigent/events.jsonl</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>/Library/Logs/Effigent/effigentd.log</string>
+</dict>
+</plist>
