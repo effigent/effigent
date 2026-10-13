@@ -194,6 +194,8 @@ func checkHost(h string) error {
 		return fmt.Errorf("domain_deny %q: subdomains can't be discovered through DNS; list each hostname (e.g. www.%s)", h, h[2:])
 	case strings.Contains(h, "://") || strings.ContainsAny(h, "/:"):
 		return fmt.Errorf("domain_deny %q: use a bare hostname like example.com (no scheme, port or path)", h)
+	case !strings.Contains(h, "."):
+		return fmt.Errorf("domain_deny %q: single-label names are not supported; use the full name (e.g. wiki.corp.example)", h)
 	case len(h) > 253 || !hostRE.MatchString(h):
 		return fmt.Errorf("domain_deny %q: not a valid hostname (e.g. pastebin.com)", h)
 	}

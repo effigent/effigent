@@ -26,7 +26,7 @@ func TestDomainDenyRejectsWhatItCannotEnforce(t *testing.T) {
 		"*.example.com":       "list each hostname",
 		"https://example.com": "bare hostname",
 		"example.com:443":     "bare hostname",
-		"localhost":           "not a valid hostname",
+		"localhost":           "single-label",
 		"exa_mple.com":        "not a valid hostname",
 	} {
 		_, err := Parse([]byte("defaults:\n  domain_deny: [\"" + in + "\"]\n"))

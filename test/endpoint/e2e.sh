@@ -112,7 +112,8 @@ docker run -d --name eff-domain effigent-scenario /opt/ag/claude -c '
     getent hosts github.com >/dev/null; echo "dns exit=$?"
     curl -s -o /dev/null --max-time 10 https://github.com; echo "github exit=$?"
     (exec 3<>/dev/tcp/8.8.8.8/53) 2>/dev/null; echo "dns-bypass 8.8.8.8:53 exit=$?"
-    (exec 3<>/dev/tcp/1.1.1.1/853) 2>/dev/null; echo "dot 1.1.1.1:853 exit=$?"; }; sleep 0.2; done' >/dev/null
+    (exec 3<>/dev/tcp/1.1.1.1/853) 2>/dev/null; echo "dot 1.1.1.1:853 exit=$?"
+    (exec 3<>/dev/udp/8.8.8.8/80) 2>/dev/null; echo "udp 8.8.8.8:80 exit=$?"; }; sleep 0.2; done' >/dev/null
 sleep 3; docker exec eff-domain touch /tmp/go; sleep 8
 docker exec eff-domain curl -s -o /dev/null -w 'outside http=%{http_code}\n' --max-time 10 https://example.com > "$OUT/domain-outside.txt" 2>&1
 check "$OUT/domain-outside.txt" "outside http=200"                    "example.com outside any agent still works"
@@ -128,6 +129,7 @@ first "dns exit=0"                && ok "agent's ordinary DNS still works"      
 first "github exit=0"             && ok "agent's unrelated HTTPS still works"        || bad "agent's unrelated HTTPS still works"
 first "8.8.8.8:53 exit=1"         && ok "agent can't ask a public resolver"          || bad "agent can't ask a public resolver"
 first "1.1.1.1:853 exit=1"        && ok "agent can't use DNS over TLS"               || bad "agent can't use DNS over TLS"
+first "8.8.8.8:80 exit=0"         && ok "guard leaves non-DNS ports alone (udp 8.8.8.8:80)" || bad "guard leaves non-DNS ports alone (udp 8.8.8.8:80)"
 second "example.com exit=0"       && ok "after removal: example.com reachable again" || bad "after removal: example.com reachable again"
 second "8.8.8.8:53 exit=0"        && ok "after removal: DNS guard lifted"            || bad "after removal: DNS guard lifted"
 check "$OUT/events.jsonl" '"type":"blocked".*"target":"connect [0-9a-f.:]*:443".*"message":"domain_deny: example.com"' \

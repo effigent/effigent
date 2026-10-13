@@ -132,7 +132,7 @@ func (r *Resolver) Refresh(ctx context.Context) []string {
 
 // Run refreshes every interval and reports changed hostnames to onChange.
 func (r *Resolver) Run(ctx context.Context, every time.Duration, onChange func(ctx context.Context, names []string)) {
-	t := time.NewTicker(every)
+	t := time.NewTicker(max(every, time.Second))
 	defer t.Stop()
 	for {
 		select {

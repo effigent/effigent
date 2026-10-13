@@ -561,7 +561,8 @@ func (e *Engine) SetPolicy(ctx context.Context, raw []byte) (int, error) {
 
 // expand turns a rule's domain_deny into addresses the kernel can match:
 // the hostnames' current IPs join NetDeny, and the DNS bypass guard is
-// switched on (minus the resolvers this agent is configured to use).
+// switched on (minus the resolvers this agent is configured to use and
+// any single address network_allow lists).
 func (e *Engine) expand(root *Root, rule policy.Rule) policy.Rule {
 	e.mu.Lock()
 	dns, procfs := e.dns, e.procfs
@@ -582,7 +583,13 @@ func (e *Engine) expand(root *Root, rule policy.Rule) policy.Rule {
 	if procfs != "" {
 		files = append(files, filepath.Join(procfs, strconv.Itoa(int(root.PID)), "root/etc/resolv.conf"))
 	}
-	rule.DNSGuard = domains.Guarded(domains.Nameservers(files...))
+	exempt := domains.Nameservers(files...)
+	for _, a := range rule.NetAllow { // an address the policy explicitly allows stays allowed
+		if c, err := policy.ParseCIDR(a); err == nil && (strings.HasSuffix(c, "/32") || strings.HasSuffix(c, "/128")) {
+			exempt = append(exempt, strings.SplitN(c, "/", 2)[0])
+		}
+	}
+	rule.DNSGuard = domains.Guarded(exempt)
 	return rule
 }
 
