@@ -54,6 +54,9 @@ func main() {
 		case "hook":
 			hookCmd(os.Args[2:])
 			return
+		case "install-hooks":
+			installHooksCmd(os.Args[2:])
+			return
 		}
 	}
 	var (
