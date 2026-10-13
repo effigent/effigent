@@ -167,13 +167,15 @@ type Endpoint struct {
 	LastSeen      *time.Time `json:"last_seen"`
 	PolicyVersion int64      `json:"policy_version"`
 	Revoked       bool       `json:"revoked"`
+	Owner         string     `json:"owner"` // console user id or email; central rules scoped to users match it
+	Teams         []string   `json:"teams"`
 }
 
-const endpointCols = `id, tenant_ref, hostname, os, arch, version, enrolled_at, last_seen, policy_version, revoked_at is not null`
+const endpointCols = `id, tenant_ref, hostname, os, arch, version, enrolled_at, last_seen, policy_version, revoked_at is not null, owner, teams`
 
 func scanEndpoint(r pgx.Row) (Endpoint, error) {
 	var e Endpoint
-	err := r.Scan(&e.ID, &e.Tenant, &e.Hostname, &e.OS, &e.Arch, &e.Version, &e.EnrolledAt, &e.LastSeen, &e.PolicyVersion, &e.Revoked)
+	err := r.Scan(&e.ID, &e.Tenant, &e.Hostname, &e.OS, &e.Arch, &e.Version, &e.EnrolledAt, &e.LastSeen, &e.PolicyVersion, &e.Revoked, &e.Owner, &e.Teams)
 	return e, err
 }
 
@@ -209,6 +211,28 @@ func (s *Store) ListEndpoints(ctx context.Context, tenant string) ([]Endpoint, e
 	return out, rows.Err()
 }
 
+func (s *Store) GetEndpoint(ctx context.Context, tenant, id string) (Endpoint, error) {
+	e, err := scanEndpoint(s.db.QueryRow(ctx, `select `+endpointCols+` from cp.endpoints where tenant_ref = $1 and id = $2`, tenant, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return e, ErrNotFound
+	}
+	return e, err
+}
+
+// SetEndpointOwner records who uses a machine, for central rules scoped to
+// users and teams.
+func (s *Store) SetEndpointOwner(ctx context.Context, tenant, id, owner string, teams []string) (Endpoint, error) {
+	if teams == nil {
+		teams = []string{}
+	}
+	e, err := scanEndpoint(s.db.QueryRow(ctx, `update cp.endpoints set owner = $3, teams = $4
+		where tenant_ref = $1 and id = $2 and revoked_at is null returning `+endpointCols, tenant, id, owner, teams))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return e, ErrNotFound
+	}
+	return e, err
+}
+
 func (s *Store) RevokeEndpoint(ctx context.Context, tenant, id string) error {
 	ct, err := s.db.Exec(ctx, `update cp.endpoints set revoked_at = now() where tenant_ref = $1 and id = $2 and revoked_at is null`, tenant, id)
 	if err == nil && ct.RowsAffected() == 0 {
@@ -225,21 +249,26 @@ type PolicyVersion struct {
 	Comment   string    `json:"comment"`
 	CreatedBy string    `json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
+	// Source holds the central policies (JSON array) compiled onto Body per
+	// machine; nil means Body is served to every endpoint as is.
+	Source json.RawMessage `json:"policies,omitempty"`
 }
 
-// PutPolicy stores a new version (previous + 1) and returns it.
-func (s *Store) PutPolicy(ctx context.Context, tenant, body, comment, by string) (int64, error) {
+// PutPolicy stores a new version (previous + 1) and returns it. at is the
+// publish time; central policies are compiled against it (rule expiry), so it
+// is stored exactly rather than taken from the database clock.
+func (s *Store) PutPolicy(ctx context.Context, tenant, body string, source json.RawMessage, comment, by string, at time.Time) (int64, error) {
 	var v int64
-	err := s.db.QueryRow(ctx, `insert into cp.policy_versions (tenant_ref, version, body, comment, created_by)
-		select $1, coalesce(max(version), 0) + 1, $2, $3, $4 from cp.policy_versions where tenant_ref = $1
-		returning version`, tenant, body, comment, by).Scan(&v)
+	err := s.db.QueryRow(ctx, `insert into cp.policy_versions (tenant_ref, version, body, source, comment, created_by, created_at)
+		select $1, coalesce(max(version), 0) + 1, $2, $3, $4, $5, $6 from cp.policy_versions where tenant_ref = $1
+		returning version`, tenant, body, source, comment, by, at).Scan(&v)
 	return v, err
 }
 
 func (s *Store) LatestPolicy(ctx context.Context, tenant string) (PolicyVersion, error) {
 	var p PolicyVersion
-	err := s.db.QueryRow(ctx, `select version, body, comment, created_by, created_at from cp.policy_versions
-		where tenant_ref = $1 order by version desc limit 1`, tenant).Scan(&p.Version, &p.Body, &p.Comment, &p.CreatedBy, &p.CreatedAt)
+	err := s.db.QueryRow(ctx, `select version, body, source, comment, created_by, created_at from cp.policy_versions
+		where tenant_ref = $1 order by version desc limit 1`, tenant).Scan(&p.Version, &p.Body, &p.Source, &p.Comment, &p.CreatedBy, &p.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}

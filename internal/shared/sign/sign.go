@@ -15,9 +15,13 @@ import (
 	"time"
 )
 
-// Document is a signed policy version for one tenant.
+// Document is a signed policy version for one tenant. Endpoint is set when
+// the body was compiled for one machine (central policies scoped to users and
+// teams): another machine of the same tenant must not accept it, or a lax
+// body could be swapped into a strict machine's cache.
 type Document struct {
 	Tenant    string    `json:"tenant"`
+	Endpoint  string    `json:"endpoint,omitempty"`
 	Version   int64     `json:"version"`
 	IssuedAt  time.Time `json:"issued_at"`
 	Body      string    `json:"body"`

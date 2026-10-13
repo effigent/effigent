@@ -80,20 +80,57 @@ func (s *Server) getPolicy(w http.ResponseWriter, r *http.Request, p Principal) 
 
 // putPolicy validates with the same parser endpoints use, then publishes a
 // new version. Endpoints pick it up on their next poll.
+//
+// With central policies ({"body": base yaml, "policies": [...]}) the body is
+// the base every machine starts from, and the policies are compiled onto it
+// per machine; the response reports what each machine gets and every clause
+// the kernel doesn't enforce. Omitting "policies" keeps the ones already
+// published (so editing the base YAML doesn't drop them); "policies": [] or
+// null removes them.
 func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, p Principal) {
 	var req struct {
-		Body    string `json:"body"`
-		Comment string `json:"comment"`
+		Body     string          `json:"body"`
+		Comment  string          `json:"comment"`
+		Policies json.RawMessage `json:"policies"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "body must be {\"body\": \"<policy yaml>\", \"comment\": \"…\"}")
+		writeErr(w, http.StatusBadRequest, "body must be {\"body\": \"<policy yaml>\", \"comment\": \"…\", \"policies\": [optional central policies]}")
+		return
+	}
+	if req.Policies == nil {
+		prev, err := s.Store.LatestPolicy(r.Context(), p.Tenant)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			s.fail(w, err)
+			return
+		}
+		req.Policies = prev.Source
+	}
+	ps, err := decodePolicies(req.Policies)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(ps) > 0 {
+		v, rep, code, err := s.publishCentral(r, p, req.Body, ps, req.Comment)
+		if code == http.StatusInternalServerError {
+			s.fail(w, err)
+			return
+		}
+		if err != nil {
+			writeErr(w, code, err.Error())
+			return
+		}
+		s.Logf("policy v%d (%d central policies) published for %s by %s", v, len(ps), p.Tenant, p.UserID)
+		s.audit(r, p, "policy.publish", fmt.Sprintf("v%d", v), map[string]any{"version": v, "comment": req.Comment,
+			"bytes": len(req.Body), "policies": len(ps), "unsupported": len(rep.Unsupported)})
+		writeJSON(w, http.StatusOK, map[string]any{"version": v, "report": rep})
 		return
 	}
 	if _, err := policy.Parse([]byte(req.Body)); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	v, err := s.Store.PutPolicy(r.Context(), p.Tenant, req.Body, req.Comment, p.UserID)
+	v, err := s.Store.PutPolicy(r.Context(), p.Tenant, req.Body, nil, req.Comment, p.UserID, time.Now().UTC().Truncate(time.Microsecond))
 	if err != nil {
 		s.fail(w, err)
 		return

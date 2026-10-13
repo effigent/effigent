@@ -33,6 +33,29 @@ Keep this file current when architecture, data model or deployment change.
    the built-in default applies. Local `PUT /policy` is refused while enrolled.
 4. Events are POSTed in batches to `/ep/v1/events` and stored in `cp.events`.
 
+**Central policies** (`internal/shared/policy`: rules for users / teams / agent types,
+allow / deny / require_approval) are compiled per machine by `internal/controlplane/compile`:
+- `PUT /api/v1/policy {"body": <base yaml>, "policies": [...]}` → `body` is the base every
+  machine starts from (agent detection, modes, alerts; its denies are a floor), `policies`
+  is stored in `cp.policy_versions.source`. Publish compiles for every endpoint and returns
+  `report.unsupported` (clause, reason, `hooks_only` / `observe_only` / `not_enforced`) and
+  what each machine gets. Omitting `policies` keeps the published ones; `[]` clears them.
+- A machine's identity is `owner` (user id or email) + `teams` on `cp.endpoints`, set with
+  `PATCH /api/v1/endpoints/{id}`; that republishes so endpoints refetch.
+  `GET /api/v1/endpoints/{id}/policy` previews the compiled body.
+- `GET /ep/v1/policy` compiles at serve time against the version's `created_at`
+  (deterministic); the signed document carries `endpoint`, and effigentd refuses a
+  document compiled for another machine.
+- Kernel mapping: binaries → exact `exec_deny` paths (a bare name expands over
+  `compile.ExecDirs`), `**/name` or absolute paths → `file_deny` suffixes (only when the
+  rule covers reads and writes), IPs/CIDRs → `network_deny`. `require_approval` → deny.
+  Arguments, tools, MCP, hostnames, ports, OS users, policy defaults and too-narrow
+  allows are reported, never silently dropped. Precedence comes from `policy.Evaluate`.
+- **Rollout order:** effigentd builds older than the `endpoint` field fail the signature
+  check on compiled documents and stay on their current version (fail closed, logged every
+  sync). Upgrade endpoints before a tenant's first central-policy publish. A machine whose
+  compile fails gets 422 and keeps its version; it shows as a lagging `policy_version`.
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -61,7 +84,7 @@ npm run -w @effigent/site build                     # site
 ## 5. Known limits (keep honest; the site's coverage matrix follows these)
 
 - Kernel blocking is per resolved binary path and file path suffix; argument-level rules alert only.
-- Network: outbound connects are reported, not blocked.
+- Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet). Hostnames are not blocked (`domain_deny` is refused).
 - macOS: no kernel enforcement (needs an Endpoint Security entitlement); observe only.
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.

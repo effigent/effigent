@@ -44,6 +44,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/enrollment-tokens", s.console(write, s.createEnrollmentToken))
 	mux.HandleFunc("GET /api/v1/endpoints", s.console(read, s.listEndpoints))
 	mux.HandleFunc("DELETE /api/v1/endpoints/{id}", s.console(write, s.revokeEndpoint))
+	mux.HandleFunc("PATCH /api/v1/endpoints/{id}", s.console(write, s.setEndpointOwner))
+	mux.HandleFunc("GET /api/v1/endpoints/{id}/policy", s.console(read, s.endpointCompiledPolicy))
 	mux.HandleFunc("GET /api/v1/policy", s.console(read, s.getPolicy))
 	mux.HandleFunc("PUT /api/v1/policy", s.console(write, s.putPolicy))
 	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))
@@ -58,7 +60,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		if s.ConsoleOrigin != "" && r.Header.Get("Origin") == s.ConsoleOrigin && strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Access-Control-Allow-Origin", s.ConsoleOrigin)
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Vary", "Origin")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

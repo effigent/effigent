@@ -143,6 +143,9 @@ func (c *Client) accept(ctx context.Context, d sign.Document, persist bool) erro
 	if err := sign.Verify(c.pub, c.State.Tenant, d); err != nil {
 		return err
 	}
+	if d.Endpoint != "" && d.Endpoint != c.State.EndpointID {
+		return fmt.Errorf("policy v%d was compiled for endpoint %s, this is %s", d.Version, d.Endpoint, c.State.EndpointID)
+	}
 	if d.Version <= c.current {
 		return fmt.Errorf("refusing policy v%d: already running v%d", d.Version, c.current)
 	}

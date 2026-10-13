@@ -122,3 +122,10 @@ func (t Target) matches(a action.Action) bool {
 		anyOf(t.MCPServers, func(p string) bool { return textMatch(p, a.MCPServer) }) &&
 		anyOf(t.MCPTools, func(p string) bool { return textMatch(p, a.MCPTool) })
 }
+
+// Matches reports whether the selector picks sub. The control plane's policy
+// compiler uses it to decide which rules apply to a machine.
+func (s Selector) Matches(sub Subject) bool { return s.matches(sub) }
+
+// Matches reports whether the target picks action a.
+func (t Target) Matches(a action.Action) bool { return t.matches(a) }

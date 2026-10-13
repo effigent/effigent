@@ -82,8 +82,19 @@ func (s *Server) endpointPolicy(w http.ResponseWriter, r *http.Request, ep store
 		s.fail(w, err)
 		return
 	}
-	doc := sign.Sign(s.Key, sign.Document{Tenant: ep.Tenant, Version: p.Version, IssuedAt: time.Now().UTC(), Body: p.Body})
-	writeJSON(w, http.StatusOK, doc)
+	body, out, err := compiledBody(p, ep)
+	if err != nil {
+		// Publish compiled for every machine; this one changed since (or
+		// enrolled later). It keeps its current policy until fixed.
+		s.Logf("policy v%d does not compile for endpoint %s: %v", p.Version, ep.ID, err)
+		writeErr(w, http.StatusUnprocessableEntity, "policy does not compile for this endpoint")
+		return
+	}
+	d := sign.Document{Tenant: ep.Tenant, Version: p.Version, IssuedAt: time.Now().UTC(), Body: body}
+	if out != nil {
+		d.Endpoint = ep.ID // compiled for this machine only
+	}
+	writeJSON(w, http.StatusOK, sign.Sign(s.Key, d))
 }
 
 func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endpoint) {
