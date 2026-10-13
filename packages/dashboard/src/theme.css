@@ -579,6 +579,12 @@ a.feed-body:hover .feed-title { color: var(--accent-2); }
 .callout svg { flex: none; color: var(--accent-2); margin-top: 1px; }
 .callout.warn { background: var(--gold-bg); border-color: var(--gold-line); }
 .callout.warn svg { color: var(--gold); }
+.callout.bad { background: var(--red-bg, rgba(251, 113, 133, 0.1)); border-color: var(--red-line, rgba(251, 113, 133, 0.35)); }
+.callout.bad svg { color: var(--red); }
+.api-banner { margin: 16px 30px 0; align-items: center; }
+.api-banner > span { flex: 1; }
+.policy-editor { width: 100%; min-height: 420px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; tab-size: 2; white-space: pre; }
+tr.revoked td { opacity: 0.55; }
 
 .coverage { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--inset); margin: 4px 20px 6px; }
 .coverage i { display: block; height: 100%; }
@@ -660,6 +666,7 @@ a.feed-body:hover .feed-title { color: var(--accent-2); }
   .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(4, 4, 8, 0.55); }
   .topbar { padding: 10px 16px; gap: 10px; }
   .content { padding: 18px 16px 36px; }
+  .api-banner { margin: 12px 16px 0; }
   .stat-row { grid-template-columns: 1fr; gap: 12px; }
   .user-text, .search-kbd { display: none; }
   .page-head h1 { font-size: 24px; }

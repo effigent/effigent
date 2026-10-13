@@ -5,7 +5,7 @@ import { AGENT_TYPES, FLOWS, resourceById, userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import type { AgentType, Env, Flow } from '@/types.ts';
 import { AgentGraph, EDGE_COLOR, Legend, visibleFlows } from './AgentGraph.tsx';
-import { AgentCell, Card, CardHead, Seg, UserCell } from './ui.tsx';
+import { AgentCell, Card, CardHead, DemoNote, Seg, UserCell } from './ui.tsx';
 
 function nodeName(id: string) {
   if (userById(id)) return <UserCell id={id} />;
@@ -62,7 +62,7 @@ export function GraphCard({ env }: { env: Env | null }) {
   return (
     <Card className={`graph-card ${full ? 'fullscreen' : ''}`}>
       <CardHead
-        title={<>Live Agent Graph <span className="live-chip"><span className="dot" /> Live</span></>}
+        title={<>Agent Graph <DemoNote title="The control plane does not serve the agent graph yet — this shows a demo dataset" /></>}
         sub="See how your AI agents connect, what they access, and where data flows."
       >
         <Seg value={view} onChange={setView} options={[{ id: 'graph', label: 'Graph' }, { id: 'list', label: 'List' }]} />

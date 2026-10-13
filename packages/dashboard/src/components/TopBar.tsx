@@ -3,8 +3,9 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AGENTS, AGENT_TYPES, USERS } from '@/data.ts';
+import { agentMeta } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
+import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { AgentGlyph } from './ui.tsx';
 
@@ -19,7 +20,7 @@ function useOutside(ref: React.RefObject<HTMLElement | null>, onOut: () => void)
 }
 
 function Search() {
-  const { policies, events } = useStore();
+  const { consoleEvents, endpointRows } = useLive();
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState(0);
@@ -42,23 +43,21 @@ function Search() {
     const s = q.trim().toLowerCase();
     if (!s) return [];
     const out: Hit[] = [];
-    const types = new Set(AGENTS.map((a) => a.type));
-    for (const t of types) {
-      const m = AGENT_TYPES[t];
+    const agents = new Map<string, number>();
+    for (const e of consoleEvents) if (e.agentType) agents.set(e.agentType, (agents.get(e.agentType) ?? 0) + 1);
+    for (const [t, n] of agents) {
+      const m = agentMeta(t);
       if (`${m.label} ${t} ${m.vendor}`.toLowerCase().includes(s))
-        out.push({ group: 'Agents', label: m.label, sub: `${AGENTS.filter((a) => a.type === t).length} instances · ${m.vendor}`, href: `/graph?agent=${t}`, icon: <AgentGlyph type={t} size={24} /> });
+        out.push({ group: 'Agents', label: m.label, sub: `${n} recent events · ${m.vendor}`, href: `/audit?q=${encodeURIComponent(t)}`, icon: <AgentGlyph type={t} size={24} /> });
     }
-    for (const p of policies)
-      if (`${p.name} ${p.description}`.toLowerCase().includes(s))
-        out.push({ group: 'Policies', label: p.name, sub: `${p.rules.length} rules · ${p.status}`, href: `/policies/${p.id}`, icon: <span className="hit-ic"><Ic n="shield" size={14} /></span> });
-    for (const u of USERS)
-      if (`${u.name} ${u.id} ${u.title} ${u.team}`.toLowerCase().includes(s))
-        out.push({ group: 'Users', label: u.name, sub: `${u.id} · ${u.title}`, href: `/identity?user=${u.id}`, icon: <span className="hit-ic"><Ic n="user" size={14} /></span> });
-    for (const e of events)
-      if (`${e.title} ${e.summary} ${e.target ?? ''}`.toLowerCase().includes(s))
-        out.push({ group: 'Actions', label: e.summary, sub: `${e.title} · ${e.ago}`, href: `/audit?q=${encodeURIComponent(e.summary)}`, icon: <span className="hit-ic"><Ic n="activity" size={14} /></span> });
+    for (const e of endpointRows)
+      if (`${e.hostname} ${e.id} ${e.os}`.toLowerCase().includes(s))
+        out.push({ group: 'Endpoints', label: e.hostname, sub: `${e.os} · ${e.status}`, href: `/enforcement?endpoint=${encodeURIComponent(e.id)}`, icon: <span className="hit-ic"><Ic n={e.platform === 'linux' ? 'server' : 'laptop'} size={14} /></span> });
+    for (const e of consoleEvents)
+      if (`${e.title} ${e.summary} ${e.target ?? ''} ${e.rule ?? ''}`.toLowerCase().includes(s))
+        out.push({ group: 'Events', label: e.summary, sub: `${e.title} · ${e.endpointName ?? ''} · ${e.ago}`, href: `/audit?q=${encodeURIComponent(e.target ?? e.summary)}`, icon: <span className="hit-ic"><Ic n="activity" size={14} /></span> });
     return out.slice(0, 12);
-  }, [q, policies, events]);
+  }, [q, consoleEvents, endpointRows]);
 
   const go = (h: Hit) => { setOpen(false); setQ(''); router.push(h.href); };
 
@@ -68,7 +67,7 @@ function Search() {
       <input
         ref={input}
         value={q}
-        placeholder="Search agents, policies, users, or actions…"
+        placeholder="Search agents, endpoints, or events…"
         aria-label="Search"
         onChange={(e) => { setQ(e.target.value); setOpen(true); setSel(0); }}
         onFocus={() => setOpen(true)}
@@ -111,12 +110,12 @@ function Bell() {
       </button>
       {open && (
         <div className="pop bell-pop">
-          <div className="pop-head">Pending approvals</div>
+          <div className="pop-head">Pending approvals <span className="muted" style={{ fontWeight: 400 }}>· demo</span></div>
           {pending.length === 0 && <div className="search-none">Nothing waiting on you.</div>}
           {pending.slice(0, 5).map((a) => (
             <Link key={a.id} href={`/approvals?id=${a.id}`} className="pop-row" onClick={() => setOpen(false)}>
               <AgentGlyph type={a.agentType} size={26} />
-              <span><span className="cell-main">{a.title}</span><span className="cell-sub">{AGENT_TYPES[a.agentType].label} · {a.user} · {a.requestedAgo}</span></span>
+              <span><span className="cell-main">{a.title}</span><span className="cell-sub">{agentMeta(a.agentType).label} · {a.user} · {a.requestedAgo}</span></span>
             </Link>
           ))}
           <Link href="/approvals" className="pop-foot" onClick={() => setOpen(false)}>Open approvals <Ic n="arrowRight" size={13} /></Link>

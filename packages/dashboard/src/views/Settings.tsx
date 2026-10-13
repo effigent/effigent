@@ -1,10 +1,14 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { Ic } from '@/icons.tsx';
-import { useStore } from '@/store.tsx';
+import { useLive } from '@/live.tsx';
+import { API_BASE } from '@/lib/api.ts';
 import { Storage } from '@/components/Storage.tsx';
 import { Card, CardHead, DemoNote, PageHead } from '@/components/ui.tsx';
+
+const NOT_STORED = 'These preferences are not stored by the control plane yet — changes here are not saved';
 
 function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return <button role="switch" aria-checked={on} aria-label={label} className={`switch ${on ? 'on' : ''}`} onClick={() => onChange(!on)} />;
@@ -20,24 +24,22 @@ function Row({ title, desc, children }: { title: string; desc: string; children:
 }
 
 export function Settings({ dev }: { dev: boolean }) {
-  const { dispatch } = useStore();
+  const { me, canWrite, fixture } = useLive();
   const [s, setS] = useState({
     expiry: '15', twoApprovers: true, slack: true, channel: '#agent-approvals', selfApprove: false,
     failClosed: true, unknownMode: 'monitor', orphanMcp: true, redact: true, retention: '365',
   });
   const set = <K extends keyof typeof s>(k: K, v: (typeof s)[K]) => setS({ ...s, [k]: v });
-  const [revealed, setRevealed] = useState(false);
 
   return (
     <div className="page">
       <PageHead title="Settings" sub="Workspace defaults for approvals, enforcement, data and endpoint enrollment.">
-        <DemoNote />
-        <button className="btn primary" onClick={() => dispatch({ t: 'toast', text: 'Settings saved' })}><Ic n="check" /> Save changes</button>
+        <button className="btn primary" disabled title={NOT_STORED}><Ic n="check" /> Save changes</button>
       </PageHead>
 
       <div className="grid-2">
         <Card>
-          <CardHead title="Approvals" sub="How paused actions reach people, and how long agents wait." />
+          <CardHead title="Approvals" sub="How paused actions reach people, and how long agents wait."><DemoNote title={NOT_STORED} /></CardHead>
           <Row title="Request expiry" desc="After this, the paused action is denied and the agent continues.">
             <select className="select" style={{ width: 130 }} value={s.expiry} onChange={(e) => set('expiry', e.target.value)} aria-label="Request expiry">
               <option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option>
@@ -58,7 +60,7 @@ export function Settings({ dev }: { dev: boolean }) {
         </Card>
 
         <Card>
-          <CardHead title="Enforcement defaults" sub="Applied by effigentd when no policy says otherwise." />
+          <CardHead title="Enforcement defaults" sub="Applied by effigentd when no policy says otherwise."><DemoNote title={NOT_STORED} /></CardHead>
           <Row title="Fail closed" desc="Start an agent only once the kernel policy for its pid is confirmed live.">
             <Switch on={s.failClosed} onChange={(v) => set('failClosed', v)} label="Fail closed" />
           </Row>
@@ -76,21 +78,23 @@ export function Settings({ dev }: { dev: boolean }) {
         </Card>
 
         <Card>
-          <CardHead title="Endpoint enrollment" sub="effigentd enrolls with this token; rotate it if it leaks." />
-          <Row title="Enrollment token" desc="Used once per endpoint; existing endpoints keep working after rotation.">
-            <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <code className="mono-chip" style={{ color: 'var(--txt-2)' }}>{revealed ? 'eff_enr_7c41d0a9b3e2f6a1' : 'eff_enr_••••••••••••f6a1'}</code>
-              <button className="btn sm" onClick={() => setRevealed((r) => !r)}><Ic n="eye" /> {revealed ? 'Hide' : 'Reveal'}</button>
-              <button className="btn sm" onClick={() => dispatch({ t: 'toast', text: 'Enrollment token rotated' })}><Ic n="rotate" /> Rotate</button>
-            </span>
+          <CardHead title="Workspace & access" sub="What the control plane decided from your Clerk session — the active organization is the workspace." />
+          <Row title="Workspace" desc={me?.tenant.startsWith('user:') ? 'Personal workspace — switch organization in the top bar to manage a team.' : 'Your active Clerk organization.'}>
+            <code className="mono-chip" style={{ color: 'var(--txt-2)' }}>{me?.tenant ?? '…'}</code>
           </Row>
-          <Row title="Policy API" desc="effigentd refuses policy writes unless started with EFFIGENT_API_TOKEN.">
-            <span className="badge b-green">Token required</span>
+          <Row title="Your role" desc="Org admins and security admins can publish policy, revoke endpoints and enroll machines; everyone else is view-only.">
+            {me ? <span className={`badge ${canWrite ? 'b-green' : 'b-muted'}`}>{me.role || 'member'} · {canWrite ? 'can change' : 'view only'}</span> : <span className="muted">…</span>}
+          </Row>
+          <Row title="Endpoint enrollment" desc="One-time tokens (expiry + max uses), exchanged by effigentd for its own secret.">
+            <Link className="btn sm" href="/enforcement"><Ic n="key" /> Enroll an endpoint</Link>
+          </Row>
+          <Row title="Control plane" desc="Signed policy distribution and event collection.">
+            <code className="mono-chip" style={{ color: 'var(--txt-2)' }}>{fixture ? 'local fixture (dev)' : API_BASE}</code>
           </Row>
         </Card>
 
         <Card>
-          <CardHead title="Data" sub="Audit trail retention for this workspace." />
+          <CardHead title="Data" sub="Audit trail retention for this workspace."><DemoNote title={NOT_STORED} /></CardHead>
           <Row title="Retention" desc="Events, decisions and policy versions.">
             <select className="select" style={{ width: 130 }} value={s.retention} onChange={(e) => set('retention', e.target.value)} aria-label="Retention">
               <option value="90">90 days</option><option value="365">1 year</option><option value="730">2 years</option>

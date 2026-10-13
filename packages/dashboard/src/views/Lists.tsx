@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
@@ -57,6 +58,11 @@ export function Lists({ initialList }: { initialList?: string }) {
           { id: 'deny', label: <>Denylist · {lists.filter((e) => e.list === 'deny').length}</> },
         ]} />
       </PageHead>
+
+      <div className="callout warn" style={{ margin: 0 }}><Ic n="layers" size={16} /><span>
+        The lists your endpoints actually enforce — <code>exec_deny</code>, <code>exec_allow</code>, <code>file_deny</code>, <code>file_alert</code>, <code>network_deny</code>, <code>network_allow</code> — live in the workspace policy.
+        Edit and publish them on <Link href="/policies" style={{ textDecoration: 'underline' }}>Policies</Link>. Shared org-wide lists below are a preview and are not sent to endpoints.
+      </span></div>
 
       <div className="toolbar">
         <div className="chips">

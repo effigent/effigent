@@ -13,7 +13,7 @@ export type ActionClass = 'exec' | 'file_read' | 'file_write' | 'network' | 'mcp
 
 /** event.Type (+ `approval`, a control-plane event) */
 export type EventType =
-  | 'agent_start' | 'agent_exit' | 'exec' | 'file_open' | 'connect'
+  | 'agent_start' | 'agent_exit' | 'exec' | 'exit' | 'file_open' | 'connect'
   | 'blocked' | 'would_block' | 'policy' | 'approval';
 
 /** event.Event.Severity */
@@ -92,16 +92,20 @@ export interface Action {
 
 export interface ConsoleEvent {
   id: string;
+  at?: number; // epoch ms (control-plane events; demo rows only have pre-rendered strings)
   time: string; // HH:MM
   ago: string;
   type: EventType;
   severity: Severity;
   outcome: Outcome;
   title: string;
-  agentType: AgentType | null;
+  /** effigentd agent name; usually an AgentType, but a tenant's policy can define more (e.g. hermes). */
+  agentType: string | null;
   user: string | null;
   endpoint: string | null;
-  env: Env;
+  endpointName?: string; // hostname, when the event came from the control plane
+  /** Environments are a demo concept; control-plane events carry none. */
+  env: Env | null;
   summary: string; // e.g. "exec: curl"
   target?: string;
   rule?: string; // policy rule that matched

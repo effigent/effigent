@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { CodeBlock } from './ui.tsx';
 
 interface StorageState {
   migrated: boolean;
@@ -18,22 +19,6 @@ interface StorageState {
 
 interface ByoForm {
   bucket: string; region: string; roleArn: string; externalId: string; kmsKey: string; prefix: string;
-}
-
-function CodeBlock({ code, wrap }: { code: string; wrap?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard?.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    });
-  };
-  return (
-    <div className="code">
-      <button className="code-copy" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
-      <pre className={wrap ? 'wrap' : undefined}>{code}</pre>
-    </div>
-  );
 }
 
 const MODE_LABEL: Record<string, string> = {

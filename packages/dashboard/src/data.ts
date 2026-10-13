@@ -18,6 +18,16 @@ export const AGENT_TYPES: Record<AgentType, { label: string; vendor: string; kin
   goose: { label: 'Goose', vendor: 'Block', kind: 'Software Engineer', color: '#fbbf24', icon: 'feather' },
 };
 
+export type AgentMeta = (typeof AGENT_TYPES)[AgentType];
+
+/** Display metadata for any agent name effigentd reports — tenants can define
+ *  agents beyond the built-in list (policy `agents:`), so never index AGENT_TYPES blindly. */
+export function agentMeta(name: string | null | undefined): AgentMeta {
+  if (name && name in AGENT_TYPES) return AGENT_TYPES[name as AgentType];
+  const label = !name ? 'Unknown agent' : name.startsWith('mcp:') ? `MCP ${name.slice(4)}` : name.replace(/(^|[-_])(\w)/g, (_, s, c) => (s ? ' ' : '') + c.toUpperCase());
+  return { label, vendor: 'Custom', kind: name?.startsWith('mcp:') ? 'MCP server' : 'Agent', color: '#94a3b8', icon: 'cube' };
+}
+
 export const ENVS: { id: Env; label: string; short: string; color: string }[] = [
   { id: 'production', label: 'Production', short: 'Prod', color: 'var(--green)' },
   { id: 'staging', label: 'Staging', short: 'Staging', color: 'var(--blue)' },

@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Ic } from '@/icons.tsx';
-import { AGENT_TYPES, envMeta, MODES, userById } from '@/data.ts';
-import type { AgentType, ApprovalState, Env, Mode, Outcome, RuleEffect } from '@/types.ts';
+import { agentMeta, envMeta, MODES, userById } from '@/data.ts';
+import type { ApprovalState, Env, Mode, Outcome, RuleEffect } from '@/types.ts';
 
 const OUTCOME: Record<Outcome, { label: string; cls: string }> = {
   allowed: { label: 'Allowed', cls: 'b-green' },
@@ -42,8 +42,8 @@ export function EffectPill({ effect }: { effect: RuleEffect }) {
   return <span className={`badge ${e.cls}`}>{e.label}</span>;
 }
 
-export function StatusPill({ status }: { status: 'active' | 'idle' | 'offline' | 'online' | 'degraded' | 'draft' | 'disabled' }) {
-  const cls = { active: 'b-green', online: 'b-green', idle: 'b-muted', offline: 'b-red', degraded: 'b-gold', draft: 'b-muted', disabled: 'b-muted' }[status];
+export function StatusPill({ status }: { status: 'active' | 'idle' | 'offline' | 'online' | 'degraded' | 'draft' | 'disabled' | 'revoked' }) {
+  const cls = { active: 'b-green', online: 'b-green', idle: 'b-muted', offline: 'b-red', degraded: 'b-gold', draft: 'b-muted', disabled: 'b-muted', revoked: 'b-muted' }[status];
   return <span className={`badge ${cls}`}>{status[0].toUpperCase() + status.slice(1)}</span>;
 }
 
@@ -55,14 +55,15 @@ export function RiskTag({ risk }: { risk: 'low' | 'medium' | 'high' }) {
   return <span className={`risk risk-${risk}`}>{risk}</span>;
 }
 
-export function EnvTag({ env }: { env: Env }) {
+export function EnvTag({ env }: { env: Env | null }) {
+  if (!env) return <span className="muted">—</span>;
   const m = envMeta(env);
   return <span className="env-tag"><span className="env-dot" style={{ background: m.color }} />{m.short}</span>;
 }
 
 // tip: true shows the agent's name on hover/focus; a string is appended after it as detail.
-export function AgentGlyph({ type, size = 30, tip }: { type: AgentType; size?: number; tip?: boolean | string }) {
-  const m = AGENT_TYPES[type];
+export function AgentGlyph({ type, size = 30, tip }: { type: string; size?: number; tip?: boolean | string }) {
+  const m = agentMeta(type);
   const label = tip ? (typeof tip === 'string' ? `${m.label} · ${tip}` : m.label) : undefined;
   return (
     <span className={`agent-glyph${label ? ' has-tip' : ''}`} data-tip={label} aria-label={label} role={label ? 'img' : undefined} tabIndex={label ? 0 : undefined}
@@ -72,8 +73,8 @@ export function AgentGlyph({ type, size = 30, tip }: { type: AgentType; size?: n
   );
 }
 
-export function AgentCell({ type, sub }: { type: AgentType; sub?: string }) {
-  const m = AGENT_TYPES[type];
+export function AgentCell({ type, sub }: { type: string; sub?: string }) {
+  const m = agentMeta(type);
   return (
     <span className="agent-cell">
       <AgentGlyph type={type} />
@@ -156,10 +157,40 @@ export function Empty({ icon = 'checkCircle', title, sub }: { icon?: string; tit
   );
 }
 
-export function DemoNote() {
+export function DemoNote({ title = 'Not served by the control plane yet — this shows a demo dataset' }: { title?: string }) {
   return (
-    <span className="demo-chip" title="This console renders a demo dataset until the control-plane API is connected">
+    <span className="demo-chip" title={title}>
       <Ic n="eye" size={12} /> Demo data
+    </span>
+  );
+}
+
+export function CodeBlock({ code, wrap }: { code: string; wrap?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    });
+  };
+  return (
+    <div className="code">
+      <button className="code-copy" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+      <pre className={wrap ? 'wrap' : undefined}>{code}</pre>
+    </div>
+  );
+}
+
+/** Placeholder rows while the first control-plane load is in flight. */
+export function Loading({ label = 'Loading from the control plane…' }: { label?: string }) {
+  return <div className="empty"><Ic n="rotate" size={20} /><div className="empty-sub">{label}</div></div>;
+}
+
+/** Shown in place of a write control for roles the server treats as read-only. */
+export function ReadOnlyNote({ what = 'change this' }: { what?: string }) {
+  return (
+    <span className="badge b-muted" title="Org admins and security admins can make changes; every other member is read-only.">
+      <Ic n="lock" size={12} /> View only — ask an admin to {what}
     </span>
   );
 }

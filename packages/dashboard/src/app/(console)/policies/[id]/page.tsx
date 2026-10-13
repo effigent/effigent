@@ -1,9 +1,7 @@
-import type { Metadata } from 'next';
-import { PolicyDetail } from '@/views/PolicyDetail.tsx';
+import { redirect } from 'next/navigation';
 
-export const metadata: Metadata = { title: 'Policy' };
-
-export default async function PolicyPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  return <PolicyDetail id={decodeURIComponent(id)} />;
+// The control plane serves one versioned endpoint policy per workspace, so
+// there are no per-policy pages any more; old links land on the editor.
+export default function PolicyPage() {
+  redirect('/policies');
 }

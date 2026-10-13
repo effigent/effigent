@@ -1,14 +1,16 @@
 'use client';
 
 /**
- * Console state (demo). One client store shared by every page under the
- * shell, so an approval decided on the Overview is gone from /approvals and
- * the bell. Seeded from `data.ts`; when the control-plane API lands, these
- * reducers become optimistic updates in front of its calls.
+ * Client UI state shared by every page under the shell: the time range, the
+ * environment filter, the toast, the signed-in viewer — plus the features the
+ * control plane does not serve yet (approvals, multi-policy rules, allow/deny
+ * lists), which stay on the demo dataset in `data.ts`. Everything the API does
+ * serve (endpoints, events, the endpoint policy, the audit trail) lives in
+ * `live.tsx`.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react';
-import { APPROVALS, EVENTS, LIST_ENTRIES, LIVE_STREAM, POLICIES } from './data.ts';
-import type { Approval, ConsoleEvent, Env, ListEntry, Policy, PolicyRule } from './types.ts';
+import { APPROVALS, LIST_ENTRIES, POLICIES } from './data.ts';
+import type { Approval, Env, ListEntry, Policy, PolicyRule } from './types.ts';
 
 export type Range = '1h' | '24h' | '7d' | '30d';
 export const RANGES: { id: Range; label: string }[] = [
@@ -24,11 +26,9 @@ interface State {
   approvals: Approval[];
   policies: Policy[];
   lists: ListEntry[];
-  events: ConsoleEvent[];
   env: Env | null;
   range: Range;
   viewer: Viewer;
-  updatedSec: number; // seconds since the last live event (drives "Last updated")
   toast: string | null;
 }
 
@@ -43,8 +43,6 @@ type Act =
   | { t: 'env'; env: Env | null }
   | { t: 'range'; range: Range }
   | { t: 'viewer'; viewer: Viewer }
-  | { t: 'live'; ev: ConsoleEvent }
-  | { t: 'tick' }
   | { t: 'toast'; text: string | null };
 
 function reducer(s: State, a: Act): State {
@@ -53,17 +51,10 @@ function reducer(s: State, a: Act): State {
       const ap = s.approvals.find((x) => x.id === a.id);
       if (!ap || ap.state !== 'approval_pending') return s;
       const approved = a.decision === 'approved';
-      const ev: ConsoleEvent = {
-        id: `ev-${a.id}`, time: 'now', ago: 'just now', type: 'approval', severity: 'medium',
-        outcome: approved ? 'allowed' : 'blocked', title: approved ? 'Approval granted' : 'Approval denied',
-        agentType: ap.agentType, user: ap.user, endpoint: ap.endpoint, env: ap.env,
-        summary: `${approved ? 'approved' : 'denied'}: ${ap.title.toLowerCase()}`, target: ap.fingerprint,
-      };
       return {
         ...s,
         approvals: s.approvals.map((x) =>
           x.id === a.id ? { ...x, state: a.decision, decidedBy: s.viewer.name, decidedAgo: 'just now', note: a.note || x.note } : x),
-        events: [ev, ...s.events],
         toast: `${approved ? 'Approved' : 'Denied'} — ${ap.title}`,
       };
     }
@@ -85,10 +76,6 @@ function reducer(s: State, a: Act): State {
       return { ...s, range: a.range };
     case 'viewer':
       return { ...s, viewer: a.viewer };
-    case 'live':
-      return { ...s, events: [a.ev, ...s.events].slice(0, 60), updatedSec: 0 };
-    case 'tick':
-      return { ...s, updatedSec: s.updatedSec + 15 };
     case 'toast':
       return { ...s, toast: a.text };
   }
@@ -98,11 +85,9 @@ const initial: State = {
   approvals: APPROVALS,
   policies: POLICIES,
   lists: LIST_ENTRIES,
-  events: EVENTS,
   env: null,
   range: '24h',
   viewer: { name: 'Jane Doe', role: 'Admin', initials: 'JD' },
-  updatedSec: 120,
   toast: null,
 };
 
@@ -110,30 +95,14 @@ interface Store extends State {
   dispatch: (a: Act) => void;
   pending: Approval[];
   decide: (id: string, decision: 'approved' | 'approval_denied', note?: string) => void;
-  inEnv: (env: Env) => boolean;
+  /** Demo rows carry an environment; control-plane data has none, so it always passes. */
+  inEnv: (env: Env | null) => boolean;
 }
 
 const Ctx = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [s, dispatch] = useReducer(reducer, initial);
-
-  // Demo "live" feed: a new endpoint event every 15s while the console is open.
-  useEffect(() => {
-    let i = 0;
-    const id = setInterval(() => {
-      if (i < LIVE_STREAM.length * 3 && i % 2 === 1) {
-        const base = LIVE_STREAM[Math.floor(i / 2) % LIVE_STREAM.length];
-        const d = new Date();
-        const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        dispatch({ t: 'live', ev: { ...base, id: `ev-live-${i}`, time, ago: 'just now' } });
-      } else {
-        dispatch({ t: 'tick' });
-      }
-      i++;
-    }, 15000);
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     if (!s.toast) return;
@@ -150,7 +119,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch,
     decide,
     pending: s.approvals.filter((a) => a.state === 'approval_pending'),
-    inEnv: (env: Env) => s.env === null || s.env === env,
+    inEnv: (env: Env | null) => env === null || s.env === null || s.env === env,
   }), [s, decide]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -160,10 +129,4 @@ export function useStore(): Store {
   const v = useContext(Ctx);
   if (!v) throw new Error('useStore outside <StoreProvider>');
   return v;
-}
-
-export function agoLabel(sec: number): string {
-  if (sec < 30) return 'just now';
-  if (sec < 90) return '1 min ago';
-  return `${Math.round(sec / 60)} min ago`;
 }
