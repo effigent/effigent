@@ -28,17 +28,21 @@ export const ROUTINE_COMMANDS: readonly string[] = [
   // read-only and everyday git
   'git status', 'git log', 'git diff', 'git show', 'git branch', 'git rev-parse', 'git remote', 'git ls-files',
   'git blame', 'git fetch', 'git add', 'git stash', 'git describe', 'git tag', 'git config',
+  // everyday agent workflow: committing, branching, shipping
+  'git commit', 'git push', 'git pull', 'git checkout', 'git switch', 'git merge', 'git restore', 'git worktree',
+  'git cherry-pick', 'gh', 'vercel',
 ];
 
 export const RISKY_COMMANDS: readonly string[] = [
   'rm', 'rmdir', 'chmod', 'chown', 'sudo', 'su', 'curl', 'wget', 'ssh', 'scp', 'sftp', 'rsync', 'nc', 'ncat', 'socat',
   'telnet', 'dd', 'mkfs', 'kill', 'pkill', 'killall', 'crontab', 'launchctl', 'systemctl', 'docker', 'kubectl',
-  'git push', 'npm publish', 'npm install', 'npm i', 'pip install', 'pip3 install',
+  'npm publish', 'npm install', 'npm i', 'pip install', 'pip3 install',
 ];
 
 /** A routine program stops being routine when one of these flags appears (find -delete is not housekeeping). */
 export const ROUTINE_UNLESS: Readonly<Record<string, readonly string[]>> = {
   find: ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls'],
+  git: ['--force', '-f', '--force-with-lease', '--mirror'],
 };
 
 /** Shell syntax words: not programs. Leading ones (do, then…) are skipped; segments made only of them are dropped. */
@@ -70,9 +74,26 @@ export interface CommandSegment {
   redirects: boolean;
 }
 
+/** Drop here-document bodies (`cat <<'EOF' … EOF`): their lines are input, not commands. */
+function stripHeredocs(cmd: string): string {
+  if (!cmd.includes('<<')) return cmd;
+  const lines = cmd.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]);
+    const ends = [...lines[i].matchAll(/<<(-?)\s*(['"]?)([\w.-]+)\2/g)].filter((m) => !m[0].startsWith('<<<'));
+    for (const m of ends) {
+      while (i + 1 < lines.length && (m[1] ? lines[i + 1].trim() : lines[i + 1]) !== m[3]) i++;
+      i++; // the delimiter line
+    }
+  }
+  return out.join('\n');
+}
+
 /** Split on shell operators (&&, ||, ;, |, &, newline, $( and backticks) outside
  *  quotes. Returns each part, plus the same part with quoted text blanked out. */
 function splitShell(cmd: string): { text: string; bare: string }[] {
+  cmd = stripHeredocs(cmd);
   const out: { text: string; bare: string }[] = [];
   let text = '', bare = '', q: string | null = null;
   const push = () => {
