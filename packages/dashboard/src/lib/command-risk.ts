@@ -169,6 +169,13 @@ function match(rules: Rule[], s: CommandSegment): Rule | undefined {
   });
 }
 
+/** One simple command is routine: on the list, writes no file, and no "unless" flag (find -delete, sed -i). */
+function isRoutineSegment(s: CommandSegment): boolean {
+  const unless = ROUTINE_UNLESS[s.program];
+  return !!match(ROUTINE, s) && !s.redirects &&
+    !(unless && s.args.some((a) => unless.includes(a) || (s.program === 'sed' && /^-[a-zA-Z]*i/.test(a))));
+}
+
 export interface CommandClass {
   risk: CommandRisk;
   /** The list entry that made it risky ("curl", "git push", "sudo"). */
@@ -187,11 +194,7 @@ export function classifyCommand(cmd: string): CommandClass {
     }
     const risky = match(RISKY, s);
     if (risky) return { risk: 'risky', rule: risky.entry };
-    if (routine) {
-      const unless = ROUTINE_UNLESS[s.program];
-      routine = !!match(ROUTINE, s) && !s.redirects &&
-        !(unless && s.args.some((a) => unless.includes(a) || (s.program === 'sed' && /^-[a-zA-Z]*i/.test(a))));
-    }
+    if (routine) routine = isRoutineSegment(s);
   }
   return { risk: routine ? 'routine' : 'normal' };
 }
@@ -202,6 +205,19 @@ export function commandLabel(cmd: string): string {
   // A risky line is named after what made it risky ("ls && curl x" → "curl").
   const cls = classifyCommand(cmd);
   if (cls.risk === 'risky' && cls.rule) return cls.rule;
+  // A normal line is named after its first non-routine part, not its harmless
+  // lead-in ("git add -A && git commit" → "git commit", "mkdir x && npm run b" → "npm run").
+  if (cls.risk === 'normal') {
+    const s = commandSegments(cmd).find((seg) => !isRoutineSegment(seg));
+    if (s) {
+      // A routine tool that writes is labelled as a write: "cat >", "sed -i".
+      if (match(ROUTINE, s)) {
+        if (s.program === 'sed' && s.args.some((a) => /^-[a-zA-Z]*i/.test(a) || a === '--in-place')) return 'sed -i';
+        if (s.redirects) return `${s.program} >`;
+      }
+      return s.sub && BY_SUBCOMMAND.has(s.program) ? `${s.program} ${s.sub}` : s.program;
+    }
+  }
   const prog = programName(cmd);
   const seg = commandSegments(cmd).find((s) => s.program === prog);
   return seg?.sub && BY_SUBCOMMAND.has(prog) ? `${prog} ${seg.sub}` : prog;
