@@ -137,12 +137,28 @@ agents:
       </DocSection>
 
       <DocSection>
-        <H2 n={7}>Close the startup gap (optional)</H2>
+        <H2 n={7}>Close the startup gap</H2>
         <p className="doc-p">
           When effigentd spots an agent starting on its own, loading that agent&apos;s rules into the kernel takes under a second. To enforce from the agent&apos;s very first instruction, start it through effigentd. It waits until the kernel confirms the rules are live, then becomes the agent:
         </p>
         <CodeBlock title="sh — developer">{`effigentd run --agent claude-code -- claude
 effigentd run --agent claude-code --strict -- claude   # refuse to start if enforcement can't be confirmed`}</CodeBlock>
+        <p className="doc-p" style={{ marginTop: 14 }}>
+          To make it mandatory for your organization, set <code>require_launcher: true</code> in the policy, for all agents under <code>defaults</code> or for one agent. An agent started any other way is stopped right away and the developer sees the command to use instead; the attempt shows up as a <code>blocked</code> event. Each organization decides for itself: leave it out and agents can start normally.
+        </p>
+        <CodeBlock title="policy.yaml">{`defaults:
+  mode: denylist
+  require_launcher: true      # every agent must start via effigentd run
+
+agents:
+  - name: aider
+    binary_names: [aider]
+    require_launcher: false   # except this one`}</CodeBlock>
+        <div style={{ height: 12 }} />
+        <CodeBlock title="what the developer sees">{`$ claude
+Killed
+# event: blocked · claude-code · agent started without effigentd run;
+#        this organization requires: effigentd run --agent claude-code -- <command>`}</CodeBlock>
       </DocSection>
 
       <DocSection>

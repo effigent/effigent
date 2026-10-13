@@ -141,10 +141,10 @@ func (r Rule) check() error {
 	default:
 		return fmt.Errorf("unknown mode %q", r.Mode)
 	}
-	for _, d := range r.DomainDeny {
-		if !domainRE.MatchString(d) {
-			return fmt.Errorf("domain %q: use a hostname like pastebin.com (no scheme, path or wildcard)", d)
-		}
+	if len(r.DomainDeny) > 0 {
+		// Not enforced yet. Refuse it rather than let a policy look stricter
+		// than what the kernel actually applies.
+		return fmt.Errorf("domain_deny is not supported yet; block the destination IPs/CIDRs with network_deny or allow only known destinations with network_allow")
 	}
 	for _, list := range [][]string{r.NetDeny, r.NetAllow} {
 		for _, c := range list {
@@ -162,8 +162,6 @@ func (r Rule) check() error {
 	}
 	return nil
 }
-
-var domainRE = regexp.MustCompile(`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
 // Launcher reports whether the rule requires agents to start via `effigentd run`.
 func (r Rule) Launcher() bool { return r.RequireLauncher != nil && *r.RequireLauncher }
