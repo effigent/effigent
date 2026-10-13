@@ -39,8 +39,19 @@ func (s *Store) Close() { s.db.Close() }
 
 // Migrate applies embedded migrations once each, tracked in cp.schema_migrations.
 func (s *Store) Migrate(ctx context.Context) error {
-	if _, err := s.db.Exec(ctx, `create schema if not exists cp;
-		create table if not exists cp.schema_migrations (name text primary key, applied_at timestamptz not null default now())`); err != nil {
+	// Only create the schema when it's missing: in production the control
+	// plane's role owns schema cp but may not create schemas in the database,
+	// and Postgres checks that permission even for "if not exists".
+	var haveSchema bool
+	if err := s.db.QueryRow(ctx, `select exists(select 1 from pg_namespace where nspname = 'cp')`).Scan(&haveSchema); err != nil {
+		return err
+	}
+	if !haveSchema {
+		if _, err := s.db.Exec(ctx, `create schema cp`); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.Exec(ctx, `create table if not exists cp.schema_migrations (name text primary key, applied_at timestamptz not null default now())`); err != nil {
 		return err
 	}
 	ents, err := migrations.ReadDir("migrations")
