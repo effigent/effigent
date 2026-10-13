@@ -45,6 +45,12 @@ type Rule struct {
 	// blocks every destination outside it (loopback is always allowed).
 	NetDeny  []string `yaml:"network_deny,omitempty" json:"network_deny"`
 	NetAllow []string `yaml:"network_allow,omitempty" json:"network_allow"`
+	// DomainDeny blocks connections to these hostnames: effigentd resolves
+	// them continuously and blocks every IP they resolve to.
+	DomainDeny []string `yaml:"domain_deny,omitempty" json:"domain_deny"`
+	// RequireLauncher stops agents that were not started with `effigentd run`
+	// (which guarantees enforcement from the agent's first instruction).
+	RequireLauncher *bool `yaml:"require_launcher,omitempty" json:"require_launcher"`
 }
 
 type Agent struct {
@@ -135,6 +141,11 @@ func (r Rule) check() error {
 	default:
 		return fmt.Errorf("unknown mode %q", r.Mode)
 	}
+	for _, d := range r.DomainDeny {
+		if !domainRE.MatchString(d) {
+			return fmt.Errorf("domain %q: use a hostname like pastebin.com (no scheme, path or wildcard)", d)
+		}
+	}
 	for _, list := range [][]string{r.NetDeny, r.NetAllow} {
 		for _, c := range list {
 			if _, err := ParseCIDR(c); err != nil {
@@ -151,6 +162,11 @@ func (r Rule) check() error {
 	}
 	return nil
 }
+
+var domainRE = regexp.MustCompile(`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+
+// Launcher reports whether the rule requires agents to start via `effigentd run`.
+func (r Rule) Launcher() bool { return r.RequireLauncher != nil && *r.RequireLauncher }
 
 // ParseCIDR accepts "1.2.3.4", "10.0.0.0/8" or IPv6 forms and returns the
 // canonical CIDR the kernel matcher expects.
@@ -195,6 +211,12 @@ func (p *Policy) RuleFor(agent string) Rule {
 		}
 		if a.NetAllow != nil {
 			r.NetAllow = a.NetAllow
+		}
+		if a.DomainDeny != nil {
+			r.DomainDeny = a.DomainDeny
+		}
+		if a.RequireLauncher != nil {
+			r.RequireLauncher = a.RequireLauncher
 		}
 		if a.Network != nil {
 			r.Network = a.Network

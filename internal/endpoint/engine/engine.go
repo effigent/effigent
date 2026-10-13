@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/event"
@@ -43,6 +44,7 @@ type Root struct {
 	Policies  []string    `json:"policies,omitempty"` // loaded kernel policies
 	Started   time.Time   `json:"started"`
 	Orphan    bool        `json:"orphan_mcp,omitempty"`
+	Launched  bool        `json:"launched,omitempty"` // started through `effigentd run`
 }
 
 type Engine struct {
@@ -60,6 +62,11 @@ type Engine struct {
 	recent   map[string]time.Time      // dedup of repeated kernel events
 	gen      uint64
 }
+
+// stop ends a process. A variable so tests and non-Linux builds can replace it.
+var stopProcess = func(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) }
+
+func (e *Engine) stop(pid int) error { return stopProcess(pid) }
 
 func New(pol *policy.Policy, raw []byte, enf Enforcer, emit func(event.Event), logf func(string, ...any), verbose bool) *Engine {
 	return &Engine{
@@ -155,6 +162,7 @@ func (e *Engine) onExec(ctx context.Context, r event.Raw) {
 	}
 
 	name, orphan := launcherAgent(r.Process.Binary, r.Process.Args), false
+	launched := name != ""
 	if name == "" {
 		name = pol.MatchAgent(r.Process.Binary, r.Process.Args)
 	}
@@ -171,7 +179,7 @@ func (e *Engine) onExec(ctx context.Context, r event.Raw) {
 	}
 	e.track(ctx, &Root{
 		Agent: name, PID: r.Process.PID, ExecID: r.Process.ExecID, Binary: r.Process.Binary,
-		Args: r.Process.Args, Container: r.Container, Started: r.Time, Orphan: orphan,
+		Args: r.Process.Args, Container: r.Container, Started: r.Time, Orphan: orphan, Launched: launched,
 	}, r)
 }
 
@@ -192,6 +200,25 @@ func (e *Engine) track(ctx context.Context, root *Root, r event.Raw) {
 	}
 	e.emit(ev)
 	e.apply(ctx, root, rule, gen)
+
+	if rule.Launcher() && !root.Launched && !root.Orphan {
+		e.stopUnlaunched(root, r)
+	}
+}
+
+// stopUnlaunched enforces require_launcher: an agent started without
+// `effigentd run` may already have run code before its kernel policy loaded,
+// so the policy says it must not run at all. The kernel policy above still
+// covers anything it managed to start in the meantime.
+func (e *Engine) stopUnlaunched(root *Root, r event.Raw) {
+	err := e.stop(int(root.PID))
+	ev := e.base(r, root, event.Blocked, "high")
+	ev.Kind, ev.Target = "agent", root.Binary
+	ev.Message = "agent started without effigentd run; this organization requires: effigentd run --agent " + root.Agent + " -- <command>"
+	if err != nil {
+		ev.Message += " (could not stop it: " + err.Error() + ")"
+	}
+	e.emit(ev)
 }
 
 func (e *Engine) ruleFor(root *Root) policy.Rule {
