@@ -1,522 +1,73 @@
 # Effigent — engineering guide
 
-> **Effigent** (product; npm CLI: `effigent`) — a self-optimizing runtime for AI agents. Observe agent executions → normalize them
-> into a universal execution **DAG** (intermediate representation) → progressively
-> convert repetitive LLM reasoning into **deterministic** execution (synthesized tools,
-> grep/AST, knowledge-graph retrieval, model routing, caching) → **validate** each
-> optimization before it activates. In one line: **a compiler for AI agents** — it
-> compiles at the LLM/tool boundary.
+> **Effigent** — the AI Agent Control Plane. A daemon on each Linux/macOS machine
+> (`effigentd`) recognises AI coding agents (Claude Code, Cursor, Codex, …), attributes
+> every process, file, network and MCP action to the agent that caused it, and enforces
+> policy on the machine (Linux: BPF LSM via Tetragon). Policies are managed centrally
+> (`effigent-cp`), signed, and keep working offline. The console shows agents, events,
+> approvals and policy. Product spec: `PRD.md` (not committed; ask the founder).
 
-This file is the source of truth for how the repo is laid out and how the pieces fit.
-Keep it current when you change architecture, data model, or deployment.
+Keep this file current when architecture, data model or deployment change.
 
----
+## 1. Layout
 
-## 1. Monorepo layout
-
-npm workspaces (`packages/*`). TypeScript throughout; ESM (`.js` import specifiers in source).
-
-| Package | What it is | Runtime / host |
+| Path | What | Runs on |
 |---|---|---|
-| `@effigent/core` | Pure TS engine: transcript/OTel → `Run` → `RunGraph` (DAG), clustering, cost, taxonomy, **determinism scoring**. No I/O. | library |
-| `@effigent/server` | Fastify API: ingest, agents/keys, insights (LLM), analyze, reports, viewers. **Being retired** (see §6). | Node (Render) |
-| `@effigent/cli` | `effigent` CLI (npm: `effigent`): `login`, `agent add/list`, `run` (wrap ANY agent command), `recommendations` / `applied <id>` (the plan for the cwd's agent, written for the coding agent, and recording when a change went in), `claude [args…]` (Claude Code through the local Anthropic gateway — §2 `routing-shadow.ts`; handled BEFORE commander so every arg goes to `claude`), `install claude` (**one** agent-agnostic SessionEnd hook — see §4.1 — plus the user-invoked `/effigent-apply` skill) + `install otel/codex/python/node` (key-filled OTel recipes per harness — table-driven, one entry per new harness), `claude-hook`, upload. | Node |
-| `@effigent/runtime` | **The Runtime product** (npm: `@effigent/runtime`): `createRuntime().wrap(new Anthropic())` patches the client's `messages.create` in place (covers `stream:true` and `messages.stream()`, which calls `create`), records each call into the same `Run` shape `parseTranscript` produces (tool results from the next request's `messages` → `tool_result` steps; tokens on the first step per request), prices it with core's `usageCostUsd` (stream reading + usage mapping live in core `anthropic.ts`, shared with the CLI gateway), and uploads via the pre-parsed ingest with `x-effigent-source: runtime`. Run boundary = `effigent.run(fn)` (AsyncLocalStorage); calls outside it → an ambient run uploaded by `flush()`/`beforeExit`. Fail-open: returns the SDK's own APIPromise/stream, errors go to `onError`. **Phase 1 = record only**; policies (core `policy.ts`) need a prefix matcher first. Core inlined by esbuild (ESM+CJS); `check-bundle.mjs` forbids analyzer symbols, a >64 kB bundle, and core imports in the public `.d.ts`. Tests run the real SDK against a fake `fetch`. | library (in the customer's agent) |
-| `@effigent/dashboard` | Next.js App Router dashboard + its own API routes. The product UI. | Vercel |
-| `@effigent/site` | Marketing site, Next.js **static export** (`output: 'export'`). Pages: `/` (landing), `/docs` (+7 doc pages incl. `/docs/storage` — managed vs customer-S3 residency), `/developers` (full per-harness install guide), `/about`, `/pricing`, `/security` (redaction + posture), `/terms`, `/privacy`. Endpoints are env-driven: `NEXT_PUBLIC_COLLECTOR_URL` / `NEXT_PUBLIC_DASHBOARD_URL` (set as GitHub `prod` environment Variables `COLLECTOR_URL`/`DASHBOARD_URL`, injected in the deploy workflow; unset → explicit `<placeholder>`) — never hardcode domains. | S3 + CloudFront |
+| `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync, `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`. Subcommands: `enroll`, `run` (zero-gap launcher). | Linux host next to Tetragon (dev: Docker Desktop VM) |
+| `cmd/effigent-cp`, `internal/controlplane/*` | Control plane (Go): `store/` Postgres (schema `cp`, embedded migrations tracked in `cp.schema_migrations`), `server/` endpoint protocol `/ep/v1/*` + console API `/api/v1/*`. | AWS (planned) at api.effigent.ai |
+| `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
+| `packages/dashboard` | Console — Next.js 16 + Clerk. **Demo data** (`src/data.ts`, client store `src/store.tsx`) until wired to `/api/v1`. | Vercel, app.effigent.ai |
+| `packages/site` | Marketing site + docs, Next.js static export. | S3 + CloudFront, effigent.ai |
+| `test/endpoint` | Endpoint e2e against Tetragon (24 checks). | Docker Desktop |
+| `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
 
-The engine (`core`) is deliberately I/O-free so both capture paths (Claude transcripts
-and OTLP spans) produce the **same `Run`**, and everything downstream is unchanged.
+## 2. How policy reaches the kernel
 
----
+1. Console/admin `PUT /api/v1/policy` with an endpoint policy YAML → validated with the
+   endpoint's own parser → stored as the next version in `cp.policy_versions`.
+2. `effigentd` (enrolled) polls `GET /ep/v1/policy?have=N` every `-sync-interval` (5s).
+   The control plane signs the document (ed25519); the endpoint verifies signature and
+   tenant against the key pinned at enrollment, refuses versions ≤ current, applies it
+   live (`engine.SetPolicy`, make-before-break per agent), caches it in `policy.json`.
+3. Offline restart → the cached signed policy is applied; a tampered cache is rejected and
+   the built-in default applies. Local `PUT /policy` is refused while enrolled.
+4. Events are POSTed in batches to `/ep/v1/events` and stored in `cp.events`.
 
-## 2. The core engine (`packages/core/src`)
+## 3. Auth
 
-The data contract everything else depends on.
+- Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
+  endpoint secret (`eps_…`, hashed) used as Bearer on `/ep/v1/*`. Revocation via console.
+- Console API: Clerk session JWT (verified via `CLERK_ISSUER`/.well-known/jwks.json;
+  tenant = `org:<id>` or `user:<id>`, same refs as v1 `tenants.clerk_ref`), or
+  `EFFIGENT_ADMIN_TOKEN` + `X-Effigent-Tenant` for automation.
+- Console dev bypass: `EFFIGENT_DEV_NOAUTH=1 NEXT_PUBLIC_EFFIGENT_DEV_NOAUTH=1` (never in production builds).
 
-- **`types.ts`** — `RawStep` (`kind`: `model_turn | tool_use | tool_result | thinking`,
-  `name`, `payload`, `isError?`, `toolUseId?`, **`model?`/`tokens?`/`durationMs?`** —
-  per-step usage), `TokenUsage` (Anthropic-style: input / output / cacheCreation /
-  cacheRead), `Run`, `GraphNode` (incl. **`structLabel`** — content-blind schema label,
-  **`valueHash`** — full-value hash of the raw payload, `costUsd` — measured per step),
-  `RunGraph`.
-- **`transcript.ts`** — `parseTranscript()`: Claude Code JSONL → `Run` (returns null if no
-  assistant turn / tool use). Per-request usage is deduped by requestId AND attributed to
-  the first step each request emits, so per-step costs sum to the run cost. Also reads
-  the 1h cache-write split, thinking tokens, the TRUE per-request context (last
-  `usage.iterations` entry — top-level usage sums iterations), and advisor-tool
-  iterations (a second model, billed separately — 19% of spend on measured traffic).
-  User turns count as asks only when human-authored (`promptSource`/`origin.kind`;
-  shell echoes, compaction summaries, task notifications and `<synthetic>` are harness).
-- **`otel.ts`** — `otelToRuns()` + `normalizeGenAiUsage()`: OTLP GenAI spans → `Run[]`
-  with per-step model/tokens/duration. Anthropic usage maps 1:1; OpenAI
-  (`prompt_tokens` includes cached) is normalized to the uncached remainder.
-- **`graph.ts`** — `buildRunGraph()`: `Run` → `RunGraph` with fingerprints
-  **L0** (structure + labels + canonical I/O), **L1** (structure + labels = *shape*),
-  a canonical `labelSequence`, per-node `structLabel`/`valueHash`/`costUsd`, and
-  heuristic dataflow edges.
-- **`cost.ts`** — `usageCostUsd(model, usage)`: regex-priced per model tier (unknown model
-  falls back to the sonnet tier — never zero). Cache writes split 5m (1.25×) / 1h (2×) via
-  `TokenUsage.cacheCreation1hInputTokens`; per-model `cacheReadMult` (Fable 5.1 = 0.025×).
-  **Verified against Claude Code's own `cost-state`** (median ratio 0.999, 247 sessions;
-  `test/cost.test.ts`) — the pre-2026-09 table overstated spend 2.3× (all Opus at $15/$75).
-- **`taxonomy.ts`** — classifies tool names (unknown tools degrade to `side_effect`).
-- **`redact.ts`** — sensitive-data redaction, applied in the server's `persistParsedRun`
-  (the single choke point both capture paths flow through) BEFORE storage/analysis:
-  provider/platform API keys, AWS creds, JWTs/bearer tokens, DB connection strings, PEM
-  blocks, emails, card-like numbers → typed `[REDACTED:<TYPE>]` placeholders. Plus
-  **org-defined custom rules** (migration 010, `tenants.redaction_rules` jsonb):
-  `compileRedactionRules` (strict validation — ≤20 rules, ≤200-char patterns, safe
-  names; invalid entries reported, never thrown) + `applyRedactionRules`, applied AFTER
-  the built-ins; managed via `GET/PUT /api/v1/redaction` (org-admin gated) and the
-  dashboard's **Privacy** view. The dashboard's `NEXT_PUBLIC_COLLECTOR_URL` env var
-  drives install-snippet endpoints (same rule as the site: no hardcoded domains).
-- **`determinism.ts` + `align.ts` + `provenance.ts`** — **the brain (v3;
-  docs/determinism-v3.md).** `align.ts`: pairwise run similarity = 0.7·sequence edit
-  similarity over structLabels + 0.3·dataflow-topology Jaccard (the DAG's answer to
-  "are these runs pretty much the same?"), complete-link clustering, and
-  Needleman-Wunsch alignment of every run to the cluster medoid → COLUMNS.
-  `analyzeDeterminism(graphs)` scores each column on full-value hashes of RAW payloads
-  (canonicalization would erase the variance being measured) and lands it on the
-  lattice: **D0** constant → replace/compile · **D1** derivable (template + every slot
-  provenance-traced by `provenance.ts` to an upstream output / the prompt) → compile ·
-  **D2** pure (memoize evidence or mechanical taxonomy) · **D3** parameterized template ·
-  **D4** routable/cacheable · **D5** keep. Confidence = Wilson lower bound at the
-  winning detector's HONEST sample size; every action is confidence-gated. v1
-  `scoreDeterminism` (exact-L1, canonical values) is kept for compatibility.
-- **`embed.ts` + `drift.ts`** — **run embeddings + agent-change detection.**
-  `embedRunGraph` hashes the DAG into a 256-dim vector (SEQ block: structLabel
-  n-grams · FLOW block: dataflow edge pairs; blocks weighted √0.7/√0.3 so cosine
-  mirrors align.ts's similarity weighting). Deterministic, local, no embedding
-  API. `detectDrift` splits a window into baseline + newest-k probe, measures
-  probe distance to the baseline centroid in z-scores → `changed` +
-  `changedAt` (the "agent was modified" signal; on drift, validated tools
-  should be re-shadowed). Surfaced as `drift` per agent in `/api/v1/insights`
-  and a "⚠ behavior changed" badge in the Insights view.
-- **`anthropic.ts` + `routing-shadow.ts`** — **the Claude Code gateway's policy.**
-  `anthropic.ts`: Messages wire types, `anthropicUsage` (usage → TokenUsage, 1h split)
-  and `StreamAccumulator` (SSE events → final message), shared by `@effigent/runtime`
-  and the CLI gateway (`cli/src/gateway.ts`: 127.0.0.1, forwards everything unchanged
-  — body, `x-api-key`/OAuth bearer, `anthropic-version`/`-beta` — drops hop-by-hop +
-  `accept-encoding` up / `content-encoding` down, client abort aborts upstream, records
-  model + usage + `x-claude-code-*` headers only). `routing-shadow.ts`: the first
-  policy, **shadow only** — Opus/Fable SUBAGENT conversations → `claude-sonnet-5-5`,
-  decided once per `x-claude-code-agent-id` (verified on real traffic 2026-10-03: main
-  thread sends no agent id; each subagent sends its own on every request) so the cache
-  is never split mid-conversation. Counterfactual = same usage at the target's price;
-  counted only when cheaper (Opus 5.5 cache reads cost the same as Sonnet 5's).
-  Estimates only: turns/quality unmeasured until enforced. `effigent claude` fetches
-  the bundle alongside the launch, uploads the shadow sessions on exit, and leaves
-  run capture to the SessionEnd hook (no double counting).
-- **`ledger.ts`** — **the waste ledger.** Per-run spend decomposition into
-  addressable waste classes, all within-run and deterministic (never empty, no
-  clustering precondition): dead context (large tool_results carried past their
-  last content reference, priced at the run's measured cache-blended input
-  rate), cache misses (input re-billed at full price that a stable prefix would
-  have served at 0.1× — an upper bound; compaction cold-starts are invisible),
-  error-recovery tails, and redundant read-only calls (same question AND same
-  answer within one run). Conservative by construction — unsure ⇒ claim
-  nothing; slices are independent estimates, never a partition (don't sum
-  them). Verified on 65 runs across 3 unrelated agents + ground-truth unit
-  tests; sensitivity documented in the file header. Surfaced as `ledger` per
-  agent in `/api/v1/insights` and the Insights view's "Where the spend goes"
-  strip.
-- **`rent.ts`** — **context rent: the cost model for interactive agents
-  (docs/context-rent.md).** Everything that enters context pays rent (tokens × read
-  price) on every later request until a reset. `computeRentLedger(run)` decomposes
-  cache-read spend into base context + per-deposit rent (thinking/output exact, tool
-  results/user text by chars, remainder = harness) + cold rewrites + side models — an
-  identity that reproduces observed reads at 100.0% over 38k real requests.
-  `simulateCompaction` replays observed deposits under "compact at T" (calibration
-  100.8%); `recommendCompaction` picks the maximin threshold over measured
-  re-acquisition scenarios (null when none wins everywhere). Finding on interactive
-  coding traffic: 8.6% of spend is generation, 73% is carrying context; held-out
-  next-decision predictability is ~2% of decisions — compilation is for batch agents.
-  Research harness: `research/context-rent/`. **`plan.ts`** — `analyzeAgent()` = the
-  compiled plan: priced harness changes WITH the files to write (scout subagent,
-  autocompact override, recurring-command skills, ship skill, CLAUDE.md size, advisor
-  line), each labelled measured/simulated/structural/needs-ab. **`laws.ts`**: request
-  reasons (explore/act/verify/deliver/respond/recover/wait/delegate), the session law
-  cost ≈ p·(B·N+d·N²/2)+w·(B+d·N) (R² 0.92–0.98 on real agents), EOQ compaction
-  threshold, variance drivers, explained expensive sessions. **`loop.ts`**: detects
-  adoption of proposed changes from transcripts + before/after verdicts with a quality
-  guard (errors, interruptions, denials). **`predictability.ts`**: determinism for
-  EVERY agent = held-out predictability of next decisions (Witten–Bell, trained on
-  earlier sessions, scored on later; `reliable` flag). Parser now keeps `Run.events`
-  (commit/push/PR/deny/compact), `Run.subagents` (CLI uploads `<session>/subagents/*.jsonl`
-  with the session), `RawStep.fullChars`, `Run.title` (scrubbed at ingest); `effigent
-  sync --force` re-uploads. **`summary.ts`**: `summarizeAgent()` turns the analysis into what a
-  person reads first — one headline ($/month at the observed pace, trend + cause), actions
-  ranked by expected monthly value (plain `summary` line per plan item + its file), 3–4
-  finding cards (spend concentration, breaks that expire the cache, context creep,
-  CLAUDE.md size, long sessions, exploration, advisor), expensive sessions with what
-  compacting would have saved. Rendered by `components/AgentSummary.tsx`; technical detail
-  collapses under "How this was measured". **`loops.ts`**: procedural loops inside runs
-  (paging, per-item collection, retry, poll) + the verify-after-edit rule counted on
-  CHECK-ONLY requests (chained `edit && tsc` costs no extra request); generates a
-  PostToolUse type-check hook (`TYPECHECK_HOOK_SCRIPT`) when clean re-checks are material.
-  **`runmap.ts`**: a session as a network — nodes = distinct steps (tool + target), edges =
-  transitions, loops = LOCAL walk cycles passed ≥3× (fix / explore / cycle / error), hubs,
-  deterministic force layout; rendered by `components/RunMap.tsx` in the session view.
-  Insights layout (2026-09, navy palette): KPI cards → agent hero (top change/month, headline,
-  weekly cost trend) → Top recommendations → "Why it costs what it does" tinted cards →
-  most expensive sessions (rows open the session + run map) → collapsed details.
-  **`experiments.ts`**: did an applied recommendation save tokens? — before/after matched
-  by EXACT position in the session, seeded session bootstrap (95% interval), mechanism
-  check first then money, quality guard; verdicts collecting / not-in-effect / working /
-  confirmed / regressed / inconclusive (placebo on real data: 3% false "saved").
-  `GET/POST /api/v1/experiments` + `components/Experiments.tsx` ("Suggestions & results");
-  the record (suggested / predicted / applied) is JSON in the org bucket
-  (`lib/experiments-store.ts`, written by the Insights route — no DB migration).
-  Insights routes by `profile`: shape miners/D0–D5 only for repetitive agents.
-  Surfaced as `analysis`
-  in `/api/v1/insights` (cost re-priced via `runCostUsd`) + Insights' Compiled plan;
-  sessions render `contextSkylineSvg` (graph-svg.ts).
-- **`actions.ts` + `episodes.ts` + `suggest.ts`** — **the semantic run IR + tool
-  suggester.** The missing middle zoom level: structLabels collapse ~70% of a
-  dev agent's calls into one opaque Bash label while raw values almost never
-  repeat, so nothing mined at either level. `actions.ts` canonicalizes every
-  call to an action token (`git:add+git:commit`, `pnpm:test`, `gh:pr:create` —
-  Bash commands parsed across newlines/`&&`/pipes, heredoc bodies dropped, cd/
-  export noise stripped); `episodes.ts` splits runs at user turns into the
-  comparable unit (ask + deterministic intent + action string + cost + errors);
-  `suggest.ts` mines recurring action n-grams across episodes (vocabulary floor:
-  rare tokens collapse to program family; specificity gate: motifs made only of
-  read/edit primitives are the inner coding loop, never suggested; Wilson
-  confidence; overlap + dominance dedupe) and emits ranked **ToolSuggestions** —
-  analysis only, NOT activation: name, per-step arg templates (columnTemplate
-  slots → proposed typed params), support/occurrences, measured cost, LLM-glue
-  count, intents, example asks. Validated on real traffic: the create-PR macro
-  (`git:commit → git:push → gh:pr:create`) emerges from apollo's 40 runs with
-  a `deliver` intent; heterogeneous traffic yields an honest zero. Surfaced in
-  `/api/v1/insights` as **`determinism`** (high-level insight framing: each
-  recurring workflow + its measured `glueCostUsd` — the interleaved LLM-turn
-  spend deterministic execution would eliminate; NOT tool blueprints) and
-  **`taskMix`** (episode intent mix with cost share — "what this agent does").
-  Insights view renders these as the task-mix chips + "Deterministic savings"
-  panel.
-- **`brief.ts`** — **the run brief (session understanding).** Deterministic
-  compact digest of one run: episode storyline (ask → intent → action summary →
-  cost → errors → interrupted), outcome signals (final assistant tail, detected
-  artifact URLs like PRs), bounded error previews. Feeds two consumers: the
-  dashboard's Session storyline card, and `renderBriefText()` — the ~3KB
-  LLM-readable block behind the AI layers. **AI on runs (posture):** unlike
-  `/api/v1/explain` (structure-only), the digest/analyst endpoints DO send
-  redacted run content (the brief) to the model via OpenRouter —
-  `GET /api/v1/sessions/[id]/digest[?ai=1]` (typed JSON: title/tldr/outcome/
-  chapters/friction, module-cached) and `GET /api/v1/insights/analyst?agent=`
-  (agent story over the last 12 runs' briefs + ledger + suggestions; 10-min
-  cache). Models via `EFFIGENT_DIGEST_MODEL`/`EFFIGENT_ANALYST_MODEL`/
-  `EFFIGENT_EXPLAIN_MODEL` (default anthropic/claude-sonnet-4.5). Validated
-  E2E on real runs: digest correctly reconstructed a session's PR + scope
-  churn; analyst found the migration ritual / PR finalization / edit-churn
-  patterns.
-- **`entropy.ts`** — **predictability scoring (determinism as information).**
-  Variable-order Markov model (orders 0–3, PPM-style backoff) over the shared
-  action alphabet, scored LEAVE-ONE-RUN-OUT so a workflow can never predict
-  itself. Prices the honest hierarchy the Insights panel shows: total decision
-  glue (all LLM turns between tool calls — the ceiling), workflow-conditioned
-  glue (suggest.ts `glueCostUsd` — the actionable middle), and fully-predictable
-  decisions (p≥0.9 at order≥1, support≥5 — the strict floor; order-0 base rates
-  never count). Measured on real traffic: ~0.2% of decisions are fully
-  predictable — interactive agent work is genuinely high-entropy at next-action
-  granularity, which is WHY savings claims must be workflow-conditioned.
-  Surfaced as `predictability` in `/api/v1/insights`.
-- **`knowledge.ts`** — **the knowledge graph.** Mines stable exploration lookups
-  (mechanical/cacheable calls whose question AND answer agree across runs) into typed
-  facts — file / search / listing / fetch / value — with support, Wilson confidence and
-  measured cost. `worthIt` gates emission on real coverage of the agent's exploration
-  traffic ("will this actually reduce greps?"). Surfaced per agent in insights and the
-  live Knowledge Graph view; injected via `effigent optimize`.
-- **`synthesize.ts` + `replay.ts`** — **tool synthesis (the former "W4").**
-  `synthesizeTools(analyses)` slices maximal compilable column spans (clean/moderate
-  dataflow boundaries; side-effect steps flagged `guarded`) and emits deterministic
-  **ToolSpecs**: typed params (prompt/caller), body of recorded calls with `${param}` /
-  `${derive(cN.method)}` substitutions, output expectations, and measured savings
-  including the context-carriage tax. `replayToolSpec` validates a spec offline against
-  the recorded runs (recompute derivations → must reproduce recorded args) →
-  `ready` (≥95% pass over ≥10 runs) or `shadow`.
-
----
-
-## 3. Data model (Postgres / Neon)
-
-Migrations in `packages/server/migrations/` run on server boot in lexical order. **No
-tracking table** — every statement must be idempotent (`if not exists`, `on conflict`).
-
-| Table | Purpose | Notable columns |
-|---|---|---|
-| `tenants` | A workspace. One per Clerk org / personal user. | `clerk_ref` (`org:<id>` / `user:<id>`, partial-unique) |
-| `api_keys` | `cck_` capture/tenant keys (sha256-hashed). | `role` (`owner`/`member`), `agent_id` (scoped keys) |
-| `agents` | Registered agents. | `name` (unique per tenant), `harness`, **`optimized_at`** |
-| `runs` | One session / invocation. | `session_id`, `agent_id` (name), `cost_usd`, `models` (jsonb), `n_steps`, **`blob_path`** (`s3://<org-bucket>/…` — S3-only residency; legacy rows `'inline'`), `parsed` (jsonb — **null** for S3 rows; legacy inline only), `graph_blob_path` |
-| `reports`, `clusters`, `cluster_runs`, `findings` | Analysis output. | |
-
-Migrations of note: `003` agents + scoped keys, `004` run-graph pointer, `006` Clerk
-tenant ref, **`007` `agents.optimized_at`** (the Optimized indicator), `008` tenant
-limits, **`009` ownership** (`created_by`/`created_by_label` on `api_keys` + `agents` —
-who added/controls an agent; CLI registrations inherit from the registering key; all
-reads/writes column-guarded), **`010` `tenants.redaction_rules`** (org custom filters),
-`011` `agent_tools` (injected-tool registry), **`012` `tenants.storage_*`** (per-org
-S3 storage config — bucket/region/prefix/kms/role_arn/external_id; role_arn set ⇒ BYO
-cross-account bucket, null ⇒ Effigent-account bucket), **`014` `tenants.product`**
-(`insights` | `runtime` | `both`, default `insights` — which product the workspace uses;
-column-guarded in `lib/tenant-settings.ts`, missing ⇒ `insights`).
-Prod ALTERs: `scripts/apply-ownership-redaction.mjs` (009+010),
-`scripts/apply-org-storage.mjs` (012) and `scripts/apply-tenant-product.mjs` (014; `--set runtime --tenant <ref>`); per-org buckets via `scripts/provision-org-bucket.mjs` (owner-run).
-
-`runs.agent_id` stores the agent **name** (keeps the engine/queries stable); `agents.id`
-binds credentials only.
-
----
-
-## 4. Auth & tenancy
-
-- **Agents** authenticate with `cck_<hex>` keys (hashed). Scoped keys are `role='member'`
-  and bound to one `agent_id`.
-- **Dashboard users** authenticate with **Clerk** (`@clerk/nextjs` v6, `clerkMiddleware`).
-- A **Clerk Organization is a tenant**; a user with no active org gets a personal tenant.
-  `resolveTenant({ userId, orgId })` (in `dashboard/src/lib/tenant.ts`) find-or-creates by
-  `clerk_ref` and mints a default owner key.
-
-Secrets live in `.env.local` (gitignored) and in Vercel — **never commit them**. The Clerk
-secret key stays server-only (no `NEXT_PUBLIC_` prefix).
-
-### 4.1 Agent attribution — why the capture hook takes no `--agent`
-
-Both ingest paths resolve the agent as **`auth.agentName ?? agentIdHeader`**
-(`ingest/route.ts`), and `auth.agentName` comes from a *scoped* key. A scoped key
-therefore **pins** attribution server-side and the header is ignored. That makes
-per-project separation unreachable for any hook that uploads with one agent's scoped
-key — every session lands under that agent no matter what the CLI resolved.
-
-So capture on a dev machine is **one agent-agnostic hook**, and the agent is decided
-per session, in the CLI, from the transcript's `cwd`:
-
-- `install claude` writes exactly **one** `SessionEnd` hook (`claude-hook`, no
-  `--agent`) and **replaces** any it previously wrote. Hook groups carry no matcher,
-  so they all fire on every session — two of them meant every session uploaded twice
-  under two different agent names. Install is replace-then-add, never append.
-- `claude-hook` calls `classifySession()` (`cli/src/store.ts`, one cwd sniff):
-  `excludeRules` veto → explicit tag → `agentRules` → git repo name →
-  `UNATTRIBUTED_AGENT`.
-- A project with no scoped key yet is **auto-registered on first sight** (shared
-  `registerAgent()`), so `auth.agentName` ends up equal to the resolved name and
-  attribution stays credential-derived rather than header-asserted. The tenant key is
-  used only for that one minting call.
-- **`excludeRules`** is a hard veto: it is checked even when `--agent` pins, and
-  unlike the attribution default it is **not** overridable by `sync --all`. An
-  unknown cwd is *not* excluded — exclusion requires a positive match, so a failed
-  sniff can never silently suppress capture.
-- `--agent` remains, as an explicit pin for CI/single-purpose machines.
-
-Because `runs.agent_id` stores the agent **name** (§3) and `agents` rows bind
-credentials only, none of this needs a schema change.
-
----
-
-## 5. Dashboard (`packages/dashboard/src`)
-
-Next.js App Router. `tsconfig` allows `.ts`/`.tsx` import specifiers; `@/*` → `src/*`.
-Reads Neon directly via a pooled `pg` client (`lib/db.ts`).
-
-**API routes** (all Clerk-auth'd, `resolveTenant`, `force-dynamic`):
-- `GET /api/v1/agents` — per-agent rollup from `runs`: `n_runs`, `total_cost_usd`,
-  `models`, `optimized`, `added_by` (both guarded if their columns are absent).
-- `GET/PUT /api/v1/redaction` — workspace redaction rules (PUT is org-admin-only;
-  validated by `engine/redact.ts`; ingest caches compiled rules 60s per tenant).
-- `GET /api/v1/optimize?agent=&mark=1` — **the activation bundle** (Bearer keys, public
-  in middleware): replay-validated ToolSpecs + knowledge graph + drift for the agent's
-  last 40 runs; `mark=1` stamps `optimized_at` when something activatable exists.
-  Consumed by `effigent optimize <agent>`, which writes `~/.effigent/bundles/<agent>/`
-  and installs a generated Claude Code skill (facts + recipes + runnable scripts for
-  fully-constant read-only bash units) under `~/.claude/skills/effigent-<agent>/`.
-  **POC: tool INJECTION is OFF by default** (`EFFIGENT_ENABLE_INJECTION=1` to
-  re-enable; dashboard UI uses `NEXT_PUBLIC_ENABLE_INJECTION`). When off:
-  `install claude` wires only the SessionEnd upload hook (no SessionStart
-  auto-inject), `effigent optimize` is insights-only (writes nothing), the server
-  does not stamp `optimized_at`, and the "Injected tools" control is hidden.
-  Capture + read-only insights (Insights, Tool Synthesis) are always on.
-- `GET /api/v1/recommendations?agent=` — the plan (plan.ts + summary.ts, last 40 sessions)
-  with files + applied state, for `effigent recommendations`; records suggestions like
-  Insights does. `GET/POST /api/v1/experiments` — results + mark applied. Both take a
-  Bearer key OR a Clerk session (`lib/caller.ts`; scoped keys act on their own agent only)
-  and are public in middleware. Instructions for the applying agent:
-  `docs/applying-recommendations.md`.
-- `GET/PUT /api/v1/product` — the workspace's product (`lib/tenant-settings.ts`; PUT is
-  org-admin-only, 409 until migration 014). **Gating rule:** the product hides SURFACES —
-  views, `/api/v1/policies`, and ingest from the runtime SDK (`x-effigent-source: runtime`
-  → 403 unless runtime/both). CLI/hook/OTel captures are NEVER gated, so switching
-  products can't silently drop sessions.
-- `GET /api/v1/policies?agent=` — the runtime's `PolicyBundle` (core `policy.ts`, vendored);
-  Bearer key or Clerk (`lib/caller.ts`), public in middleware, 403 unless the workspace
-  uses the runtime. Serves the hand-written `routing-shadow.ts` policy (status `shadow`)
-  until the analyzer produces policies.
-- `GET/POST /api/v1/policies/shadow[?agent=]` — shadow results from `effigent claude`
-  (metadata only; whitelisted shape; savings recomputed server-side). One JSON doc per
-  agent in the org bucket (`effigent/shadow/<agent>.json`, newest 200 sessions); same
-  gating as `/policies`. Middleware entry is `/api/v1/policies(.*)`.
-- `GET /api/v1/sessions[?agent=]` — the tenant's runs, newest first.
-- `GET /api/v1/sessions/[id]` — one run (with `parsed`) for the DAG deep-dive.
-- `GET /api/v1/insights[?agent=&window=]` — **the determinism brain (v3)**: a thin
-  adapter over the REAL engine (vendored in `lib/engine/` — no hand-mirroring anymore).
-  Per agent, over the last `window` (default 40, 5–100) sessions: alignment clustering →
-  lattice scoring → merged opportunities with **stable ids** (hash of
-  agent+action+structLabel+template, so accept/dismiss can attach across windows) →
-  synthesized ToolSpecs with replay validation (`tools[]` in the response:
-  params, arg previews, savings incl. context-carriage, `replay.status` ready/shadow).
-
-**Views** (`Dashboard.tsx` drives `view` state; sidebar in `data.ts` `nav`, filtered by the workspace product):
-- **Overview** — KPI tiles, per-agent **Execution Graph** (original vs optimized), and
-  the demo analytics rail/bottom.
-- **Sessions** — one-stop shop: totals strip (agents / sessions / spend), per-agent totals
-  cards, **session-id search**, and a table where each row opens the…
-- **…DAG deep-dive** (`SessionDetail.tsx`) — sticky run context, per-model **usage table**,
-  and a scrollable numbered **trace** (tool-call→result grouping, per-node model/tokens/
-  duration, click-to-expand payloads).
-- **Insights** (`Insights.tsx`) — the determinism brain's output: per-agent
-  optimization opportunities (replace/cache) scored over the real runs. **Live.**
-- **Storage** (`Storage.tsx`) — per-org run storage: managed (Effigent-account
-  bucket) vs customer S3 (BYO via CloudFormation/Terraform), switch modes,
-  access probe. **Live** (see §6).
-- **Tool Synthesis** / **Knowledge Graph** (per-agent) — currently demo-backed.
-- **Runtime** (`Runtime.tsx`, agent-filtered) — `@effigent/runtime` install snippet
-  (collector from `collectorBase()`), the `effigent claude` snippet, and the subagent
-  routing policy's shadow results (totals + per-session table) + the policy lifecycle.
-- **Product** (`Product.tsx`, Workspace nav) — choose insights / runtime / both. The sidebar
-  hides the other product's views (`insightsViews` / `runtimeViews` in `data.ts`); Home
-  and Sessions show for both.
-- **Install** — how to put Optimizer on an agent (see §6 for real vs aspirational).
-
-**What is real vs demo, today:**
-- **Real (DB-driven):** agent list, totals, sessions, DAG deep-dive, per-model usage,
-  the Optimized indicator (`optimized_at`).
-- **Demo (in `data.ts`, not yet wired to the engine):** KPI tile values, Execution Graph
-  flows (per-agent but hand-authored), Tool Synthesis, Knowledge Graph counts, the rail
-  analytics. **Demo panels render ONLY for the demo workspace** (`NEXT_PUBLIC_DEMO_ORG_ID`,
-  fallback = the Test Organization Clerk org id, checked via `useOrganization()` in
-  `Dashboard.tsx`) with a "Sample data" badge; every other tenant gets `OverviewLive`
-  (real totals + connect-an-agent empty state) and honest empty states for Tools/KG.
-
-Styling: `theme.css` (design tokens as CSS vars, dark theme).
-
----
-
-## 6. Deployment & the collector (honest status)
-
-**Target architecture:** dashboard (Vercel + Clerk) + Neon + R2, no Render.
-
-- **Site** → S3 + CloudFront, auto-deployed by `.github/workflows/deploy-frontend.yml`
-  on push (uses the `prod` GitHub Environment + AWS secrets).
-- **Dashboard** → Vercel, auto-deploys on push to `main`.
-
-**✅ The dashboard IS the collector** (Render is retired, not in use). Machine endpoints
-live as Next.js routes, Bearer-authenticated with `cck_` keys (public in `middleware.ts`;
-auth inside the handlers):
-- `POST /api/v1/ingest` — gzipped/plain Claude JSONL (gzip sniffed by magic bytes since
-  proxies strip content-encoding); scoped key beats the `x-effigent-agent-id` header.
-  ~4.5 MB Vercel body cap — CLI gzips, so almost all sessions fit.
-- `POST /v1/traces` — OTLP/HTTP GenAI JSON (uncompressed; 415 with a hint otherwise).
-- `POST /api/v1/agents` — CLI registration: tenant key → upsert agent + mint scoped key.
-- `GET /api/v1/reports` — key validation (`effigent login` probes it).
-The engine bits these need are **vendored** in `dashboard/src/lib/engine/`
-(types/cost/canonicalize/transcript/otel/graph/taxonomy/align/determinism/provenance/
-synthesize/replay/embed/drift/knowledge/ledger/actions/episodes/suggest/brief/entropy/rent/plan/laws/loop/loops/predictability/summary/runmap/experiments/graph-svg/redact/jsonb/policy/routing-shadow — copies of core with `.js`→`.ts` import specifiers;
-re-vendor after core changes:
-`for f in …; do { echo "// VENDORED …"; sed "s/\.js';/.ts';/g" packages/core/src/$f.ts; } > packages/dashboard/src/lib/engine/$f.ts; done`).
-`lib/agent-auth.ts` holds `authenticateKey` + `persistRun` (redaction + jsonb
-sanitizing at the single write choke point). **Per-org S3 storage (S3-only
-residency):** `persistRun` writes the redacted run blob to the org's OWN bucket
-via `lib/storage.ts` (`putRunBlob`; BYO cross-account buckets via STS AssumeRole),
-storing only the `s3://` `blob_path` + metadata in Neon (`parsed` null). Reads
-(`sessions/[id]`, `insights`, `optimize`) fetch blobs with `loadRun` (parallel;
-legacy `parsed` rows still work). No bucket configured ⇒ ingest returns **409**
-(the onboarding gate). Org-admin `GET/PUT /api/v1/storage` manages both modes:
-PUT with bucket/roleArn sets BYO config (write→read probe; externalId defaults to
-the server-generated one), PUT `{mode:'managed'}` clears BYO and (re)provisions an
-Effigent-account bucket. GET also returns `effigentAccountId`
-(`EFFIGENT_AWS_ACCOUNT_ID` env) + `suggestedExternalId` (HMAC of tenant id with
-`EFFIGENT_EXTERNAL_ID_SECRET` — deterministic, no DB column; see
-`lib/byo-template.ts`). `GET /api/v1/storage/template` serves the BYO
-CloudFormation template pre-filled with both (one `aws cloudformation deploy`,
-no typed parameters); raw copies for partners live in
-`infra/aws/effigent-byo-storage.yaml` + `infra/aws/terraform/` (keep in sync with
-`lib/byo-template.ts`). The dashboard **Storage** view (Workspace nav) is the UI
-for all of it: mode cards, provision/switch, template download, BYO form, live
-probe. See `docs/onboarding.md`.
-The CLI is published to npm as **`effigent`** (bin: `effigent`; config `~/.effigent`; keys minted `eff_`, legacy `cck_` accepted) (single-file esbuild CJS bundle, core
-inlined — no workspace dep). `packages/server` remains as reference/self-host only.
-
----
-
-## 7. Seed / demo data
-
-The prod dashboard reads prod Neon, which was wiped. To make the demo look populated:
-
-- **`scripts/seed-prod.mjs`** — inserts synthetic sessions for a tenant. 6 agents
-  (`invoice-reconciliation`, `repo-explorer`, `support-triage`, `ci-fixer`, `docs-writer`,
-  `data-pipeline`), deep runs (10–16 steps) with real tool inputs+outputs, per-step
-  model/tokens/ms, and model routing (multi-model runs). Rows are prefixed `seed-`.
-  ```
-  PROD_DATABASE_URL="postgres://…?sslmode=require" node scripts/seed-prod.mjs --list
-  PROD_DATABASE_URL=…  node scripts/seed-prod.mjs --ref <clerk_ref-substr>
-  # cleanup:  delete from runs where session_id like 'seed-%';
-  ```
-- **`scripts/recompute-run-costs.mjs`** — re-prices `runs.cost_usd` with the corrected
-  `cost.ts` (rows written before 2026-09 are ~2.3× high). Dry run by default; `--apply`.
-- **`scripts/mark-optimized.mjs`** — applies `agents.optimized_at` (migration 007),
-  ensures an `agents` row per agent, and marks agents optimized so the indicator shows.
-  ```
-  PROD_DATABASE_URL=…  node scripts/mark-optimized.mjs --agent invoice-reconciliation
-  ```
-
-The org tenant (`org:org_…`) is created lazily on first dashboard load; scripts target it
-by `--ref`.
-
----
-
-## 8. Roadmap — the brain
-
-The "brain" turns observed runs into activated optimizations. Sequenced:
-
-1. **Determinism analysis** — ✅ **shipped, v3** (alignment clustering + D0–D5 lattice +
-   provenance; `core/determinism.ts` + `align.ts` + `provenance.ts`, vendored into the
-   dashboard's `GET /api/v1/insights` + the **Insights** view).
-2. **Tool synthesis + replay validation** — ✅ **shipped at the engine level**
-   (`core/synthesize.ts` + `core/replay.ts`; surfaced as `tools[]` in the insights
-   response). NOT yet shipped: the delivery vehicle — emitting an actual skill/MCP tool
-   file + PR, persistence of specs, accept/dismiss state on stable ids.
-3. **AI analyst** — ✅ **shipped, v1** (`core/brief.ts` + the digest/analyst
-   endpoints, see §2): per-session AI digest (title/tldr/outcome/chapters/
-   friction) + per-agent story over the last 12 runs' briefs + measurements.
-   Not yet: persistence of digests (module cache only), batch digest of the
-   sessions list, estimated-savings line items.
-4. **DAG diff** — compare runs before vs after `optimized_at` to prove the compiled
-   columns disappeared and $/run dropped (the real "original vs optimized" for the
-   Execution Graph; also closes the loop on replay-validated tools).
-5. **The gateway** — the injection vehicle (proxy `base_url` / sidecar / Lambda) that
-   actually *enforces* an optimization at the LLM/tool boundary.
-
----
-
-## 9. Conventions
-
-- Delegate any investigation that needs 3+ reads, greps or log queries to the `scout` subagent; act on its findings instead of reading the files yourself.
-- **Migrations are idempotent** and run on boot; never assume a tracking table.
-- **Never commit secrets.** `.env.local`, `.env*.local`, `.next/`, `out/` are gitignored.
-- **Prod DB writes:** data seeds are fine; **schema changes (ALTER)** are gated in
-  auto-mode — run them explicitly (the `mark-optimized` script, or `!`-prefixed).
-- **`parsed` is free-form jsonb** — the dashboard reads it directly (no `core` dep on
-  Vercel). Seed data may carry richer per-step fields (`model`, `tokens`, `ms`) that the
-  OTLP capture path also provides.
-- Commit messages end with the `Co-Authored-By` trailer; branch before committing on `main`
-  only when asked.
-
-## 10. Common commands
+## 4. Running locally
 
 ```
-npm install                              # bootstrap workspaces
-npm run -w @effigent/dashboard build        # typecheck + build the dashboard
-npm run -w @effigent/dashboard dev          # local dashboard (needs .env.local)
-npm run -w @effigent/core build             # build the engine (dist/)
+docker compose up -d postgres                       # localhost:5433
+make tetragon-up                                    # Tetragon in Docker Desktop's VM (BTF + BPF LSM)
+DATABASE_URL=postgres://effigent:effigent@localhost:5433/effigent EFFIGENT_ADMIN_TOKEN=devadmin \
+  go run ./cmd/effigent-cp -listen 127.0.0.1:8080
+curl -H 'Authorization: Bearer devadmin' -H 'X-Effigent-Tenant: org:dev' -X POST localhost:8080/api/v1/enrollment-tokens
+go run ./cmd/effigentd enroll --server http://127.0.0.1:8080 --token eft_… --state-dir ~/.effigent
+go run ./cmd/effigentd --state-dir ~/.effigent
+./test/endpoint/e2e.sh                              # endpoint e2e (standalone, not enrolled)
+./test/claude/run.sh                                # real Claude Code (needs ~/.effigent-claude.env)
+npm run -w @effigent/dashboard dev                  # console (with the dev bypass vars)
+npm run -w @effigent/site build                     # site
 ```
+
+## 5. Known limits (keep honest; the site's coverage matrix follows these)
+
+- Kernel blocking is per resolved binary path and file path suffix; argument-level rules alert only.
+- Network: outbound connects are reported, not blocked.
+- macOS: no kernel enforcement (needs an Endpoint Security entitlement); observe only.
+- Detected (not launched via `effigentd run`) agents are unenforced for ~0.8s while policies load.
+- On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
+
+## 6. Conventions
+
+- Prod DB: the control plane only touches schema `cp`; never ALTER v1 tables.
+- Never commit secrets (`.env*`, `*.key`). Commit messages end with the Co-Authored-By trailer.
+- Pushing `main` deploys the site (GitHub Action) and the console (Vercel).
