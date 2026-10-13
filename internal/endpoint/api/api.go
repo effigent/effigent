@@ -22,6 +22,8 @@ type Server struct {
 	Engine *engine.Engine
 	Token  string // required as "Authorization: Bearer <token>" when set; without it the API is read-only
 	Stats  func() map[string]any
+	// Hook answers an agent's pre-tool hook (POST /hook/{agent}); nil disables it.
+	Hook func(agent string, payload []byte) ([]byte, error)
 	// Managed is set when the endpoint is enrolled: policy then comes only
 	// from the control plane, and local PUT /policy is refused.
 	Managed bool
@@ -29,6 +31,24 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /hook/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		if s.Hook == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "hooks are not enabled on this endpoint"})
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		out, err := s.Hook(r.PathValue("agent"), body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"ok": true, "agents": len(s.Engine.Agents())}
 		if s.Stats != nil {

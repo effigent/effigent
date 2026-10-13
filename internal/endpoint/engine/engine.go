@@ -652,6 +652,16 @@ func (e *Engine) connectNote(root *Root, target string) string {
 	return ""
 }
 
+// RuleFor returns the effective rule for an agent under the current policy.
+func (e *Engine) RuleFor(agent string) policy.Rule {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pol.RuleFor(agent)
+}
+
+// Emit sends an event through the engine's sinks (redacted like every other).
+func (e *Engine) Emit(ev event.Event) { e.emit(ev) }
+
 func (e *Engine) PolicyRaw() []byte {
 	e.mu.Lock()
 	defer e.mu.Unlock()

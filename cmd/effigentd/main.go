@@ -51,10 +51,14 @@ func main() {
 		case "status":
 			statusCmd(os.Args[2:])
 			return
+		case "hook":
+			hookCmd(os.Args[2:])
+			return
 		}
 	}
 	var (
 		tetragonAddr = flag.String("tetragon", "127.0.0.1:54321", "Tetragon gRPC address")
+		sensor       = flag.String("sensor", defaultSensor(), "tetragon (Linux kernel enforcement) | hooks (agent pre-tool hooks only, e.g. macOS)")
 		policyFile   = flag.String("policy", "", "policy YAML (default: built-in)")
 		listen       = flag.String("listen", "127.0.0.1:7777", "REST API address (\"\" to disable)")
 		output       = flag.String("output", "pretty", "stdout format: pretty | json | none")
@@ -107,16 +111,22 @@ func main() {
 	}
 	defer sinks.Close()
 
-	tg, err := tetragon.Dial(*tetragonAddr)
-	if err != nil {
-		logger.Fatal(err)
+	hooksOnly := *sensor == "hooks"
+	var tg *tetragon.Client
+	var enf engine.Enforcer // stays nil in hooks mode: nothing to load into a kernel
+	if !hooksOnly {
+		tg, err = tetragon.Dial(*tetragonAddr)
+		if err != nil {
+			logger.Fatal(err)
+		}
+		defer tg.Close()
+		enf = tg
 	}
-	defer tg.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	eng := engine.New(pol, raw, tg, sinks.Write, logger.Printf, *verbose)
+	eng := engine.New(pol, raw, enf, sinks.Write, logger.Printf, *verbose)
 	var upstreams []string
 	for _, u := range strings.Split(*dnsServers, ",") {
 		if u = strings.TrimSpace(u); u != "" {
@@ -130,9 +140,11 @@ func main() {
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
+			Hook: hookHandler(eng),
 			Stats: func() map[string]any {
 				out := map[string]any{
 					"tetragon_connected": tgConnected.Load(),
+					"sensor":             *sensor,
 					"bpf_lsm":            bpfLSMEnabled(),
 					"policy_version":     policyVersion.Load(),
 					"version":            version,
@@ -174,6 +186,12 @@ func main() {
 			logger.Printf("cached policy: %v", err)
 		}
 		go client.Run(ctx, *syncEvery)
+	}
+
+	if hooksOnly {
+		logger.Printf("sensor: agent hooks only (no kernel enforcement on %s)", runtime.GOOS)
+		<-ctx.Done()
+		return
 	}
 
 	events := make(chan event.Raw, 4096)
@@ -221,6 +239,14 @@ func main() {
 			_ = tg.Delete(cleanup, n)
 		}
 	}
+}
+
+// defaultSensor is the kernel sensor on Linux and agent hooks elsewhere.
+func defaultSensor() string {
+	if runtime.GOOS == "linux" {
+		return "tetragon"
+	}
+	return "hooks"
 }
 
 // defaultProcfs enables /proc scanning only on Linux, where effigentd is

@@ -40,8 +40,14 @@ func statusCmd(args []string) {
 	}
 	if !*asJSON {
 		fmt.Printf("%s effigentd %v running\n", mark(true), h["version"])
-		fmt.Printf("%s Tetragon connected\n", mark(yes("tetragon_connected")))
-		if yes("bpf_lsm") {
+		hooksOnly := h["sensor"] == "hooks"
+		if hooksOnly {
+			fmt.Printf("%s Agent hooks mode (no kernel enforcement on this OS)\n", mark(true))
+		} else {
+			fmt.Printf("%s Tetragon connected\n", mark(yes("tetragon_connected")))
+		}
+		if hooksOnly {
+		} else if yes("bpf_lsm") {
 			fmt.Printf("%s Blocking available (BPF LSM enabled)\n", mark(true))
 		} else {
 			fmt.Printf("%s Blocking unavailable: BPF LSM is off, so agents are watched but not blocked\n", mark(false))
@@ -54,7 +60,7 @@ func statusCmd(args []string) {
 		}
 		fmt.Printf("    Agents being watched right now: %v\n", h["agents"])
 	}
-	if !yes("tetragon_connected") {
+	if h["sensor"] != "hooks" && !yes("tetragon_connected") {
 		os.Exit(1)
 	}
 }
