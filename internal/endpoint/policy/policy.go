@@ -179,7 +179,9 @@ func (p *Policy) MatchAgent(binary, args string) string {
 			}
 		}
 		for _, s := range a.ArgsContains {
-			if strings.Contains(args, s) {
+			// The binary path counts too: native installs live under the
+			// package dir (…/@anthropic-ai/claude-code/bin/claude.exe).
+			if strings.Contains(args, s) || strings.Contains(binary, s) {
 				return a.Name
 			}
 		}
