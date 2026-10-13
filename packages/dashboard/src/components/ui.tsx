@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useDemoMode } from '@/demo.tsx';
+import { THEME_OPTIONS, useTheme, type ThemePref } from '@/theme.tsx';
 import { agentMeta, envMeta, MODES, userById } from '@/data.ts';
 import type { ApprovalState, Env, Mode, Outcome, RuleEffect } from '@/types.ts';
 
@@ -18,6 +19,11 @@ const OUTCOME: Record<Outcome, { label: string; cls: string }> = {
 export function OutcomePill({ outcome }: { outcome: Outcome }) {
   const o = OUTCOME[outcome];
   return <span className={`badge ${o.cls}`}>{o.label}</span>;
+}
+
+/** Small amber tag for a risky command (lib/command-risk.ts). */
+export function RiskyTag({ title = 'Risky command — deletes, privilege, network transfer, processes, containers or package installs' }: { title?: string }) {
+  return <span className="risk-tag" title={title}>risky</span>;
 }
 
 const APPROVAL: Record<ApprovalState, { label: string; cls: string }> = {
@@ -68,7 +74,7 @@ export function AgentGlyph({ type, size = 30, tip }: { type: string; size?: numb
   const label = tip ? (typeof tip === 'string' ? `${m.label} · ${tip}` : m.label) : undefined;
   return (
     <span className={`agent-glyph${label ? ' has-tip' : ''}`} data-tip={label} aria-label={label} role={label ? 'img' : undefined} tabIndex={label ? 0 : undefined}
-      style={{ width: size, height: size, color: m.color, background: `color-mix(in srgb, ${m.color} 16%, var(--panel-2))` }}>
+      style={{ width: size, height: size, ['--agent' as string]: m.color, color: 'var(--agent-ink)', background: `color-mix(in srgb, ${m.color} 16%, var(--panel-2))` }}>
       <Ic n={m.icon} size={Math.round(size * 0.55)} />
     </span>
   );
@@ -135,6 +141,17 @@ export function PageHead({ title, sub, children }: { title: string; sub: string;
     </header>
   );
 }
+
+/** Light / Dark / System (theme.tsx), for Settings and the user menu. */
+export function ThemeSelect() {
+  const { pref, setPref } = useTheme();
+  return (
+    <Seg value={pref} onChange={setPref} options={THEME_OPTIONS.map((o) => ({
+      id: o.id, label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ic n={THEME_ICON[o.id]} size={14} />{o.label}</span>,
+    }))} />
+  );
+}
+export const THEME_ICON: Record<ThemePref, string> = { light: 'sun', dark: 'moon', system: 'monitor' };
 
 export function Seg<T extends string>({ value, options, onChange }: { value: T; options: { id: T; label: ReactNode }[]; onChange: (v: T) => void }) {
   return (

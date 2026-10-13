@@ -8,11 +8,15 @@
  *
  * Targets are grouped by kind: commands (program name), files (path), network
  * destinations (ip:port / host) and tool calls. Only the busiest targets get a
- * node; the rest fold into one "+N more" node so no edge dangles.
+ * node; the rest fold into one "+N more" node so no edge dangles. Commands are
+ * classified routine / normal / risky (command-risk.ts): routine ones fold into
+ * one "Routine commands (N)" node per agent unless `showRoutine` is set, and
+ * never count against the target cap.
  */
 import type { ApiEvent } from './api.ts';
+import { baseName, classifyCommand, commandLabel, type CommandRisk } from './command-risk.ts';
 
-export type TargetKind = 'command' | 'file' | 'network' | 'tool' | 'more';
+export type TargetKind = 'command' | 'file' | 'network' | 'tool' | 'routine' | 'more';
 export type LiveNodeKind = 'machine' | 'agent' | 'mcp' | 'target';
 export type LiveOutcome = 'allowed' | 'blocked' | 'would_block' | 'flow';
 
@@ -33,6 +37,10 @@ export interface LiveNode {
   lastAt: number;
   /** Most recent events first (ApiEvent.id), capped. */
   eventIds: number[];
+  /** Command targets: routine / normal / risky (lib/command-risk.ts). */
+  risk?: CommandRisk;
+  /** "Routine commands (N)" node: the commands folded into it, busiest first. */
+  items?: { label: string; full: string; count: number }[];
 }
 
 export interface LiveEdge {
@@ -51,12 +59,15 @@ export interface LiveGraph {
   events: number; // events in the window that carried an agent
   targets: number; // distinct targets before the cap
   hiddenTargets: number; // folded into "+N more"
+  routineEvents: number; // routine command events (collapsed or shown)
 }
 
 export interface LiveGraphOptions {
   since: number; // epoch ms; older events are ignored
   agent?: string | null; // only this agent name
   maxTargets: number;
+  /** Draw routine commands (ls, cat, git status…) as their own nodes instead of one "Routine commands (N)" node per agent. */
+  showRoutine?: boolean;
 }
 
 /** What one event did, once its target is classified. */
@@ -68,13 +79,21 @@ export interface Classified {
   full: string;
   action: string; // edge label: exec, read, write, open, connect, fetch, call…
   mcp?: string; // MCP server name (from body.via or an mcp__server__tool call)
+  /** Commands only. */
+  risk?: CommandRisk;
+  rule?: string; // the risky-list entry that matched
+}
+
+/** Claude Code names MCP tools mcp__<server>__<tool>. */
+export function parseMcpTool(name: string): { server: string; tool: string } | null {
+  const m = name.match(/^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/);
+  return m ? { server: m[1], tool: m[2] } : null;
 }
 
 const EVENT_IDS_CAP = 60;
 const TARGET_TYPES = new Set(['exec', 'file_open', 'connect', 'blocked', 'would_block']);
 
-const base = (p: string) => p.replace(/\/+$/, '').split('/').filter(Boolean).pop() ?? p;
-const unquote = (s: string) => s.replace(/^["'`]+|["'`]+$/g, '');
+const base = baseName;
 
 function dirLabel(path: string): string {
   const dir = path.replace(/\/+$/, '').split('/').slice(0, -1).join('/');
@@ -84,24 +103,6 @@ function dirLabel(path: string): string {
   return parts.length > 4 ? `…/${parts.slice(-3).join('/')}` : home;
 }
 
-const WRAPPERS = new Set(['sudo', 'env', 'time', 'nohup', 'exec', 'command', 'nice']);
-
-/** The program a command line runs: "cd app && git status" → "git",
- *  "FOO=1 sudo /usr/bin/curl -s x" → "curl". */
-export function programName(cmd: string): string {
-  const segs = cmd.split(/&&|\|\||;|\|/).map((s) => s.trim().replace(/^[({\s]+|[)}\s]+$/g, '')).filter(Boolean);
-  for (const seg of segs) {
-    const toks = seg.split(/\s+/).map(unquote);
-    let i = 0;
-    while (i < toks.length && (/^[A-Za-z_][\w]*=/.test(toks[i]) || WRAPPERS.has(toks[i]))) i++;
-    const t = toks[i];
-    if (!t) continue;
-    const name = base(t);
-    if ((name === 'cd' || name === 'export' || name === 'source') && seg !== segs[segs.length - 1]) continue;
-    return name || t;
-  }
-  return base(cmd.trim().split(/\s+/)[0] ?? cmd) || cmd;
-}
 
 const ADDR = /^(?:\[[0-9a-f:.]+\]|[a-z0-9.-]+|[0-9a-f:]+):\d{1,5}$/i;
 
@@ -110,8 +111,11 @@ function hostOf(url: string): string | null {
 }
 
 function command(value: string, action = 'exec', fallbackBinary?: string): Classified {
-  const name = programName(value || fallbackBinary || '?');
-  return { kind: 'command', key: name, label: name, sub: 'Command', full: value || fallbackBinary || name, action };
+  const line = value || fallbackBinary || '?';
+  const { risk, rule } = classifyCommand(line);
+  // A risky command is named after what made it risky ("ls && curl x" → curl).
+  const name = risk === 'risky' && rule ? rule : commandLabel(line);
+  return { kind: 'command', key: `${risk === 'routine' ? '~' : risk === 'risky' ? '!' : ''}${name}`, label: name, sub: 'Command', full: value || fallbackBinary || name, action, risk, rule };
 }
 function file(path: string, action: string): Classified {
   return { kind: 'file', key: path, label: base(path) || path, sub: dirLabel(path), full: path, action };
@@ -125,8 +129,8 @@ const FILE_WRITE = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 /** A hook-reported tool call ("Bash: git status", "Read: /work/.env", "mcp__github__create_issue"). */
 function tool(name: string, value: string): Classified {
-  const mcp = name.match(/^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/);
-  if (mcp) return { kind: 'tool', key: `${mcp[1]}.${mcp[2]}`, label: mcp[2], sub: `${mcp[1]} tool`, full: `${name}${value ? `: ${value}` : ''}`, action: 'call', mcp: mcp[1] };
+  const mcp = parseMcpTool(name);
+  if (mcp) return { kind: 'tool', key: `${mcp.server}.${mcp.tool}`, label: mcp.tool, sub: `${mcp.server} tool`, full: `${name}${value ? `: ${value}` : ''}`, action: 'call', mcp: mcp.server };
   if (name === 'Bash' && value) return command(value);
   if (FILE_READ.has(name) && value) return file(value, 'read');
   if (FILE_WRITE.has(name) && value) return file(value, 'write');
@@ -143,21 +147,26 @@ export function classify(e: ApiEvent): Classified | null {
   const pre = raw.match(/^(exec|connect|open)\s+(.+)$/s);
   if (pre) { hint = pre[1] === 'open' ? 'file_open' : pre[1]; raw = pre[2].trim(); }
 
+  // Kernel exec events carry the binary in `target` and the arguments in process.args:
+  // classify the whole command line, so `git push` and `git status` are told apart.
+  const args = b.process?.args?.trim();
+  const line = args && raw && raw === b.process?.binary ? `${raw} ${args}` : raw;
+
   let c: Classified | null = null;
   const t = hint === 'tool' || /^(?:[A-Z][A-Za-z]+|mcp__\S+): /s.test(raw) || /^mcp__\S+$/.test(raw) ? raw.match(/^([A-Za-z][\w.-]*)(?::\s*(.*))?$/s) : null;
   if (t) c = tool(t[1], (t[2] ?? '').trim());
   else if (hint === 'connect' || e.type === 'connect') c = network(hostOf(raw) ?? raw);
   else if (hint === 'file_open' || e.type === 'file_open') c = raw ? file(raw, 'open') : null;
-  else if (hint === 'exec' || hint === 'agent' || hint === 'mcp' || e.type === 'exec') c = command(raw, 'exec', b.process?.binary);
+  else if (hint === 'exec' || hint === 'agent' || hint === 'mcp' || e.type === 'exec') c = command(line, 'exec', b.process?.binary);
   else if (raw) {
     // blocked / would_block without a kind: tell the target apart by shape (and the rule that matched).
     const rule = b.rule ?? '';
-    if (/exec_/.test(rule)) c = command(raw);
+    if (/exec_/.test(rule)) c = command(line);
     else if (/network/.test(rule) || ADDR.test(raw)) c = network(raw);
     else if (/^https?:\/\//.test(raw)) c = network(hostOf(raw) ?? raw, 'fetch');
     else if (/file_/.test(rule) || (/^[/~]/.test(raw) && !/\s/.test(raw))) c = file(raw, 'open');
-    else c = command(raw);
-  } else if (b.process?.binary) c = command('', 'exec', b.process.binary);
+    else c = command(line);
+  } else if (b.process?.binary) c = command(args ? `${b.process.binary} ${args}` : '', 'exec', b.process.binary);
   if (!c) return null;
 
   const via = b.via?.trim();
@@ -167,7 +176,7 @@ export function classify(e: ApiEvent): Classified | null {
 
 const outcomeOf = (type: string): LiveOutcome => (type === 'blocked' ? 'blocked' : type === 'would_block' ? 'would_block' : 'allowed');
 
-const KIND_ORDER: Record<TargetKind, number> = { command: 0, file: 1, network: 2, tool: 3, more: 4 };
+const KIND_ORDER: Record<TargetKind, number> = { command: 0, file: 1, network: 2, tool: 3, routine: 4, more: 5 };
 
 export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>, o: LiveGraphOptions): LiveGraph {
   const nodes = new Map<string, LiveNode>();
@@ -213,20 +222,43 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
     hits.push({ tid: `t:${c.kind}:${c.key}`, c, agentId: aid, outcome, at, ev: e.id });
   }
 
+  // Routine commands fold into one node per agent (unless shown); they never compete for the target cap.
+  const routineHits = hits.filter((h) => h.c.risk === 'routine');
+  const collapse = !o.showRoutine;
+  const ROUTINE = (agentId: string) => `t:routine:${agentId}`;
+  const routineCount = new Map<string, number>();
+  const routineItems = new Map<string, Map<string, { label: string; full: string; count: number }>>();
+  if (collapse) {
+    for (const h of routineHits) {
+      routineCount.set(h.agentId, (routineCount.get(h.agentId) ?? 0) + 1);
+      const m = routineItems.get(h.agentId) ?? new Map<string, { label: string; full: string; count: number }>();
+      const it = m.get(h.c.label) ?? { label: h.c.label, full: h.c.full, count: 0 };
+      it.count++;
+      m.set(h.c.label, it);
+      routineItems.set(h.agentId, m);
+    }
+  }
+  const ranked0 = collapse ? hits.filter((h) => h.c.risk !== 'routine') : hits;
+
   // Keep the busiest targets; fold the rest into "+N more".
   const tally = new Map<string, number>();
-  for (const h of hits) tally.set(h.tid, (tally.get(h.tid) ?? 0) + 1);
+  for (const h of ranked0) tally.set(h.tid, (tally.get(h.tid) ?? 0) + 1);
   const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const kept = new Set(ranked.slice(0, Math.max(0, o.maxTargets)).map(([id]) => id));
   const hidden = ranked.length - kept.size;
   const MORE = 't:more';
 
   for (const h of hits) {
-    const show = kept.has(h.tid);
-    const tid = show ? h.tid : MORE;
-    if (show) touch(tid, () => ({ kind: 'target', targetKind: h.c.kind, label: h.c.label, sub: h.c.sub, full: h.c.full }), h.outcome, h.at, h.ev);
+    const folded = collapse && h.c.risk === 'routine';
+    const show = folded || kept.has(h.tid);
+    const tid = folded ? ROUTINE(h.agentId) : show ? h.tid : MORE;
+    if (folded) {
+      const n = routineCount.get(h.agentId) ?? 0;
+      const items = [...(routineItems.get(h.agentId)?.values() ?? [])].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+      touch(tid, () => ({ kind: 'target', targetKind: 'routine', label: `Routine commands (${n.toLocaleString()})`, sub: items.slice(0, 3).map((i) => i.label).join(', ') + (items.length > 3 ? '…' : ''), full: items.map((i) => i.label).join(', '), risk: 'routine', items }), h.outcome, h.at, h.ev);
+    } else if (show) touch(tid, () => ({ kind: 'target', targetKind: h.c.kind, label: h.c.label, sub: h.c.sub, full: h.c.full, risk: h.c.risk }), h.outcome, h.at, h.ev);
     else touch(tid, () => ({ kind: 'target', targetKind: 'more', label: `+${hidden} more`, sub: hidden === 1 ? 'target' : 'targets', full: '' }), h.outcome, h.at, h.ev);
-    const action = show ? h.c.action : 'other';
+    const action = folded ? 'exec' : show ? h.c.action : 'other';
     if (h.c.mcp) {
       const sid = `s:${h.c.mcp}`;
       const name = h.c.mcp;
@@ -240,5 +272,5 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
 
   const order = (x: LiveNode) => (x.kind === 'target' ? KIND_ORDER[x.targetKind ?? 'more'] : 0);
   const list = [...nodes.values()].sort((a, b) => order(a) - order(b) || b.count - a.count || a.label.localeCompare(b.label));
-  return { nodes: list, edges: [...edges.values()], events: n, targets: ranked.length, hiddenTargets: hidden };
+  return { nodes: list, edges: [...edges.values()], events: n, targets: ranked.length, hiddenTargets: hidden, routineEvents: routineHits.length };
 }

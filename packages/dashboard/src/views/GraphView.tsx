@@ -12,11 +12,11 @@ import { AgentGraph, EDGE_COLOR, Legend, visibleFlows } from '@/components/Agent
 import { FlowList } from '@/components/GraphCard.tsx';
 import { RangeSelect } from '@/components/RangeSelect.tsx';
 import {
-  LiveEdgeList, LiveGraphCanvas, LiveGraphEmpty, nodeIcon, nodeLabel, nodeSub, useLiveGraph, type LiveGraphData,
+  LiveEdgeList, LiveGraphCanvas, LiveGraphEmpty, isRisky, nodeIcon, nodeLabel, nodeSub, useLiveGraph, type LiveGraphData,
 } from '@/components/LiveGraph.tsx';
 import { ago } from '@/lib/live-map.ts';
 import {
-  AgentCell, AgentGlyph, Card, CardHead, EnvTag, Loading, ModeTag, OutcomePill, PageHead, Seg, StatusPill, UserCell, initials,
+  AgentCell, AgentGlyph, Card, CardHead, EnvTag, Loading, ModeTag, OutcomePill, PageHead, RiskyTag, Seg, StatusPill, UserCell, initials,
 } from '@/components/ui.tsx';
 
 type Focus = AgentType | 'all';
@@ -130,6 +130,12 @@ export function GraphView({ initialAgent, initialView, initialNode }: { initialA
 }
 
 const MAX_TARGETS = 25;
+
+/** Long targets (paths, mcp__server__tool names, URLs) may break after separators instead of mid-word. */
+function Breakable({ text }: { text: string }) {
+  const parts = text.split(/(?<=\/|__|[.:?&=,])/);
+  return <>{parts.map((p, i) => <span key={i}>{p}{i < parts.length - 1 && <wbr />}</span>)}</>;
+}
 const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '—');
 
 function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
@@ -147,6 +153,7 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
           <dt>Agents</dt><dd>{count('agent')}</dd>
           <dt>MCP servers</dt><dd>{count('mcp')}</dd>
           <dt>Targets</dt><dd>{graph.targets}{graph.hiddenTargets ? ` (top ${graph.targets - graph.hiddenTargets} shown)` : ''}</dd>
+          <dt>Routine commands</dt><dd>{graph.routineEvents.toLocaleString()} <span className="muted">{data.showRoutine ? '(shown)' : '(collapsed)'}</span></dd>
           <dt>Allowed</dt><dd style={{ color: EDGE_COLOR.allowed }}>{sum('allowed').toLocaleString()}</dd>
           <dt>Blocked</dt><dd style={{ color: EDGE_COLOR.blocked }}>{sum('blocked').toLocaleString()}</dd>
           <dt>Would block</dt><dd style={{ color: EDGE_COLOR.would_block }}>{sum('wouldBlock').toLocaleString()}</dd>
@@ -162,16 +169,17 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
   const auditQ = node.kind === 'agent' ? `${agentMeta(node.agent).label} ${ep?.hostname ?? ''}`.trim()
     : node.kind === 'machine' ? node.label
     : node.kind === 'mcp' ? node.full
-    : node.targetKind === 'more' ? '' : node.targetKind === 'command' ? node.label : node.full;
+    : node.targetKind === 'more' || node.targetKind === 'routine' ? '' : node.targetKind === 'command' ? node.label : node.full;
   const hero = node.kind === 'agent'
     ? <AgentGlyph type={node.agent ?? ''} size={44} />
     : <span className="res-glyph" style={{ width: 44, height: 44 }}><Ic n={nodeIcon(node, endpointById)} size={20} /></span>;
 
   return (
     <Card className="detail">
-      <div className="detail-hero">{hero}<div style={{ minWidth: 0 }}><h3 style={{ overflowWrap: 'anywhere' }}>{nodeLabel(node)}</h3><div className="cell-sub">{nodeSub(node, endpointById)}</div></div></div>
+      <div className="detail-hero">{hero}<div style={{ minWidth: 0 }}><h3 style={{ overflowWrap: 'anywhere' }}>{nodeLabel(node)}{isRisky(node) && <RiskyTag />}</h3><div className="cell-sub">{nodeSub(node, endpointById)}</div></div></div>
       <dl className="kv">
-        {node.kind === 'target' && node.targetKind !== 'more' && node.full !== node.label && <><dt>Target</dt><dd className="mono-sm">{node.full}</dd></>}
+        {node.kind === 'target' && node.targetKind !== 'more' && node.targetKind !== 'routine' && node.full !== node.label && <><dt>Target</dt><dd className="mono-sm" style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}><Breakable text={node.full} /></dd></>}
+        {node.risk && node.targetKind !== 'routine' && <><dt>Class</dt><dd>{node.risk === 'risky' ? 'Risky command' : node.risk === 'routine' ? 'Routine command' : 'Command'}</dd></>}
         {node.kind === 'machine' && ep && <><dt>Status</dt><dd><StatusPill status={ep.status} /></dd><dt>effigentd</dt><dd>{ep.version || '—'} · policy v{ep.policyVersion}</dd></>}
         {node.kind === 'agent' && <><dt>Machine</dt><dd className="mono-sm">{ep?.hostname ?? node.sub}</dd></>}
         <dt>Events</dt><dd>{node.count.toLocaleString()}</dd>
@@ -179,15 +187,32 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
         <dt>Would block</dt><dd style={{ color: node.wouldBlock ? EDGE_COLOR.would_block : undefined }}>{node.wouldBlock}</dd>
         <dt>Last event</dt><dd>{ago(node.lastAt, now)}</dd>
       </dl>
+      {node.items && (
+        <>
+          <div className="section-label">Routine commands</div>
+          <ul className="mini-list">
+            {node.items.slice(0, 30).map((it) => (
+              <li key={it.label}>
+                <span className="ml-body"><span className="cell-main mono-sm" title={it.full}>{it.label}</span><span className="cell-sub mono-sm" title={it.full}>{it.full}</span></span>
+                <span className="mono-chip">{it.count.toLocaleString()}</span>
+              </li>
+            ))}
+            {node.items.length > 30 && <li className="muted">+{node.items.length - 30} more</li>}
+          </ul>
+          <div className="cell-sub" style={{ padding: '0 20px 10px', whiteSpace: 'normal' }}>Read-only housekeeping (ls, cat, git status…), folded into one node. Turn on “Show routine” to draw each one.</div>
+        </>
+      )}
       <div className="section-label">Connections</div>
       <ul className="mini-list">
         {touching.slice(0, 12).map((e) => {
           const out = e.source === node.id;
           return (
             <li key={e.id}>
-              <span className="cell-main" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={byId.get(out ? e.target : e.source)?.full}>
-                {out ? '→' : '←'} {nodeLabel(byId.get(out ? e.target : e.source))}
-                {byId.get(out ? e.target : e.source)?.kind === 'agent' && <span className="muted"> @ {byId.get(out ? e.target : e.source)?.sub}</span>}
+              <span className="ml-body" title={byId.get(out ? e.target : e.source)?.full}>
+                <span className="cell-main">
+                  {out ? '→' : '←'} {nodeLabel(byId.get(out ? e.target : e.source))}
+                  {byId.get(out ? e.target : e.source)?.kind === 'agent' && <span className="muted"> @ {byId.get(out ? e.target : e.source)?.sub}</span>}
+                </span>
               </span>
               <span className="mono-chip" style={{ color: EDGE_COLOR[e.outcome], flex: 'none' }}>{e.action} · {e.count}</span>
             </li>
@@ -199,10 +224,11 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
       <ul className="mini-list">
         {recent.map((e) => (
           <li key={e.id}>
-            <span style={{ minWidth: 0 }}>
-              <span className="cell-main mono-sm" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.target ?? e.summary}>{e.summary}</span>
-              <span className="cell-sub">{e.time} · {e.ago}{node.kind !== 'agent' && e.agentType ? ` · ${agentMeta(e.agentType).label}` : ''}{node.kind !== 'machine' && e.endpointName ? ` @ ${e.endpointName}` : ''}</span>
+            <span className="ml-body">
+              <span className="cell-main mono-sm" title={e.target ?? e.summary}>{e.summary}</span>
+              <span className="cell-sub" title={`${e.time} · ${e.ago}${e.agentType ? ` · ${agentMeta(e.agentType).label}` : ''}${e.endpointName ? ` @ ${e.endpointName}` : ''}`}>{e.time} · {e.ago}{node.kind !== 'agent' && e.agentType ? ` · ${agentMeta(e.agentType).label}` : ''}{node.kind !== 'machine' && e.endpointName ? ` @ ${e.endpointName}` : ''}</span>
             </span>
+            {e.risk === 'risky' && node.risk !== 'risky' && <RiskyTag />}
             <OutcomePill outcome={e.outcome} />
           </li>
         ))}
@@ -220,7 +246,8 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
   const [agent, setAgent] = useState<string | null>(initialAgent || null);
   const [view, setView] = useState<'graph' | 'list'>(initialView === 'list' ? 'list' : 'graph');
   const [selected, setSelected] = useState<string | null>(initialNode || null);
-  const data = useLiveGraph({ maxTargets: MAX_TARGETS, agent });
+  const [showRoutine, setShowRoutine] = useState(false);
+  const data = useLiveGraph({ maxTargets: MAX_TARGETS, agent, showRoutine });
   const { graph, loaded, agents } = data;
 
   const sync = (a: string | null, v: 'graph' | 'list') => {
@@ -235,6 +262,10 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
   return (
     <div className="page">
       <PageHead title="Agent Graph" sub={SUB}>
+        <button className={`chip ${showRoutine ? 'on' : ''}`} aria-pressed={showRoutine} onClick={() => { setShowRoutine((v) => !v); setSelected(null); }}
+          title="Routine commands (ls, cat, git status…) are folded into one node per agent. Turn on to draw each one.">
+          <Ic n={showRoutine ? 'eye' : 'layers'} size={14} /> Show routine{graph.routineEvents ? <span className="n">{graph.routineEvents.toLocaleString()}</span> : null}
+        </button>
         <RangeSelect />
         <Seg value={view} onChange={(v) => { setView(v); sync(agent, v); }} options={[{ id: 'graph', label: 'Graph' }, { id: 'list', label: 'List' }]} />
       </PageHead>
@@ -259,7 +290,7 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
           <Card className="graph-card">
             <CardHead
               title={<>{agent ? agentMeta(agent).label : 'All agents'} <span className="live-chip"><span className="dot" /> Live</span></>}
-              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` Busiest ${MAX_TARGETS} targets shown; the rest are under "+${graph.hiddenTargets} more".` : ''} Click a node for its recent events.`}
+              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` Busiest ${MAX_TARGETS} targets shown; the rest are under "+${graph.hiddenTargets} more".` : ''}${!showRoutine && graph.routineEvents ? ' Routine commands are folded into one node per agent.' : ''} Click a node for its recent events.`}
             />
             <LiveGraphCanvas data={data} selected={selected} onSelect={setSelected} height={640} background />
             <Legend live />

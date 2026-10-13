@@ -8,7 +8,7 @@ import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiAuditEntry, type ApiAuditVerification } from '@/lib/api.ts';
 import { ago, dateTime, ms } from '@/lib/live-map.ts';
 import type { ConsoleEvent, EventType, Outcome } from '@/types.ts';
-import { AgentGlyph, Card, CardHead, Empty, Loading, OutcomePill, PageHead, Seg } from '@/components/ui.tsx';
+import { AgentGlyph, Card, CardHead, Empty, Loading, OutcomePill, PageHead, RiskyTag, Seg } from '@/components/ui.tsx';
 import { RangeSelect } from '@/components/RangeSelect.tsx';
 
 const TYPE_LABEL: Record<Exclude<EventType, 'approval'>, string> = {
@@ -29,10 +29,10 @@ const actionLabel = (a: string) => ACTION_LABEL[a] ?? (a.startsWith('denied.') ?
 const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 function eventsCsv(rows: ConsoleEvent[]): string {
-  const head = ['id', 'time', 'type', 'severity', 'outcome', 'agent', 'endpoint', 'action', 'target', 'rule', 'via', 'mode'];
+  const head = ['id', 'time', 'type', 'severity', 'outcome', 'agent', 'endpoint', 'action', 'target', 'rule', 'via', 'mode', 'command_class'];
   return [head.join(','), ...rows.map((e) => [
     e.id, e.at ? new Date(e.at).toISOString() : e.time, e.type, e.severity, e.outcome, e.agentType ?? '', e.endpointName ?? e.endpoint ?? '',
-    e.summary, e.target ?? '', e.rule ?? '', e.via ?? '', e.mode ?? '',
+    e.summary, e.target ?? '', e.rule ?? '', e.via ?? '', e.mode ?? '', e.risk ?? '',
   ].map(esc).join(','))].join('\n');
 }
 
@@ -73,13 +73,17 @@ function useVerify(): [React.ReactNode, React.ReactNode] {
   ];
 }
 
-export function Audit({ initialQuery, initialOutcome, initialTab = 'events' }: { initialQuery?: string; initialOutcome?: string; initialTab?: 'events' | 'trail' }) {
+export function Audit({ initialQuery, initialOutcome, initialTab = 'events', initialRisky = false }: {
+  initialQuery?: string; initialOutcome?: string; initialTab?: 'events' | 'trail'; initialRisky?: boolean;
+}) {
   const { range } = useStore();
   const { consoleEvents, audit, loaded, now } = useLive();
   const [tab, setTab] = useState<'events' | 'trail'>(initialTab);
   const [q, setQ] = useState(initialQuery ?? '');
   const [outcome, setOutcome] = useState<Outcome | 'all'>(OUTCOMES.includes(initialOutcome as Outcome) ? (initialOutcome as Outcome) : 'all');
   const [type, setType] = useState<EventType | 'all'>('all');
+  const [riskyOnly, setRiskyOnly] = useState(initialRisky);
+  const [showRoutine, setShowRoutine] = useState(false);
   const [verifyBtn, verifyResult] = useVerify();
 
   const since = now - RANGE_MS[range];
@@ -87,13 +91,19 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events' }: {
   const trail = useMemo(() => audit.filter((a) => (ms(a.at) ?? 0) >= since), [audit, since]);
   const needle = q.trim().toLowerCase();
 
-  const rows = useMemo(() => all.filter((e) => {
+  // Every filter but the routine one; routine command events are then hidden unless asked for.
+  const matched = useMemo(() => all.filter((e) => {
     if (outcome !== 'all' && e.outcome !== outcome) return false;
     if (type !== 'all' && e.type !== type) return false;
+    if (riskyOnly && e.risk !== 'risky') return false;
     if (!needle) return true;
-    const hay = `${e.title} ${e.summary} ${e.target ?? ''} ${e.rule ?? ''} ${e.via ?? ''} ${agentMeta(e.agentType).label} ${e.agentType ?? ''} ${e.endpointName ?? ''}`;
+    const hay = `${e.title} ${e.summary} ${e.target ?? ''} ${e.rule ?? ''} ${e.via ?? ''} ${agentMeta(e.agentType).label} ${e.agentType ?? ''} ${e.endpointName ?? ''}${e.risk === 'risky' ? ' risky' : ''}`;
     return needle.split(/\s+/).every((w) => hay.toLowerCase().includes(w));
-  }), [all, outcome, type, needle]);
+  }), [all, outcome, type, riskyOnly, needle]);
+  const routineHidden = showRoutine ? 0 : matched.filter((e) => e.risk === 'routine').length;
+  const rows = useMemo(() => (showRoutine ? matched : matched.filter((e) => e.risk !== 'routine')), [matched, showRoutine]);
+  const routineTotal = useMemo(() => matched.filter((e) => e.risk === 'routine').length, [matched]);
+  const riskyCount = all.filter((e) => e.risk === 'risky').length;
 
   const trailRows = useMemo(() => trail.filter((a) => {
     if (!needle) return true;
@@ -133,6 +143,9 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events' }: {
                 {o === 'all' ? 'All results' : o === 'would_block' ? 'Would block' : o[0].toUpperCase() + o.slice(1)}
               </button>
             ))}
+            <button className={`chip ${riskyOnly ? 'on' : ''}`} aria-pressed={riskyOnly} onClick={() => setRiskyOnly((v) => !v)} title="Only commands classified as risky (rm, sudo, curl, ssh, git push, npm install…)">
+              Risky commands <span className="n">{riskyCount}</span>
+            </button>
           </div>
         )}
         <span className="grow" />
@@ -148,9 +161,17 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events' }: {
 
       {tab === 'events' ? (
         <Card>
-          <CardHead title="Agent events" sub={`${rows.length} of ${all.length} events`} />
+          <CardHead title="Agent events" sub={`${rows.length} of ${all.length} events${routineHidden ? ` · ${routineHidden} routine command${routineHidden === 1 ? '' : 's'} hidden` : ''}`}>
+            {routineTotal > 0 && (
+              <button className={`chip ${showRoutine ? 'on' : ''}`} aria-pressed={showRoutine} onClick={() => setShowRoutine((v) => !v)}
+                title="Routine commands are read-only housekeeping: ls, cat, grep, git status…">
+                {showRoutine ? 'Hide routine commands' : `Show routine commands (${routineHidden} hidden)`}
+              </button>
+            )}
+          </CardHead>
           {!loaded ? <Loading /> : rows.length === 0 ? (
-            <Empty icon="search" title={all.length ? 'No matching events' : 'No events in this range'} sub={all.length ? 'Try a different filter.' : 'Enrolled endpoints report agent activity here.'} />
+            <Empty icon="search" title={all.length ? 'No matching events' : 'No events in this range'}
+              sub={!all.length ? 'Enrolled endpoints report agent activity here.' : routineHidden ? `Only routine commands match — ${routineHidden} hidden. Use “Show routine commands” to see them.` : 'Try a different filter.'} />
           ) : (
             <div className="tbl-wrap">
               <table className="tbl">
@@ -158,11 +179,11 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events' }: {
                 <tbody>
                   {rows.map((e) => (
                     <tr key={e.id}>
-                      <td className="tnum muted" title={e.at ? dateTime(e.at) : undefined}>{e.time}<span className="cell-sub">{e.ago}</span></td>
+                      <td className="tnum muted" title={e.at ? dateTime(e.at) : undefined}>{e.time}<span className="cell-sub" style={{ display: 'block' }}>{e.ago}</span></td>
                       <td><span className="cell-main" style={{ display: 'block' }}>{typeLabel(e.type)}</span><span className="cell-sub">{e.severity}{e.mode ? ` · ${e.mode}` : ''}</span></td>
                       <td>{e.agentType ? <span className="agent-cell"><AgentGlyph type={e.agentType} size={24} /><span><span className="cell-main">{agentMeta(e.agentType).label}</span>{e.via && <span className="cell-sub">{e.via}</span>}</span></span> : <span className="muted">effigentd</span>}</td>
                       <td><span className="mono-sm">{e.endpointName ?? '—'}</span></td>
-                      <td style={{ maxWidth: 340 }}><span className="cell-main" style={{ display: 'block' }}>{e.summary}</span><span className="cell-sub mono-sm" style={{ display: 'block', wordBreak: 'break-all' }}>{e.target}</span></td>
+                      <td style={{ maxWidth: 340 }}><span className="cell-main" style={{ display: 'block' }}>{e.summary}{e.risk === 'risky' && <RiskyTag />}</span><span className="cell-sub mono-sm" style={{ display: 'block', wordBreak: 'break-all' }}>{e.target}</span></td>
                       <td className="muted" style={{ maxWidth: 260, fontSize: 12.5 }}>{e.rule ?? '—'}</td>
                       <td><OutcomePill outcome={e.outcome} /></td>
                     </tr>

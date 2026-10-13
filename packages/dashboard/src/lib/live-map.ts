@@ -3,6 +3,7 @@
  * mapping rules — status thresholds, outcome per event type — live in one place.
  */
 import type { ApiEndpoint, ApiEvent } from './api.ts';
+import { classify, type Classified } from './live-graph.ts';
 import type { ConsoleEvent, EventType, Outcome, Severity } from '@/types.ts';
 
 /** effigentd syncs every 5s by default (-sync-interval), so a minute of silence
@@ -83,29 +84,48 @@ const TITLE: Record<string, string> = {
 
 const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
 
+/** An MCP tool call ("mcp__claude-in-chrome__computer: …") → "MCP · claude-in-chrome · computer". */
+const mcpCall = (c: Classified | null) => (c?.kind === 'tool' && c.mcp && c.sub === `${c.mcp} tool` ? `MCP · ${c.mcp} · ${c.label}` : null);
+
+/** A command line as a summary: the line itself, or just the program when it starts with a path ("/usr/bin/curl …" → curl). */
+const commandText = (c: Classified) => (c.full.startsWith('/') ? c.label : c.full);
+
+/** What a hook-reported tool call did, in the same words as kernel events. */
+function toolSummary(c: Classified): string {
+  if (c.kind === 'command') return `exec: ${commandText(c)}`;
+  if (c.kind === 'file') return `${c.action}: ${c.full}`;
+  if (c.kind === 'network') return `${c.action}: ${c.full}`;
+  return c.full;
+}
+
 export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): ConsoleEvent {
   const b = e.body ?? {};
   const at = ms(e.time) ?? 0;
   const type = (KNOWN as string[]).includes(e.type) ? (e.type as EventType) : 'policy';
   const target = b.target || b.process?.args || b.process?.binary || undefined;
+  const c = classify(e);
+  const mcp = mcpCall(c);
+  const hook = b.kind === 'tool' && c;
   let summary: string;
   switch (e.type) {
-    case 'exec': summary = `exec: ${base(b.target || b.process?.binary || '?')}`; break;
+    case 'exec': summary = mcp ?? (hook ? toolSummary(c) : c?.kind === 'command' ? `exec: ${commandText(c)}` : `exec: ${base(b.target || b.process?.binary || '?')}`); break;
     case 'file_open': summary = `open: ${b.target ?? '?'}`; break;
     case 'connect': summary = `connect: ${b.target ?? '?'}`; break;
     case 'blocked': case 'would_block':
-      summary = `${e.type === 'blocked' ? 'blocked' : 'would block'}: ${b.target ? (b.target.startsWith('/') ? base(b.target) : b.target) : '?'}`; break;
+      summary = `${e.type === 'blocked' ? 'blocked' : 'would block'}: ${mcp ?? (c?.kind === 'command' ? c.label : b.target ? (b.target.startsWith('/') ? base(b.target) : b.target) : '?')}`; break;
     case 'agent_start': case 'agent_exit': summary = `${e.type}${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`; break;
     default: summary = b.message || e.type;
   }
   const severity: Severity = e.severity === 'high' || e.severity === 'medium' ? e.severity : 'info';
   return {
     id: `ev-${e.id}`, at, time: clock(at), ago: '',
-    type, severity, outcome: OUTCOME[e.type] ?? 'system', title: TITLE[e.type] ?? e.type,
+    type, severity, outcome: OUTCOME[e.type] ?? 'system', title: mcp && e.type === 'exec' ? 'Called an MCP tool' : TITLE[e.type] ?? e.type,
     agentType: e.agent || b.agent || null, user: null,
     endpoint: e.endpoint_id, endpointName: hostById.get(e.endpoint_id) ?? e.endpoint_id.slice(0, 8),
     env: null, summary, target: b.process?.args && e.type === 'exec' ? b.process.args : target,
     rule: b.rule || undefined, via: b.via || undefined, mode: (b.mode as ConsoleEvent['mode']) || undefined,
+    risk: c?.kind === 'command' ? c.risk : undefined,
+    riskRule: c?.kind === 'command' ? c.rule : undefined,
   };
 }
 

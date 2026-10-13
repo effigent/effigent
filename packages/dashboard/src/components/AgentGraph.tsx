@@ -8,16 +8,18 @@ import {
 } from '@xyflow/react';
 import { AGENTS, AGENT_TYPES, RESOURCES, resourceById, userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
+import { useTheme } from '@/theme.tsx';
 import type { AgentType, Env, Flow } from '@/types.ts';
 
-/** Demo flows use the first four; live (event-built) edges add would_block. */
+/** Demo flows use the first four; live (event-built) edges add would_block.
+ *  Theme tokens (theme.css), so edges, markers and labels follow light/dark. */
 export type Outcome = Flow['outcome'] | 'would_block';
 export const EDGE_COLOR: Record<Outcome, string> = {
-  allowed: '#34d399',
-  blocked: '#fb7185',
-  flow: '#5b8bff',
-  pending: '#fbbf24',
-  would_block: '#fb923c',
+  allowed: 'var(--edge-allowed)',
+  blocked: 'var(--edge-blocked)',
+  flow: 'var(--edge-flow)',
+  pending: 'var(--edge-pending)',
+  would_block: 'var(--edge-would-block)',
 };
 
 /** user/agent/resource: the demo graph; machine/mcp: the live graph. */
@@ -26,6 +28,8 @@ export type GNodeData = {
   kind: NodeKind; label: string; sub: string; icon: string; size: number;
   tone: 'user' | 'agent' | 'ok' | 'bad' | 'warn'; labelPos: 'right' | 'below' | 'left';
   color?: string; dim?: boolean; selected?: boolean;
+  /** Live graph: a risky command (amber ring + "risky" tag); a routine one (muted). */
+  risky?: boolean; muted?: boolean;
 };
 export type GNode = Node<GNodeData, 'circle'>;
 export type GEdgeData = { outcome: Outcome; label: string; curve: number; showLabel: boolean; dim?: boolean; count: number };
@@ -37,13 +41,13 @@ function CircleNode({ data }: NodeProps<GNode>) {
   // The node box is the circle plus (for side labels) the label, so fitView
   // keeps labels on screen; edges anchor on the circle via data.size.
   return (
-    <div className={`gnode gnode-${data.kind} tone-${data.tone} lp-${data.labelPos} ${data.dim ? 'dim' : ''} ${data.selected ? 'sel' : ''}`}
+    <div className={`gnode gnode-${data.kind} tone-${data.tone} lp-${data.labelPos} ${data.dim ? 'dim' : ''} ${data.selected ? 'sel' : ''} ${data.risky ? 'risky' : ''} ${data.muted ? 'muted' : ''}`}
       style={{ height: data.size, ['--agent' as string]: data.color }}>
       <Handle type="target" position={Position.Left} className="ghandle" isConnectable={false} />
       <Handle type="source" position={Position.Right} className="ghandle" isConnectable={false} />
       <div className="gnode-circle" style={{ width: data.size, height: data.size }}><Ic n={data.icon} size={Math.round(data.size * 0.42)} /></div>
       <div className="gnode-label">
-        <div className="gl-main">{data.label}</div>
+        <div className="gl-main">{data.label}{data.risky && <span className="risk-tag">risky</span>}</div>
         <div className="gl-sub">{data.sub}</div>
       </div>
     </div>
@@ -242,6 +246,7 @@ export function GraphCanvas({
   nodes: GNode[]; edges: GEdge[]; interactive: boolean; fitPadding?: number; minZoom?: number;
   selected?: string | null; onSelect?: (id: string | null) => void; height: number | string; background?: boolean;
 }) {
+  const { theme } = useTheme();
   return (
     <div className="graph-canvas" style={{ height }}>
       <ReactFlow
@@ -249,7 +254,7 @@ export function GraphCanvas({
         edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        colorMode="dark"
+        colorMode={theme}
         fitView
         fitViewOptions={{ padding: fitPadding, maxZoom: 1.15 }}
         minZoom={minZoom}
@@ -265,7 +270,7 @@ export function GraphCanvas({
         onNodeClick={(_: React.MouseEvent, n: Node) => onSelect?.(selected === n.id ? null : n.id)}
         onPaneClick={() => onSelect?.(null)}
       >
-        {background && <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="rgba(138,168,255,0.10)" />}
+        {background && <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-dot)" />}
         {interactive && <Controls showInteractive={false} position="bottom-right" />}
       </ReactFlow>
     </div>

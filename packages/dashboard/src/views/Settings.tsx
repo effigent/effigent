@@ -6,7 +6,7 @@ import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { API_BASE } from '@/lib/api.ts';
 import { Storage } from '@/components/Storage.tsx';
-import { Card, CardHead, DemoNote, PageHead, Switch } from '@/components/ui.tsx';
+import { Card, CardHead, DemoNote, PageHead, Switch, ThemeSelect } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
 const NOT_STORED = 'These preferences are not stored by the control plane yet — changes here are not saved';
@@ -101,6 +101,13 @@ export function Settings({ dev }: { dev: boolean }) {
           </Row>
         </Card>
       </div>
+
+      <Card>
+        <CardHead title="Appearance" sub="How the console looks in this browser." />
+        <Row title="Theme" desc="System follows your operating system's light or dark setting. Saved in this browser only.">
+          <ThemeSelect />
+        </Row>
+      </Card>
 
       <Card>
         <CardHead title="Demo Mode" sub="Show a sample workspace — agents, events, approvals, lists, identity and the agent graph — to see what a full deployment looks like." />

@@ -8,6 +8,6 @@ const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 export default async function AuditPage({ searchParams }: { searchParams: SP }) {
   const sp = await searchParams;
-  const q = one(sp.q), outcome = one(sp.outcome), tab = one(sp.tab);
-  return <Audit key={`${q ?? ''}|${outcome ?? ''}|${tab ?? ''}`} initialQuery={q} initialOutcome={outcome} initialTab={tab === 'trail' ? 'trail' : 'events'} />;
+  const q = one(sp.q), outcome = one(sp.outcome), tab = one(sp.tab), risk = one(sp.risk);
+  return <Audit key={`${q ?? ''}|${outcome ?? ''}|${tab ?? ''}|${risk ?? ''}`} initialQuery={q} initialOutcome={outcome} initialTab={tab === 'trail' ? 'trail' : 'events'} initialRisky={risk === 'risky'} />;
 }

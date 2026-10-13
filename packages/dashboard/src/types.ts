@@ -5,6 +5,8 @@
  * without touching the views.
  */
 
+import type { CommandRisk } from './lib/command-risk.ts';
+
 /** policy.Mode */
 export type Mode = 'monitor' | 'learn' | 'denylist' | 'allowlist';
 
@@ -111,6 +113,10 @@ export interface ConsoleEvent {
   rule?: string; // policy rule that matched
   via?: string; // nearest MCP server, e.g. mcp:github
   mode?: Mode;
+  /** Commands only: routine / normal / risky (lib/command-risk.ts). */
+  risk?: CommandRisk;
+  /** Risky commands: the list entry that matched ("curl", "git push", "sudo"). */
+  riskRule?: string;
 }
 
 export interface Approval {

@@ -6,7 +6,8 @@ import { AGENT_TYPES, FLOWS, resourceById, userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import type { AgentType, Env, Flow } from '@/types.ts';
 import { AgentGraph, EDGE_COLOR, Legend, visibleFlows } from './AgentGraph.tsx';
-import { AgentCell, Card, CardHead, Loading, Seg, UserCell } from './ui.tsx';
+import { AgentCell, Card, CardHead, Loading, RiskyTag, Seg, UserCell } from './ui.tsx';
+import { classifyCommand } from '@/lib/command-risk.ts';
 import { useDemoMode } from '@/demo.tsx';
 import { LiveEdgeList, LiveGraphCanvas, LiveGraphEmpty, useLiveGraph } from './LiveGraph.tsx';
 
@@ -36,7 +37,7 @@ export function FlowList({ flows }: { flows: Flow[] }) {
           {flows.map((f) => (
             <tr key={f.id}>
               <td>{nodeName(f.from)}</td>
-              <td><span className="mono-chip" style={{ color: EDGE_COLOR[f.outcome] }}>{f.label}</span></td>
+              <td><span className="mono-chip" style={{ color: EDGE_COLOR[f.outcome] }}>{f.label}</span>{f.outcome !== 'blocked' && classifyCommand(f.label.replace(':', ' ')).risk === 'risky' && <RiskyTag />}</td>
               <td>{nodeName(f.to)}</td>
               <td><span className={`badge ${OUTCOME_CLS[f.outcome]}`}>{OUTCOME_LABEL[f.outcome]}</span></td>
               <td className="num tnum">{f.count24h.toLocaleString()}</td>

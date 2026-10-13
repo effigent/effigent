@@ -5,7 +5,8 @@ import { OrganizationSwitcher, UserButton, useOrganization, useUser } from '@cle
 import { useStore } from '@/store.tsx';
 import { useDemoMode } from '@/demo.tsx';
 import { Ic } from '@/icons.tsx';
-import { initials } from './ui.tsx';
+import { initials, THEME_ICON } from './ui.tsx';
+import { THEME_OPTIONS, useTheme } from '@/theme.tsx';
 
 const appearance = {
   elements: {
@@ -29,6 +30,7 @@ export function ClerkUserMenu() {
   const { organization, membership } = useOrganization();
   const { dispatch } = useStore();
   const { demo, setDemo } = useDemoMode();
+  const { pref, setPref } = useTheme();
   const name = user?.fullName || user?.username || user?.primaryEmailAddress?.emailAddress || 'Signed in';
   const role = organization ? roleLabel(membership?.role) : 'Owner';
 
@@ -47,6 +49,9 @@ export function ClerkUserMenu() {
             labelIcon={<Ic n="eye" size={16} />}
             onClick={() => setDemo(!demo)}
           />
+          {THEME_OPTIONS.map((o) => (
+            <UserButton.Action key={o.id} label={`${o.label} theme${pref === o.id ? ' ✓' : ''}`} labelIcon={<Ic n={THEME_ICON[o.id]} size={16} />} onClick={() => setPref(o.id)} />
+          ))}
         </UserButton.MenuItems>
       </UserButton>
       <span className="user-text">

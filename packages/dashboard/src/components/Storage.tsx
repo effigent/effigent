@@ -157,7 +157,7 @@ export function Storage() {
           <div className="foot-note" style={{ marginTop: 8 }}>Only organization admins can change storage settings.</div>
         )}
         {status && (
-          <div className="foot-note" style={{ marginTop: 8, color: status.kind === 'err' ? 'var(--warn, #eb6834)' : undefined }}>
+          <div className="foot-note" style={{ marginTop: 8, color: status.kind === 'err' ? 'var(--orange)' : undefined }}>
             {status.text}
           </div>
         )}

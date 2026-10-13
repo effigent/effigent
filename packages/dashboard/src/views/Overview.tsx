@@ -11,7 +11,7 @@ import { useDemoMode } from '@/demo.tsx';
 import type { ConsoleEvent, Mode } from '@/types.ts';
 import { GraphCard } from '@/components/GraphCard.tsx';
 import { RangeSelect } from '@/components/RangeSelect.tsx';
-import { AgentCell, AgentGlyph, Card, CardHead, Empty, Loading, ModeTag, OutcomePill, PageHead, StatusPill } from '@/components/ui.tsx';
+import { AgentCell, AgentGlyph, Card, CardHead, Empty, Loading, ModeTag, OutcomePill, PageHead, RiskyTag, StatusPill } from '@/components/ui.tsx';
 
 export const EVENT_ICON: Record<ConsoleEvent['outcome'], { icon: string; cls: string }> = {
   blocked: { icon: 'ban', cls: 'ic-red' },
@@ -23,7 +23,7 @@ export const EVENT_ICON: Record<ConsoleEvent['outcome'], { icon: string; cls: st
 
 function Stat({ label, value, delta, deltaDir, deltaGood, foot, icon, tone, href }: {
   label: string; value: number | string; delta?: string; deltaDir?: 'up' | 'down'; deltaGood?: boolean; foot: React.ReactNode;
-  icon: string; tone: 'blue' | 'slate' | 'red'; href: string;
+  icon: string; tone: 'blue' | 'slate' | 'red' | 'gold'; href: string;
 }) {
   return (
     <Link href={href} className="stat card">
@@ -94,6 +94,14 @@ export function Overview() {
   const active = agents.filter((a) => status(a) === 'active').length;
   const blocked = evs.filter((e) => e.outcome === 'blocked').length;
   const wouldBlock = evs.filter((e) => e.outcome === 'would_block').length;
+  const risky = evs.filter((e) => e.risk === 'risky');
+  const riskyTop = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of risky) { const k = e.riskRule ?? '?'; m.set(k, (m.get(k) ?? 0) + 1); }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+  }, [risky]);
+  // Routine commands (ls, cat, git status…) stay in Audit; the overview feeds show what matters.
+  const notable = evs.filter((e) => e.risk !== 'routine');
 
   const summary = policy?.body ? summarizePolicy(policy.body) : null;
   const mode = summary?.mode && summary.mode in MODES ? (summary.mode as Mode) : null;
@@ -102,7 +110,7 @@ export function Overview() {
   const rangeLabel = { '1h': 'last hour', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' }[range];
 
   const activeAgents = [...agents].sort((a, b) => b.lastAt - a.lastAt).slice(0, 5);
-  const activity = evs.filter((e) => e.agentType).slice(0, 5);
+  const activity = notable.filter((e) => e.agentType).slice(0, 5);
 
   return (
     <div className="page">
@@ -120,6 +128,8 @@ export function Overview() {
               foot={<>{onLatest} on policy {latestPolicy > 0 ? `v${latestPolicy}` : '(none published)'}</>} />
             <Stat label="Actions Blocked" value={blocked} icon="ban" tone="red" href="/audit?outcome=blocked"
               foot={<>{wouldBlock} would block in monitor mode <i className="sep">•</i> {rangeLabel}</>} />
+            <Stat label="Risky Commands" value={risky.length} icon="alert" tone="gold" href="/audit?risk=risky"
+              foot={<>{riskyTop.length ? riskyTop.join(', ') : 'none'} <i className="sep">•</i> {rangeLabel}</>} />
           </div>
 
           <GraphCard env={env} />
@@ -157,7 +167,7 @@ export function Overview() {
                         <tr key={e.id}>
                           <td className="tnum muted" title={e.ago}>{e.time}</td>
                           <td><span className="agent-cell"><AgentGlyph type={e.agentType!} size={24} /><span className="cell-main">{agentMeta(e.agentType).label}</span></span></td>
-                          <td className="mono-sm">{e.summary}</td>
+                          <td className="mono-sm">{e.summary}{e.risk === 'risky' && <RiskyTag />}</td>
                           <td><OutcomePill outcome={e.outcome} /></td>
                         </tr>
                       ))}
@@ -172,9 +182,9 @@ export function Overview() {
         <aside className="ov-rail">
           <Card>
             <CardHead title="Live Events" href="/audit" />
-            {evs.length === 0 ? <div className="rail-empty"><Ic n="activity" size={18} /> {loaded ? 'No events in this range.' : 'Loading…'}</div> : (
+            {notable.length === 0 ? <div className="rail-empty"><Ic n="activity" size={18} /> {loaded ? (evs.length ? 'Only routine commands in this range.' : 'No events in this range.') : 'Loading…'}</div> : (
               <ul className="feed">
-                {evs.slice(0, 5).map((e) => {
+                {notable.slice(0, 5).map((e) => {
                   const ic = EVENT_ICON[e.outcome];
                   return (
                     <li key={e.id} className="feed-row">

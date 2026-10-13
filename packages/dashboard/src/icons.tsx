@@ -68,6 +68,9 @@ const P: Record<string, string> = {
   layers: 'M12 3 3 8l9 5 9-5-9-5ZM3 13l9 5 9-5',
   chat: 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z',
   external: 'M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
+  sun: 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  moon: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z',
+  monitor: 'M3 4h18v12H3zM8 20h8M12 16v4',
 };
 
 export function Ic({ n, className, style, size }: { n: string; className?: string; style?: CSSProperties; size?: number }) {

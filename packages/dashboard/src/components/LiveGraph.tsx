@@ -15,7 +15,7 @@ import { ago, type EndpointRow } from '@/lib/live-map.ts';
 import { buildLiveGraph, type LiveEdge, type LiveGraph, type LiveNode, type TargetKind } from '@/lib/live-graph.ts';
 import type { ConsoleEvent, Outcome as EventOutcome } from '@/types.ts';
 import { EDGE_COLOR, GraphCanvas, type GEdge, type GNode, type GNodeData } from './AgentGraph.tsx';
-import { Empty, OutcomePill } from './ui.tsx';
+import { Empty, OutcomePill, RiskyTag } from './ui.tsx';
 
 export const RANGE_LABEL: Record<Range, string> = { '1h': 'last hour', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' };
 
@@ -31,17 +31,18 @@ export interface LiveGraphData {
   agents: { name: string; machines: number; events: number }[];
   rangeLabel: string;
   now: number;
+  showRoutine: boolean;
 }
 
 /** The live graph for the current time range (and optionally one agent name). */
-export function useLiveGraph({ maxTargets, agent }: { maxTargets: number; agent?: string | null }): LiveGraphData {
+export function useLiveGraph({ maxTargets, agent, showRoutine = false }: { maxTargets: number; agent?: string | null; showRoutine?: boolean }): LiveGraphData {
   const { events, consoleEvents, endpointRows, loaded, now } = useLive();
   const { range } = useStore();
   const since = now - RANGE_MS[range];
 
   const endpointById = useMemo(() => new Map(endpointRows.map((e) => [e.id, e])), [endpointRows]);
   const hostById = useMemo(() => new Map(endpointRows.map((e) => [e.id, e.hostname])), [endpointRows]);
-  const graph = useMemo(() => buildLiveGraph(events, hostById, { since, agent, maxTargets }), [events, hostById, since, agent, maxTargets]);
+  const graph = useMemo(() => buildLiveGraph(events, hostById, { since, agent, maxTargets, showRoutine }), [events, hostById, since, agent, maxTargets, showRoutine]);
   const eventById = useMemo(() => new Map(consoleEvents.map((e, i) => [events[i]?.id ?? -1, e])), [consoleEvents, events]);
   const agents = useMemo(() => {
     const m = new Map<string, { machines: Set<string>; events: number }>();
@@ -62,10 +63,11 @@ export function useLiveGraph({ maxTargets, agent }: { maxTargets: number; agent?
     anyEvents: events.some((e) => e.agent || e.body?.agent),
     enrolled: endpointRows.filter((e) => !e.revoked).length,
     rangeLabel: RANGE_LABEL[range],
+    showRoutine,
   };
 }
 
-const TARGET_ICON: Record<TargetKind, string> = { command: 'terminal', file: 'file', network: 'globe', tool: 'hook', more: 'more' };
+const TARGET_ICON: Record<TargetKind, string> = { command: 'terminal', file: 'file', network: 'globe', tool: 'hook', routine: 'layers', more: 'more' };
 const SIZE = { machine: 54, agent: 66, mcp: 50, target: 46 } as const;
 
 export function nodeIcon(n: LiveNode, endpointById: Map<string, EndpointRow>): string {
@@ -83,14 +85,18 @@ export function nodeLabel(n: LiveNode | undefined): string {
   return n.label;
 }
 
-const KIND_SUB: Record<TargetKind, string> = { command: 'Command', file: 'File', network: 'Network', tool: 'Tool', more: 'Other targets' };
+const KIND_SUB: Record<TargetKind, string> = { command: 'Command', file: 'File', network: 'Network', tool: 'Tool', routine: 'Routine commands', more: 'Other targets' };
+
+/** Risky command targets get the amber "risky" look unless policy already blocked them (red wins). */
+export const isRisky = (n: LiveNode | undefined) => !!n && n.risk === 'risky' && tone(n) !== 'bad';
 
 export function nodeSub(n: LiveNode, endpointById: Map<string, EndpointRow>): string {
   if (n.kind === 'machine') {
     const ep = endpointById.get(n.endpoint ?? '');
     return ep ? `${ep.os}${ep.revoked ? ' · revoked' : ''}` : 'Machine';
   }
-  if (n.kind === 'target' && n.targetKind === 'file') return n.sub;
+  if (n.kind === 'target' && (n.targetKind === 'file' || n.targetKind === 'routine' || n.targetKind === 'tool')) return n.sub;
+  if (n.kind === 'target' && n.risk === 'routine') return 'Routine command';
   if (n.kind === 'target') return n.targetKind === 'more' ? n.sub : KIND_SUB[n.targetKind ?? 'more'];
   return n.sub;
 }
@@ -140,6 +146,7 @@ export function toFlow(g: LiveGraph, endpointById: Map<string, EndpointRow>, o: 
         tone: tone(n), labelPos: n.kind === 'agent' || n.kind === 'mcp' ? 'below' : 'right',
         color: n.kind === 'agent' ? agentMeta(n.agent).color : undefined,
         dim: !!sel && !near.has(n.id), selected: sel === n.id,
+        risky: isRisky(n), muted: n.risk === 'routine',
       },
       draggable: !o.compact, selectable: true,
     };
@@ -215,7 +222,7 @@ export function LiveEdgeList({ data }: { data: LiveGraphData }) {
   const cell = (n: LiveNode | undefined) => n && (
     <span className="agent-cell">
       <span className="res-glyph"><Ic n={nodeIcon(n, data.endpointById)} size={15} /></span>
-      <span><span className="cell-main">{nodeLabel(n)}</span><span className="cell-sub">{nodeSub(n, data.endpointById)}</span></span>
+      <span style={{ minWidth: 0 }}><span className="cell-main">{nodeLabel(n)}{isRisky(n) && <> <RiskyTag /></>}</span><span className="cell-sub">{nodeSub(n, data.endpointById)}</span></span>
     </span>
   );
   if (rows.length === 0) return <Empty icon="graph" title="No connections in this range" sub="Agents ran, but reported no commands, files or connections." />;

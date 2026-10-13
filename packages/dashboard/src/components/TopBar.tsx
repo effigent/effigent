@@ -8,7 +8,7 @@ import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { useDemoMode } from '@/demo.tsx';
-import { AgentGlyph, Switch } from './ui.tsx';
+import { AgentGlyph, Switch, ThemeSelect } from './ui.tsx';
 
 interface Hit { group: string; label: string; sub: string; href: string; icon: ReactNode }
 
@@ -138,6 +138,16 @@ export function DemoModeSwitch() {
   );
 }
 
+/** Light / Dark / System as a user-menu row. */
+export function ThemeSwitchRow() {
+  return (
+    <div className="pop-switch pop-theme">
+      <div className="setting-title">Theme</div>
+      <ThemeSelect />
+    </div>
+  );
+}
+
 function DevUserMenu() {
   const { viewer } = useStore();
   const [open, setOpen] = useState(false);
@@ -161,6 +171,7 @@ function DevUserMenu() {
             “{viewer.name}” is a fixed demo identity.
           </p>
           <DemoModeSwitch />
+          <ThemeSwitchRow />
         </div>
       )}
     </div>
