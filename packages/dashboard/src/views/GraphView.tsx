@@ -153,7 +153,7 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
           <dt>Agents</dt><dd>{count('agent')}</dd>
           <dt>MCP servers</dt><dd>{count('mcp')}</dd>
           <dt>Targets</dt><dd>{graph.targets}{graph.hiddenTargets ? ` (top ${graph.targets - graph.hiddenTargets} shown)` : ''}</dd>
-          <dt>Routine commands</dt><dd>{graph.routineEvents.toLocaleString()} <span className="muted">{data.showRoutine ? '(shown)' : '(collapsed)'}</span></dd>
+          <dt>Routine commands</dt><dd>{graph.routineEvents.toLocaleString()} <span className="muted">{data.showRoutine ? '(shown as one node)' : '(hidden)'}</span></dd>
           <dt>Allowed</dt><dd style={{ color: EDGE_COLOR.allowed }}>{sum('allowed').toLocaleString()}</dd>
           <dt>Blocked</dt><dd style={{ color: EDGE_COLOR.blocked }}>{sum('blocked').toLocaleString()}</dd>
           <dt>Would block</dt><dd style={{ color: EDGE_COLOR.would_block }}>{sum('wouldBlock').toLocaleString()}</dd>
@@ -199,7 +199,7 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
             ))}
             {node.items.length > 30 && <li className="muted">+{node.items.length - 30} more</li>}
           </ul>
-          <div className="cell-sub" style={{ padding: '0 20px 10px', whiteSpace: 'normal' }}>Read-only housekeeping (ls, cat, git status…), folded into one node. Turn on “Show routine” to draw each one.</div>
+          <div className="cell-sub" style={{ padding: '0 20px 10px', whiteSpace: 'normal' }}>Everyday commands every agent runs (ls, grep, sed, mkdir, git status…), folded into one node.</div>
         </>
       )}
       <div className="section-label">Connections</div>
@@ -290,7 +290,7 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
           <Card className="graph-card">
             <CardHead
               title={<>{agent ? agentMeta(agent).label : 'All agents'} <span className="live-chip"><span className="dot" /> Live</span></>}
-              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` Busiest ${MAX_TARGETS} targets shown; the rest are under "+${graph.hiddenTargets} more".` : ''}${!showRoutine && graph.routineEvents ? ' Routine commands are folded into one node per agent.' : ''} Click a node for its recent events.`}
+              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` Busiest ${MAX_TARGETS} targets shown; the rest are under "+${graph.hiddenTargets} more".` : ''}${!showRoutine && graph.routineEvents ? ' Routine commands (ls, grep, sed…) are hidden.' : ''} Click a node for its recent events.`}
             />
             <LiveGraphCanvas data={data} selected={selected} onSelect={setSelected} height={640} background />
             <Legend live />

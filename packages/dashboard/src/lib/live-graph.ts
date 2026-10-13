@@ -66,7 +66,7 @@ export interface LiveGraphOptions {
   since: number; // epoch ms; older events are ignored
   agent?: string | null; // only this agent name
   maxTargets: number;
-  /** Draw routine commands (ls, cat, git status…) as their own nodes instead of one "Routine commands (N)" node per agent. */
+  /** Show routine commands (ls, cat, git status…) as one "Routine commands (N)" node per agent; hidden otherwise. */
   showRoutine?: boolean;
 }
 
@@ -222,9 +222,11 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
     hits.push({ tid: `t:${c.kind}:${c.key}`, c, agentId: aid, outcome, at, ev: e.id });
   }
 
-  // Routine commands fold into one node per agent (unless shown); they never compete for the target cap.
+  // Routine commands (ls, grep, sed, mkdir…) are what every agent does all day:
+  // hidden from the graph unless "Show routine" is on, and then folded into one
+  // node per agent. They never compete for the target cap. Audit keeps them all.
   const routineHits = hits.filter((h) => h.c.risk === 'routine');
-  const collapse = !o.showRoutine;
+  const collapse = true;
   const ROUTINE = (agentId: string) => `t:routine:${agentId}`;
   const routineCount = new Map<string, number>();
   const routineItems = new Map<string, Map<string, { label: string; full: string; count: number }>>();
@@ -249,6 +251,7 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   const MORE = 't:more';
 
   for (const h of hits) {
+    if (h.c.risk === 'routine' && !o.showRoutine) continue;
     const folded = collapse && h.c.risk === 'routine';
     const show = folded || kept.has(h.tid);
     const tid = folded ? ROUTINE(h.agentId) : show ? h.tid : MORE;

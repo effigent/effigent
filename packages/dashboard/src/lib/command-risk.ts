@@ -39,7 +39,6 @@ export const RISKY_COMMANDS: readonly string[] = [
 /** A routine program stops being routine when one of these flags appears (find -delete is not housekeeping). */
 export const ROUTINE_UNLESS: Readonly<Record<string, readonly string[]>> = {
   find: ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls'],
-  sed: ['-i', '--in-place'], // editing files in place is a write, not a read
 };
 
 /** Shell syntax words: not programs. Leading ones (do, then…) are skipped; segments made only of them are dropped. */
@@ -171,9 +170,11 @@ function match(rules: Rule[], s: CommandSegment): Rule | undefined {
 
 /** One simple command is routine: on the list, writes no file, and no "unless" flag (find -delete, sed -i). */
 function isRoutineSegment(s: CommandSegment): boolean {
+  // Editing project files (sed -i, cat > file, echo > file) is everyday agent
+  // work too; only the ROUTINE_UNLESS flags (find -delete/-exec…) take a
+  // routine tool out of routine.
   const unless = ROUTINE_UNLESS[s.program];
-  return !!match(ROUTINE, s) && !s.redirects &&
-    !(unless && s.args.some((a) => unless.includes(a) || (s.program === 'sed' && /^-[a-zA-Z]*i/.test(a))));
+  return !!match(ROUTINE, s) && !(unless && s.args.some((a) => unless.includes(a)));
 }
 
 export interface CommandClass {
