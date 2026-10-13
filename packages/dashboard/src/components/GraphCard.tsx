@@ -76,7 +76,7 @@ function LiveGraphCard() {
   const [view, setView] = useState<'graph' | 'list'>('graph');
   const [full, setFull] = useFullscreen();
   const [selected, setSelected] = useState<string | null>(null);
-  const data = useLiveGraph({ maxTargets: full ? 25 : 12 });
+  const data = useLiveGraph({ maxTargets: full ? 8 : 4 });
   const empty = data.graph.nodes.length === 0;
   return (
     <Card className={`graph-card ${full ? 'fullscreen' : ''}`}>

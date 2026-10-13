@@ -7,11 +7,12 @@
  *                      agent ──mcp──▶ MCP server ──action──▶ target   (body.via set)
  *
  * Targets are grouped by kind: commands (program name), files (path), network
- * destinations (ip:port / host) and tool calls. Only the busiest targets get a
- * node; the rest fold into one "+N more" node so no edge dangles. Commands are
- * classified routine / normal / risky (command-risk.ts): routine ones fold into
- * one "Routine commands (N)" node per agent unless `showRoutine` is set, and
- * never count against the target cap.
+ * destinations (ip:port / host), tool calls, and each MCP server's tools. Each
+ * group keeps its busiest targets; the rest fold into that group's "+N more"
+ * node so no edge dangles. Commands are classified routine / normal / risky
+ * (command-risk.ts); routine commands and the agent's own bookkeeping tools
+ * (ToolSearch, TodoWrite, Monitor…) fold into one "Routine (N)" node per agent
+ * when `showRoutine` is set and are hidden otherwise.
  */
 import type { ApiEvent } from './api.ts';
 import { baseName, classifyCommand, commandLabel, type CommandRisk } from './command-risk.ts';
@@ -39,8 +40,10 @@ export interface LiveNode {
   eventIds: number[];
   /** Command targets: routine / normal / risky (lib/command-risk.ts). */
   risk?: CommandRisk;
-  /** "Routine commands (N)" node: the commands folded into it, busiest first. */
+  /** "Routine (N)" node: the commands folded into it, busiest first. */
   items?: { label: string; full: string; count: number }[];
+  /** Targets: the layout group, "command" | "file" | "network" | "tool" | "routine" | "mcp:<server>". */
+  group?: string;
 }
 
 export interface LiveEdge {
@@ -65,6 +68,7 @@ export interface LiveGraph {
 export interface LiveGraphOptions {
   since: number; // epoch ms; older events are ignored
   agent?: string | null; // only this agent name
+  /** Targets shown per group (commands, files, network, tools, each MCP server); the rest fold into "+N more". */
   maxTargets: number;
   /** Show routine commands (ls, cat, git status…) as one "Routine commands (N)" node per agent; hidden otherwise. */
   showRoutine?: boolean;
@@ -79,7 +83,7 @@ export interface Classified {
   full: string;
   action: string; // edge label: exec, read, write, open, connect, fetch, call…
   mcp?: string; // MCP server name (from body.via or an mcp__server__tool call)
-  /** Commands only. */
+  /** Commands, and tools (only ever "routine"). */
   risk?: CommandRisk;
   rule?: string; // the risky-list entry that matched
 }
@@ -125,6 +129,9 @@ function network(addr: string, action = 'connect'): Classified {
 }
 
 const FILE_READ = new Set(['Read', 'NotebookRead', 'LS']);
+/** Built-in tools that touch something worth a node of its own; the rest
+ *  (ToolSearch, TodoWrite, Monitor, TaskStop…) are the agent's bookkeeping. */
+const NOTABLE_TOOLS = new Set(['WebSearch', 'Task', 'Agent']);
 const FILE_WRITE = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 /** A hook-reported tool call ("Bash: git status", "Read: /work/.env", "mcp__github__create_issue"). */
@@ -135,7 +142,8 @@ function tool(name: string, value: string): Classified {
   if (FILE_READ.has(name) && value) return file(value, 'read');
   if (FILE_WRITE.has(name) && value) return file(value, 'write');
   if (name === 'WebFetch' && value) { const h = hostOf(value); if (h) return network(h, 'fetch'); }
-  return { kind: 'tool', key: name, label: name, sub: 'Tool', full: value ? `${name}: ${value}` : name, action: name === 'WebSearch' ? 'search' : 'call' };
+  return { kind: 'tool', key: name, label: name, sub: 'Tool', full: value ? `${name}: ${value}` : name, action: name === 'WebSearch' ? 'search' : 'call',
+    ...(NOTABLE_TOOLS.has(name) ? {} : { risk: 'routine' as const }) };
 }
 
 /** What an event touched, or null for lifecycle events (agent start/exit, policy) and events without a target. */
@@ -242,25 +250,43 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   }
   const ranked0 = collapse ? hits.filter((h) => h.c.risk !== 'routine') : hits;
 
-  // Keep the busiest targets; fold the rest into "+N more".
-  const tally = new Map<string, number>();
-  for (const h of ranked0) tally.set(h.tid, (tally.get(h.tid) ?? 0) + 1);
-  const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const kept = new Set(ranked.slice(0, Math.max(0, o.maxTargets)).map(([id]) => id));
+  // Each group keeps its busiest targets; the rest fold into its "+N more".
+  const groupOf = (c: Classified) => (c.mcp ? `mcp:${c.mcp}` : c.kind);
+  const tally = new Map<string, { n: number; group: string }>();
+  for (const h of ranked0) {
+    const t = tally.get(h.tid) ?? { n: 0, group: groupOf(h.c) };
+    t.n++;
+    tally.set(h.tid, t);
+  }
+  const ranked = [...tally.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+  const kept = new Set<string>();
+  const hiddenBy = new Map<string, number>();
+  const shownBy = new Map<string, number>();
+  for (const [id, { group }] of ranked) {
+    const shown = shownBy.get(group) ?? 0;
+    if (shown < Math.max(0, o.maxTargets)) { kept.add(id); shownBy.set(group, shown + 1); }
+    else hiddenBy.set(group, (hiddenBy.get(group) ?? 0) + 1);
+  }
   const hidden = ranked.length - kept.size;
-  const MORE = 't:more';
+  const MORE = (group: string) => `t:more:${group}`;
+  const GROUP_NOUN: Record<string, [string, string]> = { command: ['command', 'commands'], file: ['file', 'files'], network: ['destination', 'destinations'], tool: ['tool', 'tools'] };
 
   for (const h of hits) {
     if (h.c.risk === 'routine' && !o.showRoutine) continue;
     const folded = collapse && h.c.risk === 'routine';
     const show = folded || kept.has(h.tid);
-    const tid = folded ? ROUTINE(h.agentId) : show ? h.tid : MORE;
+    const group = folded ? 'routine' : groupOf(h.c);
+    const tid = folded ? ROUTINE(h.agentId) : show ? h.tid : MORE(group);
     if (folded) {
       const n = routineCount.get(h.agentId) ?? 0;
       const items = [...(routineItems.get(h.agentId)?.values() ?? [])].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-      touch(tid, () => ({ kind: 'target', targetKind: 'routine', label: `Routine commands (${n.toLocaleString()})`, sub: items.slice(0, 3).map((i) => i.label).join(', ') + (items.length > 3 ? '…' : ''), full: items.map((i) => i.label).join(', '), risk: 'routine', items }), h.outcome, h.at, h.ev);
-    } else if (show) touch(tid, () => ({ kind: 'target', targetKind: h.c.kind, label: h.c.label, sub: h.c.sub, full: h.c.full, risk: h.c.risk }), h.outcome, h.at, h.ev);
-    else touch(tid, () => ({ kind: 'target', targetKind: 'more', label: `+${hidden} more`, sub: hidden === 1 ? 'target' : 'targets', full: '' }), h.outcome, h.at, h.ev);
+      touch(tid, () => ({ kind: 'target', targetKind: 'routine', label: `Routine (${n.toLocaleString()})`, sub: items.slice(0, 3).map((i) => i.label).join(', ') + (items.length > 3 ? '…' : ''), full: items.map((i) => i.label).join(', '), risk: 'routine', items, group }), h.outcome, h.at, h.ev);
+    } else if (show) touch(tid, () => ({ kind: 'target', targetKind: h.c.kind, label: h.c.label, sub: h.c.sub, full: h.c.full, risk: h.c.risk, group }), h.outcome, h.at, h.ev);
+    else {
+      const k = hiddenBy.get(group) ?? 0;
+      const [one, many] = h.c.mcp ? ['tool', 'tools'] : GROUP_NOUN[group] ?? ['target', 'targets'];
+      touch(tid, () => ({ kind: 'target', targetKind: 'more', label: `+${k} more`, sub: k === 1 ? one : many, full: '', group }), h.outcome, h.at, h.ev);
+    }
     const action = folded ? 'exec' : show ? h.c.action : 'other';
     if (h.c.mcp) {
       const sid = `s:${h.c.mcp}`;

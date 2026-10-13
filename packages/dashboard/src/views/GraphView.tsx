@@ -129,7 +129,7 @@ export function GraphView({ initialAgent, initialView, initialNode }: { initialA
   return <LiveGraphView initialAgent={initialAgent} initialView={initialView} initialNode={initialNode} />;
 }
 
-const MAX_TARGETS = 25;
+const MAX_TARGETS = 8; // per group
 
 /** Long targets (paths, mcp__server__tool names, URLs) may break after separators instead of mid-word. */
 function Breakable({ text }: { text: string }) {
@@ -153,7 +153,7 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
           <dt>Agents</dt><dd>{count('agent')}</dd>
           <dt>MCP servers</dt><dd>{count('mcp')}</dd>
           <dt>Targets</dt><dd>{graph.targets}{graph.hiddenTargets ? ` (top ${graph.targets - graph.hiddenTargets} shown)` : ''}</dd>
-          <dt>Routine commands</dt><dd>{graph.routineEvents.toLocaleString()} <span className="muted">{data.showRoutine ? '(shown as one node)' : '(hidden)'}</span></dd>
+          <dt>Routine activity</dt><dd>{graph.routineEvents.toLocaleString()} <span className="muted">{data.showRoutine ? '(shown as one node)' : '(hidden)'}</span></dd>
           <dt>Allowed</dt><dd style={{ color: EDGE_COLOR.allowed }}>{sum('allowed').toLocaleString()}</dd>
           <dt>Blocked</dt><dd style={{ color: EDGE_COLOR.blocked }}>{sum('blocked').toLocaleString()}</dd>
           <dt>Would block</dt><dd style={{ color: EDGE_COLOR.would_block }}>{sum('wouldBlock').toLocaleString()}</dd>
@@ -189,7 +189,7 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
       </dl>
       {node.items && (
         <>
-          <div className="section-label">Routine commands</div>
+          <div className="section-label">Routine activity</div>
           <ul className="mini-list">
             {node.items.slice(0, 30).map((it) => (
               <li key={it.label}>
@@ -263,7 +263,7 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
     <div className="page">
       <PageHead title="Agent Graph" sub={SUB}>
         <button className={`chip ${showRoutine ? 'on' : ''}`} aria-pressed={showRoutine} onClick={() => { setShowRoutine((v) => !v); setSelected(null); }}
-          title="Routine commands (ls, cat, git status…) are folded into one node per agent. Turn on to draw each one.">
+          title="Routine activity (ls, grep, git commit, ToolSearch…) is hidden. Turn on to show it as one node per agent.">
           <Ic n={showRoutine ? 'eye' : 'layers'} size={14} /> Show routine{graph.routineEvents ? <span className="n">{graph.routineEvents.toLocaleString()}</span> : null}
         </button>
         <RangeSelect />
@@ -290,7 +290,7 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
           <Card className="graph-card">
             <CardHead
               title={<>{agent ? agentMeta(agent).label : 'All agents'} <span className="live-chip"><span className="dot" /> Live</span></>}
-              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` Busiest ${MAX_TARGETS} targets shown; the rest are under "+${graph.hiddenTargets} more".` : ''}${!showRoutine && graph.routineEvents ? ' Routine commands (ls, grep, sed…) are hidden.' : ''} Click a node for its recent events.`}
+              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` The busiest ${MAX_TARGETS} of each kind are shown; the rest are under "+N more".` : ''}${!showRoutine && graph.routineEvents ? ' Routine activity (ls, grep, git commit, ToolSearch…) is hidden.' : ''} Click a node for its recent events.`}
             />
             <LiveGraphCanvas data={data} selected={selected} onSelect={setSelected} height={640} background />
             <Legend live />

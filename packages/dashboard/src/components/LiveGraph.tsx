@@ -85,7 +85,7 @@ export function nodeLabel(n: LiveNode | undefined): string {
   return n.label;
 }
 
-const KIND_SUB: Record<TargetKind, string> = { command: 'Command', file: 'File', network: 'Network', tool: 'Tool', routine: 'Routine commands', more: 'Other targets' };
+const KIND_SUB: Record<TargetKind, string> = { command: 'Command', file: 'File', network: 'Network', tool: 'Tool', routine: 'Routine', more: 'Other targets' };
 
 /** Risky command targets get the amber "risky" look unless policy already blocked them (red wins). */
 export const isRisky = (n: LiveNode | undefined) => !!n && n.risk === 'risky' && tone(n) !== 'bad';
@@ -95,9 +95,12 @@ export function nodeSub(n: LiveNode, endpointById: Map<string, EndpointRow>): st
     const ep = endpointById.get(n.endpoint ?? '');
     return ep ? `${ep.os}${ep.revoked ? ' · revoked' : ''}` : 'Machine';
   }
-  if (n.kind === 'target' && (n.targetKind === 'file' || n.targetKind === 'routine' || n.targetKind === 'tool')) return n.sub;
-  if (n.kind === 'target' && n.risk === 'routine') return 'Routine command';
-  if (n.kind === 'target') return n.targetKind === 'more' ? n.sub : KIND_SUB[n.targetKind ?? 'more'];
+  if (n.kind === 'target' && (n.targetKind === 'routine' || n.targetKind === 'more')) return n.sub;
+  const times = ` · ${n.count.toLocaleString()}×`;
+  if (n.kind === 'target' && n.group?.startsWith('mcp:')) return 'Tool' + times; // the server is the node it hangs off
+  if (n.kind === 'target' && (n.targetKind === 'file' || n.targetKind === 'tool')) return n.sub + times;
+  if (n.kind === 'target' && n.risk === 'routine') return 'Routine command' + times;
+  if (n.kind === 'target') return KIND_SUB[n.targetKind ?? 'more'] + times;
   return n.sub;
 }
 
@@ -108,7 +111,12 @@ function tone(n: LiveNode): GNodeData['tone'] {
   return n.blocked > 0 ? 'bad' : n.wouldBlock > 0 ? 'warn' : 'ok';
 }
 
-/** Column layout: machines → agents → MCP servers → targets (in up to three columns). */
+/** Tree layout: machines → agents → what they touched, in one column grouped
+ *  by kind (commands, network, files, tools, routine), followed by each MCP
+ *  server with its tools in the next column. Groups never interleave, so an
+ *  agent's edges fan out without crossing. */
+const DIRECT_ORDER = ['command', 'network', 'file', 'tool', 'routine'];
+
 export function toFlow(g: LiveGraph, endpointById: Map<string, EndpointRow>, o: { selected?: string | null; compact?: boolean }): { nodes: GNode[]; edges: GEdge[] } {
   const machines = g.nodes.filter((n) => n.kind === 'machine');
   const agents = machines.flatMap((m) => g.nodes.filter((a) => a.kind === 'agent' && a.endpoint === m.endpoint));
@@ -123,13 +131,34 @@ export function toFlow(g: LiveGraph, endpointById: Map<string, EndpointRow>, o: 
     const ys = agents.filter((a) => a.endpoint === m.endpoint).map((a) => pos.get(a.id)![1]);
     pos.set(m.id, [0, ys.length ? ys.reduce((t, y) => t + y, 0) / ys.length : 0]);
   }
-  const span = Math.max(0, (agents.length - 1) * 120);
-  col(mcps, 700, Math.min(160, Math.max(110, mcps.length > 1 ? span / (mcps.length - 1) : 0)));
-  const tx = mcps.length ? 1020 : 700;
-  const cols = targets.length <= 8 ? 1 : targets.length <= 18 ? 2 : 3;
-  const rows = Math.ceil(targets.length / cols);
-  const tgap = Math.min(120, Math.max(84, rows > 1 ? span / (rows - 1) : 0));
-  for (let c = 0; c < cols; c++) col(targets.slice(c * rows, (c + 1) * rows), tx + c * 300, tgap);
+
+  // Group targets; within a group the busiest first and "+N more" last.
+  const groups = new Map<string, LiveNode[]>();
+  for (const t of targets) {
+    const k = t.group ?? t.targetKind ?? 'more';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(t);
+  }
+  for (const list of groups.values()) list.sort((a, b) => Number(a.targetKind === 'more') - Number(b.targetKind === 'more') || b.count - a.count || a.label.localeCompare(b.label));
+  const direct = [...groups.keys()].filter((k) => !k.startsWith('mcp:'))
+    .sort((a, b) => (DIRECT_ORDER.indexOf(a) + 1 || 99) - (DIRECT_ORDER.indexOf(b) + 1 || 99));
+
+  const ROW = o.compact ? 54 : 60, GAP = ROW * 0.7, X1 = 700, X2 = 1010;
+  let y = 0;
+  const placed: [string, number, number][] = [];
+  for (const k of direct) {
+    for (const t of groups.get(k)!) { placed.push([t.id, X1, y]); y += ROW; }
+    y += GAP;
+  }
+  for (const m of mcps) {
+    const tools = groups.get(`mcp:${m.label}`) ?? [];
+    const h = Math.max(1, tools.length);
+    placed.push([m.id, X1, y + ((h - 1) * ROW) / 2]);
+    tools.forEach((t, i) => placed.push([t.id, X2, y + i * ROW]));
+    y += h * ROW + GAP;
+  }
+  const mid = (y - GAP - ROW) / 2;
+  for (const [id, x, py] of placed) pos.set(id, [x, py - mid]);
 
   const sel = o.selected && g.nodes.some((n) => n.id === o.selected) ? o.selected : null;
   const near = new Set<string>();
@@ -143,7 +172,7 @@ export function toFlow(g: LiveGraph, endpointById: Map<string, EndpointRow>, o: 
       id: n.id, type: 'circle', position: { x: cx - size / 2, y: cy - size / 2 },
       data: {
         kind, label: n.kind === 'mcp' ? n.label : nodeLabel(n), sub: nodeSub(n, endpointById), icon: nodeIcon(n, endpointById), size,
-        tone: tone(n), labelPos: n.kind === 'agent' || n.kind === 'mcp' ? 'below' : 'right',
+        tone: tone(n), labelPos: n.kind === 'target' ? 'right' : 'below',
         color: n.kind === 'agent' ? agentMeta(n.agent).color : undefined,
         dim: !!sel && !near.has(n.id), selected: sel === n.id,
         risky: isRisky(n), muted: n.risk === 'routine',
@@ -152,7 +181,9 @@ export function toFlow(g: LiveGraph, endpointById: Map<string, EndpointRow>, o: 
     };
   });
 
-  const showAll = g.edges.length <= (o.compact ? 16 : 32);
+  // Labels on the trunk (machine → agent, agent → MCP server); a target's count is on its node.
+  const kindOf = new Map(g.nodes.map((n) => [n.id, n.kind]));
+  const trunk = (e: LiveGraph['edges'][number]) => kindOf.get(e.target) === 'agent' || kindOf.get(e.target) === 'mcp';
   const seen = new Map<string, number>();
   const edges: GEdge[] = g.edges.map((e) => {
     const key = [e.source, e.target].sort().join('>');
@@ -166,7 +197,7 @@ export function toFlow(g: LiveGraph, endpointById: Map<string, EndpointRow>, o: 
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
       data: {
         outcome: e.outcome, label: `${e.action} · ${e.count.toLocaleString()}`, curve, count: e.count,
-        showLabel: touches || (!sel && showAll), dim: !!sel && !touches,
+        showLabel: touches || (!sel && trunk(e)), dim: !!sel && !touches,
       },
       selectable: false,
     };
