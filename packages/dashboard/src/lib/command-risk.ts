@@ -15,9 +15,19 @@
  */
 
 export const ROUTINE_COMMANDS: readonly string[] = [
-  'ls', 'cat', 'pwd', 'cd', 'echo', 'printf', 'grep', 'rg', 'find', 'head', 'tail', 'wc', 'which', 'type', 'file',
-  'stat', 'du', 'df', 'date', 'whoami', 'env', 'tree', 'less', 'sort', 'uniq', 'diff',
-  'git status', 'git log', 'git diff', 'git show', 'git branch', 'git rev-parse', 'git remote -v',
+  // look around
+  'ls', 'pwd', 'cd', 'tree', 'find', 'which', 'type', 'file', 'stat', 'du', 'df', 'date', 'whoami', 'id', 'uname',
+  'hostname', 'sw_vers', 'ps', 'env', 'printenv', 'man',
+  // read and transform text
+  'cat', 'less', 'more', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'sed', 'awk', 'gawk', 'cut', 'tr',
+  'sort', 'uniq', 'diff', 'cmp', 'comm', 'paste', 'join', 'column', 'fmt', 'fold', 'nl', 'tac', 'rev', 'jq', 'yq',
+  'xxd', 'od', 'strings', 'basename', 'dirname', 'realpath', 'readlink', 'md5', 'md5sum', 'shasum', 'sha256sum',
+  'echo', 'printf',
+  // harmless shell plumbing and simple file housekeeping
+  'true', 'false', 'test', '[', 'sleep', 'export', 'set', 'unset', 'local', 'read', 'mkdir', 'touch', 'cp',
+  // read-only and everyday git
+  'git status', 'git log', 'git diff', 'git show', 'git branch', 'git rev-parse', 'git remote', 'git ls-files',
+  'git blame', 'git fetch', 'git add', 'git stash', 'git describe', 'git tag', 'git config',
 ];
 
 export const RISKY_COMMANDS: readonly string[] = [
@@ -29,7 +39,12 @@ export const RISKY_COMMANDS: readonly string[] = [
 /** A routine program stops being routine when one of these flags appears (find -delete is not housekeeping). */
 export const ROUTINE_UNLESS: Readonly<Record<string, readonly string[]>> = {
   find: ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls'],
+  sed: ['-i', '--in-place'], // editing files in place is a write, not a read
 };
+
+/** Shell syntax words: not programs. Leading ones (do, then…) are skipped; segments made only of them are dropped. */
+const SHELL_WORDS = new Set(['for', 'while', 'until', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'case', 'esac',
+  'in', 'function', '{', '}', '[[', ']]', '!', '((', '))', 'select']);
 
 export type CommandRisk = 'routine' | 'normal' | 'risky';
 
@@ -56,14 +71,47 @@ export interface CommandSegment {
   redirects: boolean;
 }
 
+/** Split on shell operators (&&, ||, ;, |, &, newline, $( and backticks) outside
+ *  quotes. Returns each part, plus the same part with quoted text blanked out. */
+function splitShell(cmd: string): { text: string; bare: string }[] {
+  const out: { text: string; bare: string }[] = [];
+  let text = '', bare = '', q: string | null = null;
+  const push = () => {
+    const t = text.trim().replace(/^[({\s]+|[)}\s]+$/g, '');
+    if (t) out.push({ text: t, bare });
+    text = ''; bare = '';
+  };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i], n = cmd[i + 1];
+    if (q) {
+      if (c === '\\' && q === '"' && i + 1 < cmd.length) { text += c + n; bare += '  '; i++; continue; }
+      if (c === q) q = null;
+      text += c; bare += c === q ? c : ' ';
+      continue;
+    }
+    if (c === '\\' && i + 1 < cmd.length) { text += c + n; bare += '  '; i++; continue; }
+    if (c === "'" || c === '"') { q = c; text += c; bare += c; continue; }
+    if ((c === '&' && n === '&') || (c === '|' && n === '|')) { push(); i++; continue; }
+    if (c === '$' && n === '(') { push(); i++; continue; }
+    if (c === ';' || c === '|' || c === '\n' || c === '`') { push(); continue; }
+    if (c === '&' && n !== '>' && !/\d/.test(n ?? '') && cmd[i - 1] !== '>') { push(); continue; }
+    text += c; bare += c;
+  }
+  push();
+  return out;
+}
+
 /** Split a shell command line into the simple commands it runs (&&, ||, ;, |, &, newlines, $( ) and backticks). */
 export function commandSegments(cmd: string): CommandSegment[] {
   const out: CommandSegment[] = [];
-  for (const raw of cmd.split(/&&|\|\||;|\||\n|&(?![>\d])|\$\(|`/)) {
-    const seg = raw.trim().replace(/^[({\s]+|[)}\s]+$/g, '');
+  for (const { text: seg, bare } of splitShell(cmd)) {
     if (!seg) continue;
-    const redirects = /\d?>>?\s*(?!\s*&|\s*\/dev\/null\b)\S/.test(seg.replace(/\d?>&\d/g, ''));
+    // Redirects are judged on the text outside quotes; /dev/null and fd dups (2>&1) don't write files.
+    const redirects = /\d?>>?\s*(?!\s*&|\s*\/dev\/null\b)\S/.test(bare.replace(/\d?>&\d/g, ''));
     const toks = seg.split(/\s+/).map(unquote).filter(Boolean);
+    while (toks.length && SHELL_WORDS.has(toks[0])) toks.shift();
+    if (toks.length === 0 || (toks[0] === 'for' || toks[0] === 'case')) continue;
+    if (toks.length && /^[A-Za-z_]\w*$/.test(toks[0]) && toks[1] === 'in') continue; // "for f in a b" remainder
     const wrappers: string[] = [];
     let i = 0;
     while (i < toks.length) {
@@ -141,7 +189,8 @@ export function classifyCommand(cmd: string): CommandClass {
     if (risky) return { risk: 'risky', rule: risky.entry };
     if (routine) {
       const unless = ROUTINE_UNLESS[s.program];
-      routine = !!match(ROUTINE, s) && !s.redirects && !(unless && s.args.some((a) => unless.includes(a)));
+      routine = !!match(ROUTINE, s) && !s.redirects &&
+        !(unless && s.args.some((a) => unless.includes(a) || (s.program === 'sed' && /^-[a-zA-Z]*i/.test(a))));
     }
   }
   return { risk: routine ? 'routine' : 'normal' };
@@ -150,6 +199,9 @@ export function classifyCommand(cmd: string): CommandClass {
 /** Short name for a command in lists and graph nodes: the program, plus the
  *  subcommand for programs classified by subcommand ("git push", "npm install"). */
 export function commandLabel(cmd: string): string {
+  // A risky line is named after what made it risky ("ls && curl x" → "curl").
+  const cls = classifyCommand(cmd);
+  if (cls.risk === 'risky' && cls.rule) return cls.rule;
   const prog = programName(cmd);
   const seg = commandSegments(cmd).find((s) => s.program === prog);
   return seg?.sub && BY_SUBCOMMAND.has(prog) ? `${prog} ${seg.sub}` : prog;
