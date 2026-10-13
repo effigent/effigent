@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/domains"
@@ -71,9 +70,6 @@ type Engine struct {
 	procfs   string            // to read each agent's own resolv.conf
 	empty    map[string]bool   // domain_deny names currently resolving to nothing (reported once)
 }
-
-// stop ends a process. A variable so tests and non-Linux builds can replace it.
-var stopProcess = func(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
 
