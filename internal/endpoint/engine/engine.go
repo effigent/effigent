@@ -15,6 +15,7 @@ import (
 
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
+	"github.com/effigent/effigent/internal/endpoint/redact"
 )
 
 // Enforcer loads per-agent kernel policies. Nil on platforms that can only
@@ -70,10 +71,23 @@ func (e *Engine) stop(pid int) error { return stopProcess(pid) }
 
 func New(pol *policy.Policy, raw []byte, enf Enforcer, emit func(event.Event), logf func(string, ...any), verbose bool) *Engine {
 	return &Engine{
-		pol: pol, polRaw: raw, enf: enf, emit: emit, logf: logf, verbose: verbose,
+		pol: pol, polRaw: raw, enf: enf, emit: func(ev event.Event) { emit(scrub(ev)) }, logf: logf, verbose: verbose,
 		roots: map[uint32]*Root{}, byPolicy: map[string]*Root{},
 		mcp: map[string]string{}, learned: map[string]map[string]int{}, recent: map[string]time.Time{},
 	}
+}
+
+// scrub removes secrets from every free-text field of an event before any
+// sink (stdout, log file, control plane) sees it.
+func scrub(ev event.Event) event.Event {
+	if ev.Process != nil {
+		p := *ev.Process
+		p.Args = redact.String(p.Args)
+		ev.Process = &p
+	}
+	ev.Target = redact.String(ev.Target)
+	ev.Message = redact.String(ev.Message)
+	return ev
 }
 
 // Run consumes raw sensor events until the channel closes.
@@ -179,7 +193,7 @@ func (e *Engine) onExec(ctx context.Context, r event.Raw) {
 	}
 	e.track(ctx, &Root{
 		Agent: name, PID: r.Process.PID, ExecID: r.Process.ExecID, Binary: r.Process.Binary,
-		Args: r.Process.Args, Container: r.Container, Started: r.Time, Orphan: orphan, Launched: launched,
+		Args: redact.String(r.Process.Args), Container: r.Container, Started: r.Time, Orphan: orphan, Launched: launched,
 	}, r)
 }
 
@@ -423,7 +437,7 @@ func (e *Engine) Bootstrap(ctx context.Context, procs []event.Proc, ppid map[uin
 		if nested {
 			continue
 		}
-		e.track(ctx, &Root{Agent: name, PID: p.PID, Binary: p.Binary, Args: p.Args, Started: time.Now()},
+		e.track(ctx, &Root{Agent: name, PID: p.PID, Binary: p.Binary, Args: redact.String(p.Args), Started: time.Now()},
 			event.Raw{Time: time.Now(), Process: p})
 	}
 }
