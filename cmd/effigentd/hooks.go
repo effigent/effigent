@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/engine"
@@ -16,6 +17,8 @@ import (
 
 // hookHandler answers POST /hook/{agent} on the local API.
 func hookHandler(eng *engine.Engine) func(agent string, payload []byte) ([]byte, error) {
+	var mu sync.Mutex
+	seen := map[string]time.Time{} // Claude Code session id -> last call
 	return func(agent string, payload []byte) ([]byte, error) {
 		if agent != "claude" {
 			return nil, fmt.Errorf("unknown agent hook %q", agent)
@@ -24,11 +27,27 @@ func hookHandler(eng *engine.Engine) func(agent string, payload []byte) ([]byte,
 		if err := json.Unmarshal(payload, &in); err != nil {
 			return hooks.FailClosed("the hook input could not be read"), nil
 		}
+		// There is no kernel to report agents starting, so a session's first
+		// tool call stands in for it (the console counts agents from these).
+		mu.Lock()
+		_, known := seen[in.SessionID]
+		seen[in.SessionID] = time.Now()
+		for id, t := range seen {
+			if time.Since(t) > 24*time.Hour {
+				delete(seen, id)
+			}
+		}
+		mu.Unlock()
+		if !known && in.SessionID != "" {
+			eng.Emit(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: "claude-code",
+				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: "Claude Code session " + short(in.SessionID)})
+		}
 		if hooks.Claude == nil {
 			// No decision logic in this build: watch mode. Record the call,
 			// block nothing, and leave the user's own permission prompts as is.
 			eng.Emit(event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: "claude-code",
-				Kind: "tool", Target: hooks.Summary(in), Rule: "hook", Mode: "monitor"})
+				Kind: "tool", Target: hooks.Summary(in), Rule: "hook", Mode: "monitor",
+				Message: "session " + short(in.SessionID)})
 			return hooks.ClaudeOutput(hooks.Decision{}), nil
 		}
 		d := hooks.Claude(eng.RuleFor("claude-code"), in)
@@ -38,6 +57,13 @@ func hookHandler(eng *engine.Engine) func(agent string, payload []byte) ([]byte,
 		}
 		return hooks.ClaudeOutput(d), nil
 	}
+}
+
+func short(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 func reportType(d hooks.Decision) event.Type {
