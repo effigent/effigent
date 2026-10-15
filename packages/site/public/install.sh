@@ -1,14 +1,16 @@
 #!/bin/sh
-# Effigent endpoint installer (Linux). Installs Tetragon and effigentd as
-# services, enrolls this machine with your organization, and starts enforcing.
+# Effigent endpoint installer (Linux and macOS). Installs effigentd as a
+# service, enrolls this machine with your organization, and starts enforcing.
+# Linux: also installs Tetragon (kernel enforcement). macOS: installs the
+# release .pkg (checksum-verified), which adds the Claude Code hook to managed settings.
 #
 #   curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token eft_...
 #
 # Options:
-#   --token TOKEN        one-time enrollment token from the console (Settings -> Machines)
+#   --token TOKEN        enrollment token from the console (Enforcement -> Enroll an endpoint)
 #   --server URL         control plane (default https://api.effigent.ai)
 #   --version VERSION    effigentd version (default: latest)
-#   --skip-tetragon      Tetragon is already installed and running
+#   --skip-tetragon      Tetragon is already installed and running (Linux)
 #   --uninstall          stop and remove effigentd (leaves Tetragon)
 set -eu
 
@@ -36,9 +38,49 @@ warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root: curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token ..."
-[ "$(uname -s)" = Linux ] || die "this installer is for Linux. macOS support is coming."
-command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
+
+# ---- macOS: the .pkg does the work (enroll, Claude Code hook, launchd) -----
+if [ "$(uname -s)" = Darwin ]; then
+  STATE="${EFFIGENT_STATE_DIR:-/Library/Application Support/Effigent}"
+  if [ "$UNINSTALL" = 1 ]; then
+    say "Removing effigentd"
+    /usr/local/bin/effigentd install-hooks --remove 2>/dev/null || true
+    launchctl bootout system/ai.effigent.effigentd 2>/dev/null || true
+    rm -f /Library/LaunchDaemons/ai.effigent.effigentd.plist /usr/local/bin/effigentd
+    pkgutil --forget ai.effigent.effigentd >/dev/null 2>&1 || true
+    echo "effigentd removed. Enrollment state kept in $STATE (delete it to unenroll this machine)."
+    exit 0
+  fi
+  if [ "$VERSION" = latest ]; then VERSION="$(curl -fsSL "$RELEASES/latest")"; fi
+  PKG="Effigent-$VERSION.pkg"
+  say "Downloading effigentd $VERSION"
+  TMPB="$(mktemp -d)"; trap 'rm -rf "$TMPB"' EXIT
+  curl -fsSL -o "$TMPB/$PKG" "$RELEASES/$VERSION/$PKG"
+  curl -fsSL -o "$TMPB/$PKG.sha256" "$RELEASES/$VERSION/$PKG.sha256"
+  (cd "$TMPB" && shasum -a 256 -c "$PKG.sha256" >/dev/null) || die "effigentd download failed its checksum"
+  install -d -m 0700 "$STATE"
+  if [ -s "$STATE/endpoint.json" ]; then
+    say "Already enrolled; keeping the existing enrollment"
+  else
+    [ -n "$TOKEN" ] || die "--token is required for the first install (console: Enforcement -> Enroll an endpoint)"
+    # the package's post-install enrolls with it and then deletes it
+    (umask 077; printf '%s\n' "$TOKEN" > "$STATE/enroll.token"; printf '%s\n' "$SERVER" > "$STATE/enroll.server")
+  fi
+  say "Installing (enrolls, adds the Claude Code hook, starts the service)"
+  ${EFFIGENT_INSTALLER:-installer} -pkg "$TMPB/$PKG" -target / >/dev/null || die "the installer failed: see /Library/Logs/Effigent/install.log"
+  i=0
+  until /usr/local/bin/effigentd status >/dev/null 2>&1 || [ $i -ge 15 ]; do sleep 1; i=$((i+1)); done
+  /usr/local/bin/effigentd status || die "effigentd did not come up: see /Library/Logs/Effigent/install.log"
+  [ -s "$STATE/endpoint.json" ] || die "enrollment failed (token expired, used up or mistyped?): see /Library/Logs/Effigent/install.log, then rerun with a new token"
+  echo
+  echo "Done. This machine now appears in the console under Enforcement."
+  echo "macOS has no kernel enforcement: Claude Code's tool calls are checked through its hook."
+  exit 0
+fi
+
+[ "$(uname -s)" = Linux ] || die "this installer is for Linux and macOS; on Windows use https://effigent.ai/install.ps1"
+command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 
 if [ "$UNINSTALL" = 1 ]; then
   say "Removing effigentd"
@@ -105,7 +147,7 @@ install -d -m 0750 /var/log/effigent
 if [ -s /var/lib/effigent/endpoint.json ]; then
   say "Already enrolled; keeping the existing enrollment"
 else
-  [ -n "$TOKEN" ] || die "--token is required for the first install (console: Settings -> Machines -> Add a machine)"
+  [ -n "$TOKEN" ] || die "--token is required for the first install (console: Enforcement -> Enroll an endpoint)"
   say "Enrolling this machine with $SERVER"
   /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --state-dir /var/lib/effigent
 fi

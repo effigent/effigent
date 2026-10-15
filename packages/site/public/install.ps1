@@ -65,12 +65,12 @@ Say "Adding the Claude Code hook"
 if ($LASTEXITCODE -ne 0) { throw "could not update Claude Code managed settings" }
 
 Say "Starting the effigentd service"
-$args = "`"$Exe`" --sensor hooks --state-dir `"$State`" --output none --log-file `"$Log`""
+$svcArgs = "`"$Exe`" --sensor hooks --state-dir `"$State`" --output none --log-file `"$Log`""
 if (-not (Get-Service effigentd -ErrorAction SilentlyContinue)) {
-  New-Service -Name effigentd -DisplayName "Effigent endpoint agent" -BinaryPathName $args -StartupType Automatic `
+  New-Service -Name effigentd -DisplayName "Effigent endpoint agent" -BinaryPathName $svcArgs -StartupType Automatic `
     -Description "Checks AI coding agents' tool calls against your organization's Effigent policy." | Out-Null
 } else {
-  sc.exe config effigentd binPath= $args start= auto | Out-Null
+  sc.exe config effigentd binPath= $svcArgs start= auto | Out-Null
 }
 sc.exe failure effigentd reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
 Start-Service effigentd

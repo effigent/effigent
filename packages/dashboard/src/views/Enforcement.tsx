@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AGENT_TYPES } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
@@ -8,12 +8,12 @@ import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiEnrollment } from '@/lib/api.ts';
 import { ago, dateTime, type EndpointRow } from '@/lib/live-map.ts';
 import type { AgentType } from '@/types.ts';
-import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageHead, ReadOnlyNote, StatusPill } from '@/components/ui.tsx';
+import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
 
 /** How each agent is recognised (policy/default.yaml) and which layers enforce it. */
 const INTEGRATIONS: { type: AgentType; detect: string; hooks: string | null }[] = [
-  { type: 'claude-code', detect: 'binary claude · args @anthropic-ai/claude-code', hooks: 'PreToolUse hook — pauses for approval' },
-  { type: 'cursor-agent', detect: 'binary cursor-agent', hooks: 'beforeShellExecution hook' },
+  { type: 'claude-code', detect: 'binary claude · args @anthropic-ai/claude-code', hooks: 'PreToolUse hook — checks every tool call against policy (macOS, Windows)' },
+  { type: 'cursor-agent', detect: 'binary cursor-agent', hooks: null },
   { type: 'codex', detect: 'binary codex · args @openai/codex', hooks: null },
   { type: 'gemini-cli', detect: 'binary gemini · args @google/gemini-cli', hooks: null },
   { type: 'aider', detect: 'binary aider', hooks: null },
@@ -29,6 +29,43 @@ function cmpVersion(a: string, b: string): number {
   return 0;
 }
 
+type Os = 'macos' | 'linux' | 'windows';
+
+const DEFAULT_SERVER = 'https://api.effigent.ai';
+
+/** The one-line install + enroll command for an OS. `server` is added only when it isn't the default. */
+function installCommand(os: Os, token: string, server: string): string {
+  if (os === 'windows') {
+    const extra = server !== DEFAULT_SERVER ? ` -Server ${server}` : '';
+    return `iwr https://effigent.ai/install.ps1 -OutFile $env:TEMP\\effigent-install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\\effigent-install.ps1 -Token ${token}${extra}`;
+  }
+  const extra = server !== DEFAULT_SERVER ? ` --server ${server}` : '';
+  return `curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token ${token}${extra}`;
+}
+
+const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
+  macos: {
+    run: 'Run in Terminal on the Mac (asks for an admin password).',
+    does: 'Installs the Effigent package, enrolls the Mac, adds the Claude Code hook to its managed settings and starts the service. Claude Code tool calls are checked against policy before they run.',
+    fleet: 'Fleet (Jamf, Kandji, Intune): deploy the Effigent .pkg with a configuration profile for the ai.effigent domain that sets EnrollmentToken to a multi-use token.',
+  },
+  linux: {
+    run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023).',
+    does: 'Installs Tetragon and effigentd as services and enrolls the machine. Agents are blocked in the kernel (BPF LSM): programs, files and network.',
+    fleet: 'Fleet: run the same command from Ansible, cloud-init or your image build with a multi-use token.',
+  },
+  windows: {
+    run: 'Run in PowerShell as Administrator. Windows support is in preview.',
+    does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code hook. Claude Code tool calls are checked against policy before they run.',
+    fleet: 'Fleet (Intune Win32 app): powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token <multi-use token>.',
+  },
+};
+
+function guessOs(): Os {
+  const ua = navigator.userAgent;
+  return /Windows/i.test(ua) ? 'windows' : /Linux|X11/i.test(ua) && !/Android/i.test(ua) ? 'linux' : 'macos';
+}
+
 function Enroll() {
   const { api, canWrite, me, refresh } = useLive();
   const [label, setLabel] = useState('');
@@ -37,6 +74,8 @@ function Enroll() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [made, setMade] = useState<ApiEnrollment | null>(null);
+  const [os, setOs] = useState<Os>('macos');
+  useEffect(() => setOs(guessOs()), []); // after hydration: the server has no navigator
 
   const create = async () => {
     setBusy(true); setErr(null);
@@ -51,26 +90,25 @@ function Enroll() {
     }
   };
 
+  // The control plane's own URL comes back in its suggested command.
+  const server = made?.command.match(/--server\s+(\S+)/)?.[1] ?? DEFAULT_SERVER;
+  const note = OS_NOTES[os];
+
   return (
     <Card>
-      <CardHead title="Enroll an endpoint" sub="Create a one-time enrollment token, then run the command on the machine. effigentd swaps it for its own secret and starts pulling signed policy.">
+      <CardHead title="Enroll an endpoint" sub="Create an enrollment token, then run one command on the machine. It installs effigentd, enrolls the machine into this workspace and starts enforcing your published policy.">
         {me && !canWrite && <ReadOnlyNote what="enroll endpoints" />}
       </CardHead>
       <div style={{ padding: '0 20px 20px' }}>
-        <div className="section-label" style={{ margin: '0 0 6px' }}>1 · Install effigentd</div>
-        <CodeBlock code="curl -fsSL https://effigent.ai/install.sh | sh" />
-        <div className="section-label" style={{ margin: '16px 0 6px' }}>2 · Enroll it into this workspace</div>
+        <div className="section-label" style={{ margin: '0 0 6px' }}>1 · Create an enrollment token</div>
         {made ? (
-          <>
-            <CodeBlock code={made.command} wrap />
-            <div className="callout warn" style={{ margin: '10px 0 0' }}>
-              <Ic n="key" size={16} />
-              <span>
-                Copy it now — the token is shown once. Valid for {made.token.max_uses} enrollment{made.token.max_uses === 1 ? '' : 's'} until {dateTime(Date.parse(made.token.expires_at))}.
-                {' '}<button className="btn sm" style={{ marginLeft: 6 }} onClick={() => setMade(null)}>Create another</button>
-              </span>
-            </div>
-          </>
+          <div className="callout warn" style={{ margin: 0 }}>
+            <Ic n="key" size={16} />
+            <span>
+              Token created. Copy the command now — the token is shown once. Valid for {made.token.max_uses} enrollment{made.token.max_uses === 1 ? '' : 's'} until {dateTime(Date.parse(made.token.expires_at))}.
+              {' '}<button className="btn sm" style={{ marginLeft: 6 }} onClick={() => setMade(null)}>Create another</button>
+            </span>
+          </div>
         ) : (
           <div className="form-row" style={{ padding: 0 }}>
             <div className="field" style={{ flex: '2 1 200px' }}>
@@ -78,7 +116,7 @@ function Enroll() {
               <input id="enr-label" className="input" placeholder="e.g. build agents, Jane's laptop" value={label} disabled={!canWrite} onChange={(e) => setLabel(e.target.value)} />
             </div>
             <div className="field" style={{ flex: '0 1 120px' }}>
-              <label htmlFor="enr-uses">Max uses</label>
+              <label htmlFor="enr-uses" title="Use more than 1 to enroll a fleet with one token">Machines</label>
               <input id="enr-uses" className="input" type="number" min={1} max={1000} value={maxUses} disabled={!canWrite}
                 onChange={(e) => setMaxUses(Math.min(1000, Math.max(1, Number(e.target.value) || 1)))} />
             </div>
@@ -92,6 +130,21 @@ function Enroll() {
           </div>
         )}
         {err && <div className="callout bad" style={{ margin: '10px 0 0' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
+
+        <div className="section-label" style={{ margin: '18px 0 6px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span>2 · Run it on the machine</span>
+          <Seg value={os} onChange={setOs} options={[{ id: 'macos', label: 'macOS' }, { id: 'linux', label: 'Linux' }, { id: 'windows', label: 'Windows' }]} />
+        </div>
+        <div className="muted" style={{ fontSize: 13, margin: '0 0 6px' }}>{note.run}</div>
+        {made ? (
+          <CodeBlock code={installCommand(os, made.token.token, server)} wrap />
+        ) : (
+          <div style={{ opacity: 0.55 }} title="Create a token first">
+            <CodeBlock code={installCommand(os, '<token>', server)} wrap />
+          </div>
+        )}
+        <div className="muted" style={{ fontSize: 13, margin: '8px 0 0' }}>{note.does}</div>
+        <div className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>{note.fleet}</div>
       </div>
     </Card>
   );
