@@ -85,6 +85,27 @@ out=$(hook mcp__github__create_issue "$MCP")
 echo "$out" | grep -q 'denied this action' && echo "$out" | grep -q 'not from an agent' && ok "denial reaches the agent with the note" || bad "deny: $out"
 [ "$(hook mcp__linear__create_issue '{}')" = "{}" ] && ok "other MCP servers untouched" || bad "linear"
 
+echo "== Codex (PreToolUse) and Gemini CLI (BeforeTool)"
+codex() { printf '{"session_id":"cx-1","turn_id":"t1","transcript_path":null,"cwd":"/work","hook_event_name":"PreToolUse","model":"gpt-5","permission_mode":"default","tool_name":"%s","tool_use_id":"u1","tool_input":%s}' "$1" "$2" |
+  EFFIGENT_API=$EP ./bin/effigentd hook codex; }
+gemini() { printf '{"session_id":"gm-1","transcript_path":"/tmp/t","cwd":"/work","hook_event_name":"BeforeTool","timestamp":"2026-10-15T10:00:00Z","tool_name":"%s","tool_input":%s,"mcp_context":%s}' "$1" "$2" "${3:-null}" |
+  EFFIGENT_API=$EP ./bin/effigentd hook gemini; }
+[ "$(codex Bash '{"command":"go test ./..."}')" = "{}" ] && ok "codex: ordinary command runs" || bad "codex ordinary"
+codex Bash '{"command":"curl -s x"}' | grep -q '"permissionDecision":"deny","permissionDecisionReason":"Blocked by Effigent' && ok "codex: curl denied with a reason" || bad "codex curl"
+codex apply_patch '{"command":"*** Begin Patch\n*** Add File: .env.production\n+K=1\n*** End Patch"}' > "$W/cx.out"
+grep -q '"permissionDecision":"deny"' "$W/cx.out" || [ "$(cat "$W/cx.out")" = "{}" ] && ok "codex: apply_patch answered" || bad "codex patch: $(cat "$W/cx.out")"
+codex Bash '{"command":"git push origin codex-branch"}' | grep -q 'pending' && ok "codex: git push paused for approval" || bad "codex approval"
+CXID=$(pending | python3 -c 'import json,sys; print(next((a["id"] for a in json.load(sys.stdin) if a["agent"]=="codex"), ""))')
+[ -n "$CXID" ] && [ "$(decide "$CXID" approve '')" = 200 ] && [ "$(codex Bash '{"command":"git push origin codex-branch"}')" = "{}" ] && ok "codex: approved, then runs" || bad "codex approve"
+[ "$(gemini run_shell_command '{"command":"ls -la"}')" = "{}" ] && ok "gemini: ordinary command runs" || bad "gemini ordinary"
+gemini run_shell_command '{"command":"nc 1.2.3.4 80"}' | grep -q '"decision":"deny"' && ok "gemini: nc denied" || bad "gemini nc"
+gemini mcp_github_merge_pr '{"pr":7}' '{"server_name":"github","tool_name":"merge_pr"}' | grep -q 'pending' && ok "gemini: GitHub MCP tool paused (same tool_approve pattern)" || bad "gemini mcp"
+GMID=$(pending | python3 -c 'import json,sys; print(next((a["id"] for a in json.load(sys.stdin) if a["agent"]=="gemini-cli"), ""))')
+[ -n "$GMID" ] && decide "$GMID" deny 'merge yourself' >/dev/null
+gemini mcp_github_merge_pr '{"pr":7}' '{"server_name":"github","tool_name":"merge_pr"}' | grep -q '"decision":"deny".*merge yourself' && ok "gemini: denial reaches the agent" || bad "gemini deny"
+EFFIGENT_API=127.0.0.1:1 ./bin/effigentd hook gemini </dev/null | grep -q '"decision":"deny"' && ok "gemini: daemon down -> deny" || bad "gemini fail closed"
+EFFIGENT_API=127.0.0.1:1 ./bin/effigentd hook codex </dev/null | grep -q '"permissionDecision":"deny"' && ok "codex: daemon down -> deny" || bad "codex fail closed"
+
 echo "== events"
 sleep 1
 for t in approval_pending approved approval_denied; do

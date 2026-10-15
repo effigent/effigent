@@ -14,8 +14,8 @@ import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageHead, ReadOnl
 const INTEGRATIONS: { type: AgentType; detect: string; hooks: string | null }[] = [
   { type: 'claude-code', detect: 'binary claude · args @anthropic-ai/claude-code', hooks: 'PreToolUse hook — checks every tool call against policy (macOS, Windows)' },
   { type: 'cursor-agent', detect: 'binary cursor-agent', hooks: null },
-  { type: 'codex', detect: 'binary codex · args @openai/codex', hooks: null },
-  { type: 'gemini-cli', detect: 'binary gemini · args @google/gemini-cli', hooks: null },
+  { type: 'codex', detect: 'binary codex · args @openai/codex', hooks: 'PreToolUse hook — checks every tool call against policy (Codex 0.124+, macOS, Windows)' },
+  { type: 'gemini-cli', detect: 'binary gemini · args @google/gemini-cli', hooks: 'BeforeTool hook — checks every tool call against policy (Gemini CLI 0.27+, macOS, Windows)' },
   { type: 'aider', detect: 'binary aider', hooks: null },
   { type: 'opencode', detect: 'binary opencode', hooks: null },
   { type: 'goose', detect: 'binary goose', hooks: null },
@@ -46,7 +46,7 @@ function installCommand(os: Os, token: string, server: string): string {
 const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
   macos: {
     run: 'Run in Terminal on the Mac (asks for an admin password).',
-    does: 'Installs the Effigent package, enrolls the Mac, adds the Claude Code hook to its managed settings and starts the service. Claude Code tool calls are checked against policy before they run.',
+    does: 'Installs the Effigent package, enrolls the Mac, adds the Claude Code, Codex and Gemini CLI hooks to their machine-wide settings and starts the service. Their tool calls are checked against policy before they run.',
     fleet: 'Fleet (Jamf, Kandji, Intune): deploy the Effigent .pkg with a configuration profile for the ai.effigent domain that sets EnrollmentToken to a multi-use token.',
   },
   linux: {
@@ -56,7 +56,7 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
   },
   windows: {
     run: 'Run in PowerShell as Administrator. Windows support is in preview.',
-    does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code hook. Claude Code tool calls are checked against policy before they run.',
+    does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code, Codex and Gemini CLI hooks. Their tool calls are checked against policy before they run.',
     fleet: 'Fleet (Intune Win32 app): powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token <multi-use token>.',
   },
 };

@@ -2,7 +2,8 @@
 # Effigent endpoint installer (Linux and macOS). Installs effigentd as a
 # service, enrolls this machine with your organization, and starts enforcing.
 # Linux: also installs Tetragon (kernel enforcement). macOS: installs the
-# release .pkg (checksum-verified), which adds the Claude Code hook to managed settings.
+# release .pkg (checksum-verified), which adds the Claude Code, Codex and Gemini CLI
+# hooks to their machine-wide settings.
 #
 #   curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token eft_...
 #
@@ -40,7 +41,7 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root: curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token ..."
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
-# ---- macOS: the .pkg does the work (enroll, Claude Code hook, launchd) -----
+# ---- macOS: the .pkg does the work (enroll, agent hooks, launchd) -----
 if [ "$(uname -s)" = Darwin ]; then
   STATE="${EFFIGENT_STATE_DIR:-/Library/Application Support/Effigent}"
   if [ "$UNINSTALL" = 1 ]; then
@@ -67,7 +68,7 @@ if [ "$(uname -s)" = Darwin ]; then
     # the package's post-install enrolls with it and then deletes it
     (umask 077; printf '%s\n' "$TOKEN" > "$STATE/enroll.token"; printf '%s\n' "$SERVER" > "$STATE/enroll.server")
   fi
-  say "Installing (enrolls, adds the Claude Code hook, starts the service)"
+  say "Installing (enrolls, adds the agent hooks, starts the service)"
   ${EFFIGENT_INSTALLER:-installer} -pkg "$TMPB/$PKG" -target / >/dev/null || die "the installer failed: see /Library/Logs/Effigent/install.log"
   i=0
   until /usr/local/bin/effigentd status >/dev/null 2>&1 || [ $i -ge 15 ]; do sleep 1; i=$((i+1)); done
@@ -75,7 +76,7 @@ if [ "$(uname -s)" = Darwin ]; then
   [ -s "$STATE/endpoint.json" ] || die "enrollment failed (token expired, used up or mistyped?): see /Library/Logs/Effigent/install.log, then rerun with a new token"
   echo
   echo "Done. This machine now appears in the console under Enforcement."
-  echo "macOS has no kernel enforcement: Claude Code's tool calls are checked through its hook."
+  echo "macOS has no kernel enforcement: Claude Code, Codex and Gemini CLI tool calls are checked through their hooks."
   exit 0
 fi
 

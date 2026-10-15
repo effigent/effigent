@@ -32,7 +32,7 @@ else
   echo "no enrollment token found (set ai.effigent EnrollmentToken in your MDM); running unenrolled"
 fi
 
-"$BIN" install-hooks || echo "could not update Claude Code managed settings"
+"$BIN" install-hooks || echo "could not update every agent's managed settings (see above)"
 
 launchctl bootstrap system /Library/LaunchDaemons/ai.effigent.effigentd.plist 2>/dev/null || launchctl kickstart -k system/ai.effigent.effigentd
 sleep 2

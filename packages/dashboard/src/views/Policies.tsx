@@ -145,7 +145,7 @@ export function Policies() {
             <dt>Network</dt><dd><code>network: true</code> reports outbound connects; <code>network_deny</code> / <code>network_allow</code> take IPs and CIDRs ; <code>domain_deny</code> takes hostnames</dd>
             <dt>Approvals</dt><dd><code>command_approve</code> (e.g. <code>git push*</code>), <code>tool_approve</code> (e.g. <code>mcp__github__*</code>), <code>exec_approve</code>, <code>file_approve</code>, <code>domain_approve</code>, <code>network_approve</code>: the agent pauses and asks an approver (<Link href="/approvals" className="view-all">Approvals</Link>, Slack, email). <code>approvals: {'{'} wait_seconds, ttl_minutes {'}'}</code>. Agent hooks only — on Linux the kernel denies them</dd>
             <dt>Delivery</dt><dd>Signed per workspace; endpoints verify, apply live and cache it for offline restarts</dd>
-            <dt>macOS / Windows</dt><dd>No kernel enforcement; Claude Code's tool calls are checked before they run (agent hook) — programs by name, files, hostnames and IPs. Same modes: <code>monitor</code> reports, <code>denylist</code> / <code>allowlist</code> block</dd>
+            <dt>macOS / Windows</dt><dd>No kernel enforcement; Claude Code, Codex and Gemini CLI tool calls are checked before they run (agent hooks) — programs by name, files, hostnames and IPs. Same modes: <code>monitor</code> reports, <code>denylist</code> / <code>allowlist</code> block</dd>
           </dl>
         </Card>
       </div>

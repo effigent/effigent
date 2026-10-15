@@ -1,6 +1,7 @@
 <#
   Effigent endpoint installer (Windows). Installs effigentd as a service,
-  enrolls this machine with your organization, and adds the Claude Code hook
+  enrolls this machine with your organization, and adds the Claude Code, Codex and
+  Gemini CLI hooks
   to its machine-wide managed settings.
 
   Run in an elevated PowerShell:
@@ -60,9 +61,9 @@ if (Test-Path (Join-Path $State "endpoint.json")) {
   throw "-Token is required for the first install (console: Enforcement -> Enroll a machine)"
 }
 
-Say "Adding the Claude Code hook"
+Say "Adding the agent hooks (Claude Code, Codex, Gemini CLI)"
 & $Exe install-hooks
-if ($LASTEXITCODE -ne 0) { throw "could not update Claude Code managed settings" }
+if ($LASTEXITCODE -ne 0) { throw "could not update the agents' managed settings" }
 
 Say "Starting the effigentd service"
 $svcArgs = "`"$Exe`" --sensor hooks --state-dir `"$State`" --output none --log-file `"$Log`""

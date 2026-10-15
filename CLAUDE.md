@@ -123,8 +123,8 @@ npm run -w @effigent/site build                     # site
 - Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet).
 - `domain_deny` (hostnames) is enforced by address: `internal/endpoint/domains` resolves each name every `-dns-refresh` (30s) via the system resolver + `-dns-servers` (1.1.1.1, 8.8.8.8, 9.9.9.9), keeps every address seen in the last 15 min (max 64 per name; a failed lookup never shrinks the set; loopback/link-local answers are dropped), and the engine adds them to `network_deny` at apply time, re-applying only agents whose names changed. While it is in force, a DNS bypass guard blocks agents from DoT (:853 anywhere) and from well-known public resolvers on :53/:443/:853, except the nameservers in effigentd's and the agent's own `resolv.conf` and single addresses listed in `network_allow`. effigentd itself queries the public resolvers every 30s; `-dns-servers ""` limits it to the system resolver. Limits: shared CDN IPs over-block or miss; names are exact (no wildcards, `www.` separate); private DoH, hard-coded IPs, `/etc/hosts` pins and proxies evade it; effigentd resolves from its own vantage point (split-horizon DNS can differ). `network_allow` is the stronger control. e2e section 6.
 - macOS / Windows: no kernel enforcement (macOS needs an Endpoint Security entitlement).
-  `-sensor hooks`: Claude Code's PreToolUse hook (`effigentd hook claude`, matcher `.*`)
-  asks the daemon before every tool call; `internal/endpoint/hooks.EvaluateClaude` denies
+  `-sensor hooks`: the agents' pre-tool hooks (`effigentd hook claude|codex|gemini`)
+  ask the daemon before every tool call; `internal/endpoint/hooks.EvaluateClaude` denies
   in denylist/allowlist mode and reports `would_block` in monitor/learn. It checks Bash
   commands (a small shell reader: pipes, `&&`, `$( )`, `sh -c`, sudo/env/xargs wrappers)
   against `exec_deny`/`exec_allow` **by program name** (`/opt/homebrew/bin/curl` matches
@@ -133,11 +133,33 @@ npm run -w @effigent/site build                     # site
   against `domain_deny` (name + subdomains), `network_deny`, `network_allow` (IPs only).
   Limits: it reads the command, not what runs — scripts, interpreters (`python -c`),
   variables, aliases and tools that connect on their own aren't followed; MCP tools aren't
-  checked against deny lists yet (`tool_approve` can pause them); only Claude Code has a
-  hook. If the daemon is down the hook denies. Approvers: any console admin /
+  checked against deny lists yet (`tool_approve` can pause them). If the daemon is down
+  the hook denies. Approvers: any console admin /
   security_admin (central `approval.users/teams` are not enforced yet); approve from
   the console only (Slack/email link to it).
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
+- Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
+  `--agents claude,codex,gemini`, `--remove`, `--exclusive`): each agent's calls are
+  translated to Claude Code's canonical tools (`internal/endpoint/hooks/agents.go`), so
+  one policy (deny + approval lists, `mcp__<server>__<tool>` names) covers all three.
+  - Claude Code: managed-settings.json `PreToolUse`, timeout 120, `onFailure: block`.
+  - Codex ≥ 0.124 (0.131 recommended): `/etc/codex/requirements.toml`
+    (Windows `%ProgramData%\OpenAI\Codex\requirements.toml`) `[[hooks.PreToolUse]]` +
+    `[features] hooks = true`; same deny JSON as Claude. Shell = `Bash`, edits =
+    `apply_patch` (files parsed from the patch), MCP = `mcp__…`. Rewriting the TOML drops
+    comments; the original is kept once as `requirements.toml.effigent-backup`. Limits:
+    hosted `WebSearch` has no hook; a hook timeout or crash lets the call run (fail open).
+  - Gemini CLI ≥ 0.27: system settings.json (`/etc/gemini-cli/`, macOS
+    `/Library/Application Support/GeminiCli/`, Windows `%ProgramData%\gemini-cli\`)
+    `hooks.BeforeTool`, timeout 120000 ms, `hooksConfig.enabled: true`; deny =
+    `{"decision":"deny","reason":…}`. Tools: run_shell_command, read_file, read_many_files,
+    write_file, replace, list_directory, glob, grep_search, web_fetch (URLs from the
+    prompt), google_web_search (= `WebSearch`), `mcp_<server>_<tool>` (renamed from
+    mcp_context). Limits: Gemini loads no hooks in folders the user hasn't trusted;
+    users can disable a hook by name (`/hooks disable effigent`); timeouts fail open;
+    `GEMINI_CLI_SYSTEM_SETTINGS_PATH` can point elsewhere. Gemini's admin policy TOML
+    (`…/gemini-cli/policies`) is the harder backstop — not written by effigentd yet.
+  - Cursor and the others: detection only (no hook).
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8–1.1s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
 

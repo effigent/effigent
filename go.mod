@@ -7,6 +7,7 @@ require (
 	github.com/cilium/tetragon/api v1.7.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/zricethezav/gitleaks/v8 v8.30.1
 	golang.org/x/sys v0.49.0
 	google.golang.org/grpc v1.84.0
@@ -57,7 +58,6 @@ require (
 	github.com/muesli/reflow v0.2.1-0.20210115123740-9e1d0d53df68 // indirect
 	github.com/muesli/termenv v0.15.1 // indirect
 	github.com/nwaples/rardecode/v2 v2.1.0 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/rs/zerolog v1.33.0 // indirect

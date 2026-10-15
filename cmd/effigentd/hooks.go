@@ -22,24 +22,49 @@ import (
 	"github.com/effigent/effigent/internal/shared/action"
 )
 
+// hookAgent is one agent's hook format.
+type hookAgent struct {
+	name       string // policy agent name, e.g. "claude-code"
+	label      string
+	parse      func([]byte) (hooks.Call, error)
+	output     func(hooks.Decision) []byte
+	failClosed func(string) []byte
+}
+
+// hookAgents is keyed by the name in `effigentd hook <name>` and POST /hook/{name}.
+var hookAgents = map[string]hookAgent{
+	"claude": {name: "claude-code", label: "Claude Code", output: hooks.ClaudeOutput, failClosed: hooks.FailClosed,
+		parse: func(b []byte) (hooks.Call, error) {
+			var in hooks.ClaudeInput
+			err := json.Unmarshal(b, &in)
+			return hooks.FromClaude(in), err
+		}},
+	// Codex answers like Claude Code: its PreToolUse accepts the same deny JSON.
+	"codex":  {name: "codex", label: "Codex", parse: hooks.ParseCodex, output: hooks.ClaudeOutput, failClosed: hooks.FailClosed},
+	"gemini": {name: "gemini-cli", label: "Gemini CLI", parse: hooks.ParseGemini, output: hooks.GeminiOutput, failClosed: hooks.GeminiFailClosed},
+}
+
 // hookHandler answers POST /hook/{agent} on the local API. cp is nil when
 // the machine isn't enrolled (approvals then can't be asked for).
 func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx context.Context, c api.HookCall) ([]byte, error) {
 	var mu sync.Mutex
-	seen := map[string]time.Time{} // Claude Code session id -> last call
+	seen := map[string]time.Time{} // agent/session id -> last call
 	return func(ctx context.Context, c api.HookCall) ([]byte, error) {
-		if c.Agent != "claude" {
+		ag, ok := hookAgents[c.Agent]
+		if !ok {
 			return nil, fmt.Errorf("unknown agent hook %q", c.Agent)
 		}
-		var in hooks.ClaudeInput
-		if err := json.Unmarshal(c.Payload, &in); err != nil {
-			return hooks.FailClosed("the hook input could not be read"), nil
+		call, err := ag.parse(c.Payload)
+		if err != nil {
+			return ag.failClosed("the hook input could not be read"), nil
 		}
+		in := call.Orig
 		// There is no kernel to report agents starting, so a session's first
 		// tool call stands in for it (the console counts agents from these).
 		mu.Lock()
-		_, known := seen[in.SessionID]
-		seen[in.SessionID] = time.Now()
+		key := ag.name + "/" + in.SessionID
+		_, known := seen[key]
+		seen[key] = time.Now()
 		for id, t := range seen {
 			if time.Since(t) > 24*time.Hour {
 				delete(seen, id)
@@ -47,30 +72,30 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		}
 		mu.Unlock()
 		if !known && in.SessionID != "" {
-			eng.Emit(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: "claude-code",
-				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: "Claude Code session " + short(in.SessionID)})
+			eng.Emit(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: ag.name,
+				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID)})
 		}
 		// One event per tool call, so the console sees everything the agent
 		// did; a policy match makes it blocked / would_block / file_open.
-		ev := event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: "claude-code",
-			Kind: "tool", Target: hooks.Summary(in), Rule: "hook", Message: "session " + short(in.SessionID)}
+		ev := event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: ag.name,
+			Kind: "tool", Target: call.Summary(), Rule: "hook", Message: "session " + short(in.SessionID)}
 		if hooks.Claude == nil {
 			// No decision logic in this build: watch mode. Record the call,
 			// block nothing, and leave the user's own permission prompts as is.
 			ev.Mode = "monitor"
 			eng.Emit(ev)
-			return hooks.ClaudeOutput(hooks.Decision{}), nil
+			return ag.output(hooks.Decision{}), nil
 		}
-		rule := eng.RuleFor("claude-code")
-		d := hooks.Claude(rule, in)
+		rule := eng.RuleFor(ag.name)
+		d := hooks.EvaluateCall(hooks.Claude, rule, call)
 		ev.Mode = string(rule.Mode)
 		if d.Approve {
 			d = askApproval(ctx, eng, cp(), c, pausedCall{
-				agent: "claude-code", session: in.SessionID, tool: in.ToolName, cwd: in.Cwd,
-				summary: approvalSummary(in), action: claudeAction(in),
+				agent: ag.name, session: in.SessionID, tool: in.ToolName, cwd: in.Cwd,
+				summary: approvalSummary(call), action: callAction(call),
 			}, d, &ev)
 			eng.Emit(ev)
-			return hooks.ClaudeOutput(d), nil
+			return ag.output(d), nil
 		}
 		if t := reportType(d); t != "" {
 			ev.Type, ev.Severity = t, severity(t)
@@ -83,7 +108,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 			}
 		}
 		eng.Emit(ev)
-		return hooks.ClaudeOutput(d), nil
+		return ag.output(d), nil
 	}
 }
 
@@ -164,9 +189,9 @@ func askApproval(ctx context.Context, eng *engine.Engine, cp *cpclient.Client, c
 // approvalSummary is what approvers see: the usual one-line summary, or the
 // tool's arguments when it has no single telling field (MCP tools: repo,
 // title, body…). Redacted before it leaves the machine.
-func approvalSummary(in hooks.ClaudeInput) string {
-	s := hooks.Summary(in)
-	if s == in.ToolName && len(in.ToolInput) > 0 {
+func approvalSummary(c hooks.Call) string {
+	s := c.Summary()
+	if in := c.Canon[0]; len(c.Canon) == 1 && s == in.ToolName && len(in.ToolInput) > 0 {
 		if b, err := json.Marshal(in.ToolInput); err == nil {
 			if len(b) > 800 {
 				b = append(b[:800], "…"...)
@@ -175,6 +200,26 @@ func approvalSummary(in hooks.ClaudeInput) string {
 		}
 	}
 	return s
+}
+
+// callAction is the action an approval binds to: the canonical call, with the
+// agent's own tool name and full input when they differ (a Codex patch, a
+// Gemini fetch prompt), so an approved call can't turn into another one.
+func callAction(c hooks.Call) action.Action {
+	a := claudeAction(c.Canon[0])
+	if len(c.Canon) > 1 || c.Orig.ToolName != c.Canon[0].ToolName {
+		a.Tool = c.Orig.ToolName
+		if b, err := json.Marshal(c.Orig.ToolInput); err == nil {
+			a.Command = c.Orig.ToolName + " " + string(b)
+		}
+		a.Paths = nil
+		for _, in := range c.Canon {
+			if p, _ := in.ToolInput["file_path"].(string); p != "" {
+				a.Paths = append(a.Paths, p)
+			}
+		}
+	}
+	return a
 }
 
 // claudeAction is the normalized action of a Claude Code tool call; its
@@ -246,13 +291,14 @@ func severity(t event.Type) string {
 // prints its answer. If the daemon can't answer, it denies: an agent must not
 // get a free pass because effigentd was stopped.
 func hookCmd(args []string) {
-	if len(args) < 1 || args[0] != "claude" {
-		fmt.Fprintln(os.Stderr, "usage: effigentd hook claude   (reads Claude Code's PreToolUse JSON on stdin)")
+	if len(args) < 1 || hookAgents[args[0]].parse == nil {
+		fmt.Fprintln(os.Stderr, "usage: effigentd hook claude|codex|gemini   (reads the agent's pre-tool hook JSON on stdin)")
 		os.Exit(2)
 	}
+	ag := hookAgents[args[0]]
 	payload, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	if err != nil {
-		os.Stdout.Write(hooks.FailClosed("the hook input could not be read"))
+		os.Stdout.Write(ag.failClosed("the hook input could not be read"))
 		return
 	}
 	addr := os.Getenv("EFFIGENT_API")
@@ -263,7 +309,7 @@ func hookCmd(args []string) {
 	// 90s); install-hooks gives the hook more than this.
 	const budget = 100 * time.Second
 	c := &http.Client{Timeout: budget}
-	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/hook/claude", bytes.NewReader(payload))
+	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/hook/"+args[0], bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Effigent-Hook-Budget", fmt.Sprint(int(budget/time.Second)))
 	if u, err := user.Current(); err == nil {
@@ -271,13 +317,13 @@ func hookCmd(args []string) {
 	}
 	res, err := c.Do(req)
 	if err != nil {
-		os.Stdout.Write(hooks.FailClosed("effigentd is not running on this machine"))
+		os.Stdout.Write(ag.failClosed("effigentd is not running on this machine"))
 		return
 	}
 	defer res.Body.Close()
 	out, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil || res.StatusCode != http.StatusOK || !json.Valid(out) {
-		os.Stdout.Write(hooks.FailClosed("effigentd could not decide this action"))
+		os.Stdout.Write(ag.failClosed("effigentd could not decide this action"))
 		return
 	}
 	os.Stdout.Write(out)
