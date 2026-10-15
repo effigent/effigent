@@ -13,9 +13,12 @@ import (
 
 // Decision is the answer for one tool call.
 type Decision struct {
-	Deny   bool   `json:"deny"`
-	Reason string `json:"reason,omitempty"` // shown to the agent when denied
-	// Report is "blocked", "would_block", "file_open", or "" (nothing notable).
+	Deny bool `json:"deny"`
+	// Approve: the call matched an approval list in an enforcing mode. The
+	// daemon asks an approver and turns this into allow or deny.
+	Approve bool   `json:"approve,omitempty"`
+	Reason  string `json:"reason,omitempty"` // shown to the agent when denied
+	// Report is "blocked", "would_block", "file_open", "approval", or "" (nothing notable).
 	Report string `json:"report,omitempty"`
 	Kind   string `json:"kind,omitempty"`   // exec | file_open | connect | tool
 	Target string `json:"target,omitempty"` // e.g. "exec /usr/bin/curl", "/work/.env"

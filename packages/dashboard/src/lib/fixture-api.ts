@@ -6,7 +6,7 @@
  * makes a network request.
  */
 import { ENDPOINTS, EVENTS } from '@/data.ts';
-import { API_BASE, ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiPolicyVersion } from './api.ts';
+import { API_BASE, ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiNotifications, type ApiPolicyVersion } from './api.ts';
 
 const DEMO_POLICY = `# effigentd policy (Demo Mode — sample workspace, not published anywhere)
 defaults:
@@ -43,6 +43,7 @@ export function createFixtureApi(): Api {
   const iso = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString();
   const me: ApiMe = { user_id: 'user_demo', tenant: 'org:demo', role: 'admin', via: 'clerk' };
   let version = 3;
+  let notifications: ApiNotifications = { slack_webhook_set: true, slack_webhook_hint: '…demo', emails: ['security@acme.example'], email_available: true };
   let policy: ApiPolicyVersion = { version, body: DEMO_POLICY, comment: 'deny curl/wget/nc for every agent', created_by: me.user_id, created_at: iso(240) };
   const history: ApiPolicyVersion[] = [
     { version: 3, comment: policy.comment, created_by: me.user_id, created_at: iso(240) },
@@ -81,6 +82,8 @@ export function createFixtureApi(): Api {
       if (p === '/events') return delay(events) as Promise<T>;
       if (p === '/audit') return delay(audit.slice().reverse()) as Promise<T>;
       if (p === '/audit/verify') return delay({ ok: true, entries: audit.length, head: audit[audit.length - 1]?.hash }) as Promise<T>;
+      if (p === '/approvals') return delay([]) as Promise<T>; // the demo queue reads the sample store
+      if (p === '/notifications') return delay(notifications) as Promise<T>;
       return Promise.reject(new ApiError(404, 'not found'));
     },
     send<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -99,6 +102,22 @@ export function createFixtureApi(): Api {
         ep.revoked = true;
         log('endpoint.revoke', ep.id, null);
         return delay({ ok: true }) as Promise<T>;
+      }
+      if (method === 'PUT' && path === '/notifications') {
+        const b = (body ?? {}) as { slack_webhook?: string; emails?: string[] };
+        if (b.slack_webhook !== undefined) {
+          if (b.slack_webhook && !b.slack_webhook.startsWith('https://hooks.slack.com/services/')) {
+            return Promise.reject(new ApiError(400, 'use a Slack incoming webhook URL (https://hooks.slack.com/services/…)'));
+          }
+          notifications = { ...notifications, slack_webhook_set: !!b.slack_webhook, slack_webhook_hint: b.slack_webhook ? `…${b.slack_webhook.slice(-4)}` : undefined };
+        }
+        if (b.emails) notifications = { ...notifications, emails: b.emails };
+        log('notifications.update', 'approvals', { slack_webhook_set: notifications.slack_webhook_set, emails: notifications.emails });
+        return delay(notifications) as Promise<T>;
+      }
+      if (method === 'POST' && path === '/notifications/test') {
+        return delay({ ...(notifications.slack_webhook_set ? { slack: 'sent (Demo Mode: nothing was posted)' } : {}),
+          ...(notifications.emails.length ? { email: 'sent (Demo Mode: nothing was sent)' } : {}) }) as Promise<T>;
       }
       if (method === 'POST' && path === '/enrollment-tokens') {
         const b = (body ?? {}) as { label?: string; ttl_hours?: number; max_uses?: number };

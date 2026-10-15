@@ -8,6 +8,7 @@ import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { useDemoMode } from '@/demo.tsx';
+import { ago } from '@/lib/live-map.ts';
 import { AgentGlyph, Switch, ThemeSelect } from './ui.tsx';
 
 interface Hit { group: string; label: string; sub: string; href: string; icon: ReactNode }
@@ -100,24 +101,32 @@ function Search() {
 
 function Bell() {
   const { pending } = useStore();
+  const { approvals, now } = useLive();
   const { demo } = useDemoMode();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useOutside(box, () => setOpen(false));
+  // Demo Mode: the sample queue. Otherwise: the control plane's open requests.
+  const rows = demo
+    ? pending.map((a) => ({ id: a.id, type: a.agentType as string, title: a.title, sub: `${agentMeta(a.agentType).label} · ${a.user} · ${a.requestedAgo}` }))
+    : approvals.filter((a) => a.state === 'pending' && Date.parse(a.expires_at) > now).map((a) => ({
+      id: a.id, type: a.agent, title: a.summary,
+      sub: `${agentMeta(a.agent).label} · ${a.os_user || a.hostname} · ${ago(Date.parse(a.requested_at), now)}`,
+    }));
   return (
     <div className="bell-wrap" ref={box}>
-      <button className="icon-btn bell" aria-label={`${pending.length} pending approvals`} onClick={() => setOpen((o) => !o)}>
+      <button className="icon-btn bell" aria-label={`${rows.length} pending approvals`} onClick={() => setOpen((o) => !o)}>
         <Ic n="bell" />
-        {pending.length > 0 && <span className="bell-count">{pending.length}</span>}
+        {rows.length > 0 && <span className="bell-count">{rows.length}</span>}
       </button>
       {open && (
         <div className="pop bell-pop">
           <div className="pop-head">Pending approvals</div>
-          {pending.length === 0 && <div className="search-none">{demo ? 'Nothing waiting on you.' : 'No approval requests yet.'}</div>}
-          {pending.slice(0, 5).map((a) => (
+          {rows.length === 0 && <div className="search-none">{demo ? 'Nothing waiting on you.' : 'No approval requests waiting.'}</div>}
+          {rows.slice(0, 5).map((a) => (
             <Link key={a.id} href={`/approvals?id=${a.id}`} className="pop-row" onClick={() => setOpen(false)}>
-              <AgentGlyph type={a.agentType} size={26} />
-              <span><span className="cell-main">{a.title}</span><span className="cell-sub">{agentMeta(a.agentType).label} · {a.user} · {a.requestedAgo}</span></span>
+              <AgentGlyph type={a.type} size={26} />
+              <span><span className="cell-main">{a.title}</span><span className="cell-sub">{a.sub}</span></span>
             </Link>
           ))}
           <Link href="/approvals" className="pop-foot" onClick={() => setOpen(false)}>Open approvals <Ic n="arrowRight" size={13} /></Link>

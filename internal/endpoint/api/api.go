@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/engine"
 )
@@ -23,10 +25,18 @@ type Server struct {
 	Token  string // required as "Authorization: Bearer <token>" when set; without it the API is read-only
 	Stats  func() map[string]any
 	// Hook answers an agent's pre-tool hook (POST /hook/{agent}); nil disables it.
-	Hook func(agent string, payload []byte) ([]byte, error)
+	Hook func(ctx context.Context, c HookCall) ([]byte, error)
 	// Managed is set when the endpoint is enrolled: policy then comes only
 	// from the control plane, and local PUT /policy is refused.
 	Managed bool
+}
+
+// HookCall is one pre-tool hook request.
+type HookCall struct {
+	Agent   string
+	Payload []byte
+	Budget  time.Duration // how long the hook process waits for the answer
+	OSUser  string        // the user the agent runs as (reported by the hook process)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -41,7 +51,14 @@ func (s *Server) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		out, err := s.Hook(r.PathValue("agent"), body)
+		// The hook process says how long it will wait for an answer; older
+		// ones don't, and give up after 10s.
+		budget := 8 * time.Second
+		if v, err := strconv.Atoi(r.Header.Get("X-Effigent-Hook-Budget")); err == nil && v > 0 {
+			budget = min(time.Duration(v)*time.Second, 5*time.Minute)
+		}
+		out, err := s.Hook(r.Context(), HookCall{Agent: r.PathValue("agent"), Payload: body, Budget: budget,
+			OSUser: r.Header.Get("X-Effigent-OS-User")})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return

@@ -16,6 +16,13 @@ func testRule(mode policy.Mode) policy.Rule {
 		FileAlert:  []string{"/.aws/credentials"},
 		NetDeny:    []string{"203.0.113.0/24", "198.51.100.7"},
 		DomainDeny: []string{"pastebin.com"},
+
+		ExecApprove:    []string{"/usr/bin/scp", "/usr/bin/curl"}, // curl: deny wins
+		FileApprove:    []string{"/.kube/config"},
+		DomainApprove:  []string{"api.stripe.com"},
+		NetApprove:     []string{"192.0.2.0/24"},
+		CommandApprove: []string{"git push*", "npm publish"},
+		ToolApprove:    []string{"mcp__github__*", "WebSearch"},
 	}
 }
 
@@ -94,7 +101,24 @@ func TestEvaluateClaude(t *testing.T) {
 
 		{"monitor reports", policy.Monitor, bash("curl x"), "would_block", "exec_deny"},
 		{"learn reports", policy.Learn, tool("Read", "file_path", "/w/.env"), "would_block", "file_deny"},
-		{"mcp untouched", policy.Denylist, ClaudeInput{ToolName: "mcp__github__create_issue", ToolInput: map[string]any{}}, "", ""},
+		{"mcp other server untouched", policy.Denylist, ClaudeInput{ToolName: "mcp__linear__create_issue", ToolInput: map[string]any{}}, "", ""},
+
+		{"approve program", policy.Denylist, bash("scp f host:/tmp"), "approval", "exec_approve"},
+		{"approve program via sudo", policy.Denylist, bash("sudo -u x /opt/homebrew/bin/scp f h:/"), "deny", "exec_deny"}, // sudo itself is denied
+		{"deny beats approve", policy.Denylist, bash("curl x"), "deny", "exec_deny"},
+		{"approve command prefix", policy.Denylist, bash("cd app && /usr/bin/git push --force origin main"), "approval", "command_approve"},
+		{"approve command in sh -c", policy.Denylist, bash(`bash -c "git push"`), "approval", "command_approve"},
+		{"command exact only", policy.Denylist, bash("npm publish --tag beta"), "", ""},
+		{"command exact", policy.Denylist, bash("npm publish"), "approval", "command_approve"},
+		{"other git commands pass", policy.Denylist, bash("git status && git pull"), "", ""},
+		{"approve file", policy.Denylist, tool("Read", "file_path", "/Users/dev/.kube/config"), "approval", "file_approve"},
+		{"approve file in command", policy.Denylist, bash("cat ~/.kube/config"), "approval", "file_approve"},
+		{"approve domain", policy.Denylist, tool("WebFetch", "url", "https://api.stripe.com/v1/charges"), "approval", "domain_approve"},
+		{"approve ip", policy.Denylist, bash("ssh 192.0.2.10"), "approval", "network_approve"},
+		{"approve mcp tool", policy.Denylist, ClaudeInput{ToolName: "mcp__github__create_issue", ToolInput: map[string]any{"title": "x"}}, "approval", "tool_approve"},
+		{"approve tool", policy.Allowlist, ClaudeInput{ToolName: "WebSearch", ToolInput: map[string]any{"query": "x"}}, "approval", "tool_approve"},
+		{"monitor only reports approval", policy.Monitor, bash("git push"), "would_block", "command_approve"},
+		{"allowlist still denies first", policy.Allowlist, bash("scp f h:/"), "deny", "exec_allow"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -102,6 +126,9 @@ func TestEvaluateClaude(t *testing.T) {
 			got := d.Report
 			if d.Deny {
 				got = "deny"
+			}
+			if d.Approve != (got == "approval") {
+				t.Fatalf("Approve=%v with report %q", d.Approve, d.Report)
 			}
 			if got != c.want || d.Rule != c.rule {
 				t.Fatalf("got %q rule %q (%s), want %q rule %q", got, d.Rule, d.Reason, c.want, c.rule)

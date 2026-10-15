@@ -69,17 +69,21 @@ export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
 }
 
 const KNOWN: EventType[] = ['agent_start', 'agent_exit', 'exec', 'exit', 'file_open', 'connect', 'blocked', 'would_block', 'policy'];
+/** Approval-flow events (agent hooks) all show as type "approval". */
+const APPROVAL_TYPES = ['approval_pending', 'approved', 'approval_denied'];
 
 const OUTCOME: Record<string, Outcome> = {
   blocked: 'blocked', would_block: 'would_block',
   exec: 'allowed', file_open: 'allowed', connect: 'allowed',
   agent_start: 'system', agent_exit: 'system', exit: 'system', policy: 'system',
+  approval_pending: 'pending', approved: 'allowed', approval_denied: 'blocked',
 };
 
 const TITLE: Record<string, string> = {
   agent_start: 'Agent started', agent_exit: 'Agent exited', exec: 'Ran a command', exit: 'Process exited',
   file_open: 'Opened a sensitive file', connect: 'Outbound connection', blocked: 'Blocked by policy',
   would_block: 'Would block (monitor mode)', policy: 'Agent policy applied',
+  approval_pending: 'Waiting for approval', approved: 'Approved and ran', approval_denied: 'Approval denied',
 };
 
 const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
@@ -101,7 +105,7 @@ function toolSummary(c: Classified): string {
 export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): ConsoleEvent {
   const b = e.body ?? {};
   const at = ms(e.time) ?? 0;
-  const type = (KNOWN as string[]).includes(e.type) ? (e.type as EventType) : 'policy';
+  const type: EventType = (KNOWN as string[]).includes(e.type) ? (e.type as EventType) : APPROVAL_TYPES.includes(e.type) ? 'approval' : 'policy';
   const target = b.target || b.process?.args || b.process?.binary || undefined;
   const c = classify(e);
   const mcp = mcpCall(c);
@@ -113,6 +117,8 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
     case 'connect': summary = `connect: ${b.target ?? '?'}`; break;
     case 'blocked': case 'would_block':
       summary = `${e.type === 'blocked' ? 'blocked' : 'would block'}: ${mcp ?? (c?.kind === 'command' ? c.label : b.target ? (b.target.startsWith('/') ? base(b.target) : b.target) : '?')}`; break;
+    case 'approval_pending': case 'approved': case 'approval_denied':
+      summary = `${e.type === 'approved' ? 'approved' : e.type === 'approval_denied' ? 'denied' : 'awaiting approval'}: ${mcp ?? (c?.kind === 'command' ? c.label : b.target ?? '?')}`; break;
     case 'agent_start': case 'agent_exit': summary = `${e.type}${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`; break;
     default: summary = b.message || e.type;
   }

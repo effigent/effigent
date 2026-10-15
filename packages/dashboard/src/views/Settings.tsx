@@ -1,12 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
-import { API_BASE } from '@/lib/api.ts';
+import { API_BASE, apiErrorText, type ApiNotifications } from '@/lib/api.ts';
 import { Storage } from '@/components/Storage.tsx';
-import { Card, CardHead, DemoNote, PageHead, Switch, ThemeSelect } from '@/components/ui.tsx';
+import { Card, CardHead, DemoNote, PageHead, ReadOnlyNote, Switch, ThemeSelect } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
 const NOT_STORED = 'These preferences are not stored by the control plane yet — changes here are not saved';
@@ -25,7 +25,6 @@ export function Settings({ dev }: { dev: boolean }) {
   const pendingMe = loaded ? '—' : '…';
   const { demo, setDemo } = useDemoMode();
   const [s, setS] = useState({
-    expiry: '15', twoApprovers: true, slack: true, channel: '#agent-approvals', selfApprove: false,
     failClosed: true, unknownMode: 'monitor', orphanMcp: true, redact: true, retention: '365',
   });
   const set = <K extends keyof typeof s>(k: K, v: (typeof s)[K]) => setS({ ...s, [k]: v });
@@ -37,26 +36,7 @@ export function Settings({ dev }: { dev: boolean }) {
       </PageHead>
 
       <div className="grid-2">
-        <Card>
-          <CardHead title="Approvals" sub="How paused actions reach people, and how long agents wait."><DemoNote title={NOT_STORED} label="Not saved yet" /></CardHead>
-          <Row title="Request expiry" desc="After this, the paused action is denied and the agent continues.">
-            <select className="select" style={{ width: 130 }} value={s.expiry} onChange={(e) => set('expiry', e.target.value)} aria-label="Request expiry">
-              <option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option>
-            </select>
-          </Row>
-          <Row title="Two approvers for high-risk actions" desc="Production writes, infrastructure changes, database writes.">
-            <Switch on={s.twoApprovers} onChange={(v) => set('twoApprovers', v)} label="Two approvers for high-risk actions" />
-          </Row>
-          <Row title="Allow self-approval" desc="Let the person whose agent asked approve their own request.">
-            <Switch on={s.selfApprove} onChange={(v) => set('selfApprove', v)} label="Allow self-approval" />
-          </Row>
-          <Row title="Notify in Slack" desc="Post requests with Approve / Deny buttons.">
-            <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <input className="input mono" style={{ width: 170 }} value={s.channel} disabled={!s.slack} onChange={(e) => set('channel', e.target.value)} aria-label="Slack channel" />
-              <Switch on={s.slack} onChange={(v) => set('slack', v)} label="Notify in Slack" />
-            </span>
-          </Row>
-        </Card>
+        <div id="approvals" style={{ scrollMarginTop: 88 }}><ApprovalNotifications /></div>
 
         <Card>
           <CardHead title="Enforcement defaults" sub="Applied by effigentd when no policy says otherwise."><DemoNote title={NOT_STORED} label="Not saved yet" /></CardHead>
@@ -127,5 +107,88 @@ export function Settings({ dev }: { dev: boolean }) {
         </div>
       </Card>
     </div>
+  );
+}
+
+/** Where approval requests go: a Slack incoming webhook and/or email
+ *  recipients, stored by the control plane (the webhook URL is write-only). */
+function ApprovalNotifications() {
+  const { api, canWrite, fixture } = useLive();
+  const [n, setN] = useState<ApiNotifications | null>(null);
+  const [hook, setHook] = useState('');
+  const [emails, setEmails] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api.get<ApiNotifications>('/notifications')
+      .then((v) => { if (live) { setN(v); setEmails(v.emails.join(', ')); } })
+      .catch((e) => { if (live) setMsg({ ok: false, text: apiErrorText(e) }); });
+    return () => { live = false; };
+  }, [api]);
+
+  const list = emails.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
+  const save = async (body: { slack_webhook?: string; emails?: string[] }, done: string) => {
+    setBusy(true); setMsg(null);
+    try {
+      const v = await api.send<ApiNotifications>('PUT', '/notifications', body);
+      setN(v); setEmails(v.emails.join(', ')); setHook('');
+      setMsg({ ok: true, text: done });
+    } catch (e) {
+      setMsg({ ok: false, text: apiErrorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const test = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await api.send<Record<string, string>>('POST', '/notifications/test');
+      const parts = Object.entries(r).map(([ch, res]) => `${ch === 'slack' ? 'Slack' : 'Email'}: ${res}`);
+      setMsg({ ok: Object.values(r).every((v) => v.startsWith('sent')), text: parts.length ? parts.join(' · ') : 'Nothing to test yet — add a Slack webhook or an email first.' });
+    } catch (e) {
+      setMsg({ ok: false, text: apiErrorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHead title="Approvals" sub="When an agent pauses for approval, the request is posted here. Approvers open it in the console to decide." />
+      <Row title="Slack" desc="An incoming webhook posts each request to one channel, with a button to review it.">
+        {n?.slack_webhook_set
+          ? <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span className="badge b-green">Connected {n.slack_webhook_hint}</span>
+              <button className="btn sm" disabled={!canWrite || busy} onClick={() => save({ slack_webhook: '' }, 'Slack disconnected.')}>Remove</button>
+            </span>
+          : <span className="muted">Not connected</span>}
+      </Row>
+      <div style={{ padding: '0 20px 14px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input className="input mono" style={{ flex: '1 1 260px' }} placeholder="https://hooks.slack.com/services/…" value={hook} disabled={!canWrite}
+          onChange={(e) => setHook(e.target.value)} aria-label="Slack incoming webhook URL" />
+        <button className="btn sm" disabled={!canWrite || busy || !hook.trim()} onClick={() => save({ slack_webhook: hook.trim() }, 'Slack connected.')}>
+          {n?.slack_webhook_set ? 'Replace' : 'Connect'}
+        </button>
+        <a className="view-all" style={{ alignSelf: 'center' }} href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noreferrer">How to get a webhook</a>
+      </div>
+      <Row title="Email" desc="Each request is emailed to these addresses (comma-separated).">
+        {n && !n.email_available && <span className="badge b-gold" title="The control plane needs EFFIGENT_SMTP_URL and EFFIGENT_EMAIL_FROM">Email not set up on the server</span>}
+      </Row>
+      <div style={{ padding: '0 20px 14px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input className="input" style={{ flex: '1 1 260px' }} placeholder="security@yourcompany.com, lead@yourcompany.com" value={emails} disabled={!canWrite}
+          onChange={(e) => setEmails(e.target.value)} aria-label="Approver emails" />
+        <button className="btn sm" disabled={!canWrite || busy || (n !== null && list.join(',') === n.emails.join(','))} onClick={() => save({ emails: list }, 'Email recipients saved.')}>Save</button>
+      </div>
+      <Row title="Send a test" desc={fixture ? 'Demo Mode: nothing is actually sent.' : 'Posts a sample request to Slack and email, so you can see where they land.'}>
+        <button className="btn sm" disabled={!canWrite || busy} onClick={test}><Ic n="bell" /> Send test</button>
+      </Row>
+      {msg && <div className={`callout ${msg.ok ? '' : 'bad'}`} style={{ margin: '0 20px 14px' }}><Ic n={msg.ok ? 'checkCircle' : 'alert'} size={16} /><span>{msg.text}</span></div>}
+      {!canWrite && <div style={{ padding: '0 20px 14px' }}><ReadOnlyNote what="change approval notifications" /></div>}
+      <div className="muted" style={{ padding: '0 20px 18px', fontSize: 13 }}>
+        What needs approval, how long a request stays open and how long the agent waits are set in the <Link href="/policies" className="view-all">policy</Link>: <code>command_approve</code>, <code>tool_approve</code>, <code>exec_approve</code>, … and <code>approvals: {'{'} ttl_minutes, wait_seconds {'}'}</code>.
+      </div>
+    </Card>
   );
 }

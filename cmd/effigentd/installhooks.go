@@ -65,8 +65,9 @@ func installHooksCmd(args []string) {
 			"matcher": ".*", // a regex: a bare "*" is not valid and matches nothing
 			"hooks": []any{map[string]any{
 				"type": "command", "command": command,
-				// The daemon answers in milliseconds; this bounds a hung daemon.
-				"timeout": 30,
+				// The daemon answers in milliseconds, except while a call waits
+				// for an approver (up to 90s; `effigentd hook` gives up at 100s).
+				"timeout": 120,
 				// A crash or timeout must not let the tool call through.
 				"onFailure":     "block",
 				"statusMessage": "Checking with Effigent",

@@ -101,19 +101,32 @@ func TestAgentTypeScopesToOneAgent(t *testing.T) {
 	}
 }
 
-func TestRequireApprovalBecomesKernelDeny(t *testing.T) {
+func TestRequireApprovalBecomesApproveLists(t *testing.T) {
 	ps := []policy.Policy{{ID: "p", Name: "P", Enabled: true, Default: policy.Allow, Rules: []policy.Rule{
 		{ID: "ssh", Decision: policy.RequireApproval, Approval: &policy.Approval{Teams: []string{"sec"}},
 			What: policy.Target{Paths: []string{"**/.ssh/id_ed25519"}}},
 		{ID: "exfil", Decision: policy.RequireApproval, Approval: &policy.Approval{Teams: []string{"sec"}},
 			What: policy.Target{Hosts: []string{"203.0.113.7", "10.0.0.0/8"}}},
+		{ID: "scp", Decision: policy.RequireApproval, Approval: &policy.Approval{Teams: []string{"sec"}},
+			What: policy.Target{Binaries: []string{"/usr/bin/scp"}}},
+		{ID: "no-scp", Decision: policy.Deny, What: policy.Target{Binaries: []string{"/usr/bin/scp"}}},
 	}}}
 	r := compile(t, base, ps, web).Policy.RuleFor("claude-code")
-	if !slices.Contains(r.FileDeny, "/.ssh/id_ed25519") {
-		t.Fatalf("file_deny: %v", r.FileDeny)
+	// hooks pause and ask
+	if !slices.Contains(r.FileApprove, "/.ssh/id_ed25519") || slices.Contains(r.FileDeny, "/.ssh/id_ed25519") {
+		t.Fatalf("file_approve %v, file_deny %v", r.FileApprove, r.FileDeny)
 	}
-	if !slices.Equal(r.NetDeny, []string{"10.0.0.0/8", "203.0.113.7/32"}) {
-		t.Fatalf("network_deny: %v", r.NetDeny)
+	if !slices.Equal(r.NetApprove, []string{"10.0.0.0/8", "203.0.113.7/32"}) {
+		t.Fatalf("network_approve: %v", r.NetApprove)
+	}
+	// a deny for the same program wins over require_approval
+	if slices.Contains(r.ExecApprove, "/usr/bin/scp") || !slices.Contains(r.ExecDeny, "/usr/bin/scp") {
+		t.Fatalf("scp: exec_approve %v, exec_deny %v", r.ExecApprove, r.ExecDeny)
+	}
+	// the kernel can't ask: it denies
+	k := r.Kernel()
+	if !slices.Contains(k.FileDeny, "/.ssh/id_ed25519") || !slices.Contains(k.NetDeny, "203.0.113.7/32") {
+		t.Fatalf("kernel: file_deny %v, network_deny %v", k.FileDeny, k.NetDeny)
 	}
 }
 

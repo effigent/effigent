@@ -17,6 +17,11 @@ const (
 	Blocked    Type = "blocked"     // the kernel denied an action
 	WouldBlock Type = "would_block" // the policy matched, but the agent runs in monitor/learn mode
 	PolicyLoad Type = "policy"      // a per-agent policy was applied/removed (operational)
+
+	// Approval flow (agent hooks): a tool call matched an approval list.
+	ApprovalPending Type = "approval_pending" // asked an approver; the call did not run (yet)
+	Approved        Type = "approved"         // an approver allowed it; the call ran
+	ApprovalDenied  Type = "approval_denied"  // an approver denied it, or the request expired
 )
 
 // Proc identifies one process. ExecID is stable across pid reuse (Tetragon).

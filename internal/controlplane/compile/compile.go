@@ -6,8 +6,9 @@
 // The kernel can only block three things: exec of an exact resolved path, open
 // of a path suffix, and connect to an IP/CIDR. Whatever else a rule says
 // (arguments, tool names, MCP tools, hostnames, ports, OS users) is reported as
-// a Finding, never dropped silently. require_approval compiles to a kernel
-// deny; the approval flow can later lift it for one approved action.
+// a Finding, never dropped silently. require_approval compiles to the
+// *_approve lists: an agent hook (macOS, Windows) pauses the call and asks an
+// approver; the kernel (Linux) enforces them as denies.
 //
 // Precedence is not re-implemented here: every kernel entry is decided by the
 // shared evaluator (policy.Evaluate) on a synthesized action, so what the
@@ -77,6 +78,10 @@ type Kernel struct {
 	FileDeny   []string `json:"file_deny,omitempty"`
 	NetDeny    []string `json:"network_deny,omitempty"`
 	ExecRemove []string `json:"exec_allow_removed,omitempty"` // allowlist mode: denied programs taken out of exec_allow
+	// require_approval: a hook (macOS, Windows) pauses and asks; the kernel denies.
+	ExecApprove []string `json:"exec_approve,omitempty"`
+	FileApprove []string `json:"file_approve,omitempty"`
+	NetApprove  []string `json:"network_approve,omitempty"`
 }
 
 type Output struct {
@@ -133,7 +138,7 @@ func Compile(base []byte, policies []policy.Policy, m Machine, now time.Time) (*
 		}
 		perAgent = append(perAgent, fs...)
 		merged[name] = r
-		if len(k.ExecDeny)+len(k.FileDeny)+len(k.NetDeny)+len(k.ExecRemove) > 0 {
+		if len(k.ExecDeny)+len(k.FileDeny)+len(k.NetDeny)+len(k.ExecRemove)+len(k.ExecApprove)+len(k.FileApprove)+len(k.NetApprove) > 0 {
 			out.Added[name] = k
 		}
 	}
@@ -480,6 +485,9 @@ func probe(d dim, atom string) []action.Action {
 func compileAgent(base ep.Rule, policies []policy.Policy, rules []krule, sub policy.Subject, now time.Time) (ep.Rule, Kernel, []Finding, error) {
 	var fs []Finding
 	deny := map[dim]map[string]bool{dimExec: {}, dimFile: {}, dimNet: {}}
+	// approve: atoms whose strict winners are all require_approval. They go to
+	// the *_approve lists: a hook pauses and asks, the kernel denies.
+	approve := map[dim]map[string]bool{dimExec: {}, dimFile: {}, dimNet: {}}
 	for _, k := range rules {
 		if !k.p.Scope.Matches(sub) || !k.r.Who.Matches(sub) {
 			continue
@@ -494,10 +502,13 @@ func compileAgent(base ep.Rule, policies []policy.Policy, rules []krule, sub pol
 			for _, a := range probe(k.dim, atom) {
 				winners = append(winners, policy.Evaluate(policies, sub, a, now))
 			}
-			strict, lenient := 0, 0
+			strict, lenient, hard := 0, 0, 0
 			for _, w := range winners {
 				if w.RuleID != "" && w.Decision != policy.Allow {
 					strict++
+					if w.Decision == policy.Deny {
+						hard++
+					}
 				} else {
 					lenient++
 				}
@@ -505,7 +516,12 @@ func compileAgent(base ep.Rule, policies []policy.Policy, rules []krule, sub pol
 			if strict == 0 {
 				continue
 			}
+			if hard == 0 {
+				approve[k.dim][atom] = true
+				continue
+			}
 			deny[k.dim][atom] = true
+			delete(approve[k.dim], atom)
 			if lenient > 0 {
 				fs = append(fs, Finding{PolicyID: k.p.ID, RuleID: k.r.ID, Field: "what.paths", Value: atom, Enforcement: HooksOnly,
 					Reason: "denied for one of read/write and allowed for the other; the kernel blocks every open, the hook applies the distinction"})
@@ -541,6 +557,9 @@ func compileAgent(base ep.Rule, policies []policy.Policy, rules []krule, sub pol
 	}
 	r.FileDeny, k.FileDeny = union(base.FileDeny, keys(deny[dimFile]))
 	r.NetDeny, k.NetDeny = union(base.NetDeny, keys(deny[dimNet]))
+	r.ExecApprove, k.ExecApprove = union(base.ExecApprove, keys(approve[dimExec]))
+	r.FileApprove, k.FileApprove = union(base.FileApprove, keys(approve[dimFile]))
+	r.NetApprove, k.NetApprove = union(base.NetApprove, keys(approve[dimNet]))
 	if (base.Mode == ep.Monitor || base.Mode == ep.Learn) && len(k.ExecDeny)+len(k.FileDeny)+len(k.NetDeny) > 0 {
 		fs = append(fs, Finding{Field: "mode", Value: string(base.Mode), Enforcement: ObserveOnly,
 			Reason: "the endpoint policy runs this agent in " + string(base.Mode) + " mode, so compiled denies are reported as would_block, not blocked"})
@@ -692,6 +711,12 @@ func overrides(def, r ep.Rule) ep.Rule {
 	o.NetDeny = list(def.NetDeny, r.NetDeny)
 	o.NetAllow = list(def.NetAllow, r.NetAllow)
 	o.DomainDeny = list(def.DomainDeny, r.DomainDeny)
+	o.ExecApprove = list(def.ExecApprove, r.ExecApprove)
+	o.FileApprove = list(def.FileApprove, r.FileApprove)
+	o.DomainApprove = list(def.DomainApprove, r.DomainApprove)
+	o.NetApprove = list(def.NetApprove, r.NetApprove)
+	o.CommandApprove = list(def.CommandApprove, r.CommandApprove)
+	o.ToolApprove = list(def.ToolApprove, r.ToolApprove)
 	if !eqBool(def.Network, r.Network) {
 		o.Network = r.Network
 	}
@@ -705,7 +730,9 @@ func sameRule(a, b ep.Rule) bool {
 	l := func(x, y []string) bool { return slices.Equal(x, y) || (len(x) == 0 && len(y) == 0) }
 	return a.Mode == b.Mode && l(a.ExecDeny, b.ExecDeny) && l(a.ExecAllow, b.ExecAllow) && l(a.FileAlert, b.FileAlert) &&
 		l(a.FileDeny, b.FileDeny) && l(a.NetDeny, b.NetDeny) && l(a.NetAllow, b.NetAllow) && l(a.DomainDeny, b.DomainDeny) &&
-		eqBool(a.Network, b.Network) && eqBool(a.RequireLauncher, b.RequireLauncher)
+		eqBool(a.Network, b.Network) && eqBool(a.RequireLauncher, b.RequireLauncher) &&
+		l(a.ExecApprove, b.ExecApprove) && l(a.FileApprove, b.FileApprove) && l(a.DomainApprove, b.DomainApprove) &&
+		l(a.NetApprove, b.NetApprove) && l(a.CommandApprove, b.CommandApprove) && l(a.ToolApprove, b.ToolApprove)
 }
 
 func eqBool(a, b *bool) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }

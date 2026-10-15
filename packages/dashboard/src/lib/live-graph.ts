@@ -95,7 +95,7 @@ export function parseMcpTool(name: string): { server: string; tool: string } | n
 }
 
 const EVENT_IDS_CAP = 60;
-const TARGET_TYPES = new Set(['exec', 'file_open', 'connect', 'blocked', 'would_block']);
+const TARGET_TYPES = new Set(['exec', 'file_open', 'connect', 'blocked', 'would_block', 'approval_pending', 'approved', 'approval_denied']);
 
 const base = baseName;
 
@@ -182,7 +182,9 @@ export function classify(e: ApiEvent): Classified | null {
   return c;
 }
 
-const outcomeOf = (type: string): LiveOutcome => (type === 'blocked' ? 'blocked' : type === 'would_block' ? 'would_block' : 'allowed');
+// A request waiting for or denied approval did not run: it shows as blocked.
+const outcomeOf = (type: string): LiveOutcome =>
+  (type === 'blocked' || type === 'approval_pending' || type === 'approval_denied' ? 'blocked' : type === 'would_block' ? 'would_block' : 'allowed');
 
 const KIND_ORDER: Record<TargetKind, number> = { command: 0, file: 1, network: 2, tool: 3, routine: 4, more: 5 };
 

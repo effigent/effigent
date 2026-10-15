@@ -253,11 +253,13 @@ func (e *Engine) stopUnlaunched(root *Root, r event.Raw) {
 	e.emit(ev)
 }
 
+// ruleFor is the rule the kernel enforces for a tracked agent: approval lists
+// it can see are denies there (only a hook can pause and ask).
 func (e *Engine) ruleFor(root *Root) policy.Rule {
 	if root.Orphan {
-		return e.pol.RuleFor("")
+		return e.pol.RuleFor("").Kernel()
 	}
-	return e.pol.RuleFor(root.Agent)
+	return e.pol.RuleFor(root.Agent).Kernel()
 }
 
 // apply loads the new policies before removing the old ones, so a reload
@@ -648,7 +650,15 @@ func (e *Engine) connectNote(root *Root, target string) string {
 	return ""
 }
 
-// RuleFor returns the effective rule for an agent under the current policy.
+// Approvals returns the policy's approval settings.
+func (e *Engine) Approvals() policy.Approvals {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pol.Approvals
+}
+
+// RuleFor returns the effective rule for an agent under the current policy,
+// approval lists included (for hooks; the kernel uses Rule.Kernel).
 func (e *Engine) RuleFor(agent string) policy.Rule {
 	e.mu.Lock()
 	defer e.mu.Unlock()

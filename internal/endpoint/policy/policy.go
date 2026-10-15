@@ -57,6 +57,82 @@ type Rule struct {
 	// RequireLauncher stops agents that were not started with `effigentd run`
 	// (which guarantees enforcement from the agent's first instruction).
 	RequireLauncher *bool `yaml:"require_launcher,omitempty" json:"require_launcher"`
+
+	// Approval lists: a match pauses the agent's tool call and asks an
+	// approver (Slack / email / console) instead of denying outright. Only an
+	// agent hook can pause (macOS, Windows); in the kernel (Linux) the
+	// exec/file/domain/network lists are enforced as denies and the
+	// command/tool lists can't be seen. A deny list always wins.
+	ExecApprove    []string `yaml:"exec_approve,omitempty" json:"exec_approve"`       // absolute paths, matched by program name in hooks
+	FileApprove    []string `yaml:"file_approve,omitempty" json:"file_approve"`       // path suffixes
+	DomainApprove  []string `yaml:"domain_approve,omitempty" json:"domain_approve"`   // hostnames (and their subdomains, in hooks)
+	NetApprove     []string `yaml:"network_approve,omitempty" json:"network_approve"` // IPs / CIDRs
+	CommandApprove []string `yaml:"command_approve,omitempty" json:"command_approve"` // "git push*": a command line, exact or prefix with a trailing *
+	ToolApprove    []string `yaml:"tool_approve,omitempty" json:"tool_approve"`       // agent tool names, e.g. "mcp__github__*", "WebFetch"
+}
+
+// Approvals tunes the approval flow for the whole machine.
+type Approvals struct {
+	// WaitSeconds is how long a paused tool call waits for a decision before
+	// the agent is told the request is still pending (default 45, max 90).
+	WaitSeconds int `yaml:"wait_seconds,omitempty" json:"wait_seconds"`
+	// TTLMinutes is how long a request stays open for approvers (default 60).
+	TTLMinutes int `yaml:"ttl_minutes,omitempty" json:"ttl_minutes"`
+}
+
+// MaxApprovalWait caps Approvals.WaitSeconds: the agent's hook process must
+// outlive the wait (see `effigentd hook`, `install-hooks`).
+const MaxApprovalWait = 90
+
+// Wait returns the effective wait.
+func (a Approvals) Wait() int {
+	switch {
+	case a.WaitSeconds <= 0:
+		return 45
+	case a.WaitSeconds > MaxApprovalWait:
+		return MaxApprovalWait
+	}
+	return a.WaitSeconds
+}
+
+// TTL returns the effective request lifetime in minutes.
+func (a Approvals) TTL() int {
+	if a.TTLMinutes <= 0 {
+		return 60
+	}
+	return min(a.TTLMinutes, 7*24*60)
+}
+
+// NeedsApproval reports whether the rule has any approval list.
+func (r Rule) NeedsApproval() bool {
+	return len(r.ExecApprove)+len(r.FileApprove)+len(r.DomainApprove)+len(r.NetApprove)+len(r.CommandApprove)+len(r.ToolApprove) > 0
+}
+
+// Kernel is the rule as the kernel enforces it: the kernel can't pause and
+// ask, so approval lists it can see become denies.
+func (r Rule) Kernel() Rule {
+	if !r.NeedsApproval() {
+		return r
+	}
+	k := r
+	k.ExecDeny = append(append([]string(nil), r.ExecDeny...), r.ExecApprove...)
+	k.FileDeny = append(append([]string(nil), r.FileDeny...), r.FileApprove...)
+	k.DomainDeny = append(append([]string(nil), r.DomainDeny...), r.DomainApprove...)
+	k.NetDeny = append(append([]string(nil), r.NetDeny...), r.NetApprove...)
+	if r.Mode == Allowlist && len(r.ExecApprove) > 0 {
+		// in allowlist mode a program needing approval must not be allowed outright
+		drop := map[string]bool{}
+		for _, b := range r.ExecApprove {
+			drop[b] = true
+		}
+		k.ExecAllow = nil
+		for _, b := range r.ExecAllow {
+			if !drop[b] {
+				k.ExecAllow = append(k.ExecAllow, b)
+			}
+		}
+	}
+	return k
 }
 
 type Agent struct {
@@ -73,10 +149,11 @@ type MCP struct {
 }
 
 type Policy struct {
-	Defaults       Rule    `yaml:"defaults"`
-	Agents         []Agent `yaml:"agents"`
-	MCPServers     []MCP   `yaml:"mcp_servers"`
-	TrackOrphanMCP bool    `yaml:"track_orphan_mcp"` // treat an MCP server with no known agent above it as its own agent
+	Defaults       Rule      `yaml:"defaults"`
+	Agents         []Agent   `yaml:"agents"`
+	MCPServers     []MCP     `yaml:"mcp_servers"`
+	TrackOrphanMCP bool      `yaml:"track_orphan_mcp"` // treat an MCP server with no known agent above it as its own agent
+	Approvals      Approvals `yaml:"approvals,omitempty"`
 }
 
 func Load(file string) (*Policy, []byte, error) {
@@ -109,8 +186,16 @@ func (p *Policy) validate() error {
 		p.Defaults.Mode = Monitor
 	}
 	p.Defaults.DomainDeny = normalizeHosts(p.Defaults.DomainDeny)
+	p.Defaults.DomainApprove = normalizeHosts(p.Defaults.DomainApprove)
 	for i := range p.Agents {
 		p.Agents[i].DomainDeny = normalizeHosts(p.Agents[i].DomainDeny)
+		p.Agents[i].DomainApprove = normalizeHosts(p.Agents[i].DomainApprove)
+	}
+	if p.Approvals.WaitSeconds < 0 || p.Approvals.WaitSeconds > MaxApprovalWait {
+		return fmt.Errorf("approvals.wait_seconds must be between 0 and %d", MaxApprovalWait)
+	}
+	if p.Approvals.TTLMinutes < 0 || p.Approvals.TTLMinutes > 7*24*60 {
+		return fmt.Errorf("approvals.ttl_minutes must be between 0 and %d (a week)", 7*24*60)
 	}
 	seen := map[string]bool{}
 	for _, a := range p.Agents {
@@ -156,14 +241,26 @@ func (r Rule) check() error {
 			return err
 		}
 	}
-	for _, list := range [][]string{r.NetDeny, r.NetAllow} {
+	for _, h := range r.DomainApprove {
+		if err := checkHost(h); err != nil {
+			return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), "domain_deny", "domain_approve"))
+		}
+	}
+	for _, list := range [][]string{r.CommandApprove, r.ToolApprove} {
+		for _, pat := range list {
+			if strings.TrimSpace(pat) == "" || pat == "*" {
+				return fmt.Errorf("command_approve / tool_approve entry %q would match everything; name a command or tool", pat)
+			}
+		}
+	}
+	for _, list := range [][]string{r.NetDeny, r.NetAllow, r.NetApprove} {
 		for _, c := range list {
 			if _, err := ParseCIDR(c); err != nil {
 				return err
 			}
 		}
 	}
-	for _, list := range [][]string{r.ExecDeny, r.ExecAllow} {
+	for _, list := range [][]string{r.ExecDeny, r.ExecAllow, r.ExecApprove} {
 		for _, b := range list {
 			if !strings.HasPrefix(b, "/") {
 				return fmt.Errorf("exec path %q must be absolute (the kernel matches resolved paths)", b)
@@ -202,12 +299,13 @@ func checkHost(h string) error {
 	return nil
 }
 
-// Domains returns every hostname any rule denies.
+// Domains returns every hostname any rule denies in the kernel (domain_deny
+// and domain_approve).
 func (p *Policy) Domains() []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(r Rule) {
-		for _, h := range r.DomainDeny {
+		for _, h := range r.Kernel().DomainDeny {
 			if !seen[h] {
 				seen[h] = true
 				out = append(out, h)
@@ -273,6 +371,24 @@ func (p *Policy) RuleFor(agent string) Rule {
 		}
 		if a.RequireLauncher != nil {
 			r.RequireLauncher = a.RequireLauncher
+		}
+		if a.ExecApprove != nil {
+			r.ExecApprove = a.ExecApprove
+		}
+		if a.FileApprove != nil {
+			r.FileApprove = a.FileApprove
+		}
+		if a.DomainApprove != nil {
+			r.DomainApprove = a.DomainApprove
+		}
+		if a.NetApprove != nil {
+			r.NetApprove = a.NetApprove
+		}
+		if a.CommandApprove != nil {
+			r.CommandApprove = a.CommandApprove
+		}
+		if a.ToolApprove != nil {
+			r.ToolApprove = a.ToolApprove
 		}
 		if a.Network != nil {
 			r.Network = a.Network

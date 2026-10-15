@@ -6,7 +6,7 @@
  * console audit trail. Fetched on mount and whenever the active Clerk org (=
  * tenant) changes; endpoints, events and policy are polled every 15s while the
  * tab is visible. Views read this through `useLive()`; features the control
- * plane does not serve yet (approvals, lists, identity) read `useStore()`; the agent
+ * plane does not serve yet (lists, identity) read `useStore()`; the agent
  * graph is built client-side from `events` (lib/live-graph.ts).
  *
  * Demo Mode (demo.tsx) swaps the real API for the in-memory fixture
@@ -17,7 +17,7 @@
 import { useAuth } from '@clerk/nextjs';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  ApiError, apiErrorText, canWrite as roleCanWrite, createApi, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiPolicyVersion,
+  ApiError, apiErrorText, canWrite as roleCanWrite, createApi, type Api, type ApiApproval, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiPolicyVersion,
 } from '@/lib/api.ts';
 import { createFixtureApi } from '@/lib/fixture-api.ts';
 import { useDemoMode } from '@/demo.tsx';
@@ -35,9 +35,10 @@ interface Data {
   policy: ApiPolicyVersion | null;
   history: ApiPolicyVersion[];
   audit: ApiAuditEntry[];
+  approvals: ApiApproval[];
 }
 
-const EMPTY: Data = { me: null, endpoints: [], events: [], policy: null, history: [], audit: [] };
+const EMPTY: Data = { me: null, endpoints: [], events: [], policy: null, history: [], audit: [], approvals: [] };
 
 export interface Live extends Data {
   api: Api;
@@ -51,6 +52,7 @@ export interface Live extends Data {
   endpointRows: EndpointRow[];
   consoleEvents: ConsoleEvent[]; // newest first, `ago` filled in
   latestPolicy: number; // newest published version (0 = none)
+  pendingApprovals: number;
   /** Re-fetch everything now (after a write, or from a Retry button). */
   refresh: () => Promise<void>;
 }
@@ -68,13 +70,15 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
   // `full` also reloads the slow-moving resources (me, history, audit).
   const load = useCallback(async (full: boolean) => {
     const g = gen.current;
-    const [me, endpoints, events, policy, history, audit] = await Promise.allSettled([
+    const [me, endpoints, events, policy, history, audit, approvals] = await Promise.allSettled([
       full ? api.get<ApiMe>('/me') : Promise.resolve(null),
       api.get<ApiEndpoint[]>('/endpoints'),
       api.get<ApiEvent[]>(`/events?limit=${EVENT_LIMIT}`),
       api.get<ApiPolicyVersion>('/policy'),
       full ? api.get<ApiPolicyVersion[]>('/policy/history') : Promise.resolve(null),
       full ? api.get<ApiAuditEntry[]>(`/audit?limit=${AUDIT_LIMIT}`) : Promise.resolve(null),
+      // A control plane older than approvals answers 404: no approvals, not an error.
+      api.get<ApiApproval[]>('/approvals?limit=200').catch((e) => (e instanceof ApiError && e.status === 404 ? [] : Promise.reject(e))),
     ]);
     if (g !== gen.current) return; // the tenant changed while this was in flight
     const val = <T,>(r: PromiseSettledResult<T | null>, prev: T): T => (r.status === 'fulfilled' && r.value !== null ? r.value : prev);
@@ -85,8 +89,9 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
       policy: val(policy, d.policy),
       history: val(history, d.history),
       audit: val(audit, d.audit),
+      approvals: val(approvals, d.approvals),
     }));
-    const failed = [me, endpoints, events, policy, history, audit].find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    const failed = [me, endpoints, events, policy, history, audit, approvals].find((r): r is PromiseRejectedResult => r.status === 'rejected');
     setError(failed ? apiErrorText(failed.reason) : null);
     const t = Date.now();
     if (!failed) setUpdatedAt(t);
@@ -131,6 +136,7 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
       canWrite: roleCanWrite(data.me?.role),
       endpointRows, consoleEvents,
       latestPolicy: data.policy?.version ?? 0,
+      pendingApprovals: data.approvals.filter((a) => a.state === 'pending' && Date.parse(a.expires_at) > now).length,
     };
   }, [data, api, fixture, loaded, error, updatedAt, now, refresh]);
 
@@ -161,16 +167,29 @@ const NO_CONTROL_PLANE = 'There is no control plane in this dev build (auth is b
 const devEmptyApi: Api = {
   get<T>(path: string): Promise<T> {
     const p = path.split('?')[0];
-    if (p === '/endpoints' || p === '/events' || p === '/policy/history' || p === '/audit') return Promise.resolve([] as T);
+    if (p === '/endpoints' || p === '/events' || p === '/policy/history' || p === '/audit' || p === '/approvals') return Promise.resolve([] as T);
     if (p === '/me' || p === '/policy') return Promise.resolve(null as T);
     return Promise.reject(new ApiError(503, NO_CONTROL_PLANE));
   },
   send: () => Promise.reject(new ApiError(503, NO_CONTROL_PLANE)),
 };
 
+/** Dev bypass against a local control plane: its admin token and a tenant
+ *  (`EFFIGENT_ADMIN_TENANTS` on the control plane, `EFFIGENT_CONSOLE_ORIGIN`
+ *  = this dev server). Dead code in production builds, like the bypass. */
+const DEV_ADMIN = process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN && process.env.NEXT_PUBLIC_EFFIGENT_DEV_TENANT
+  ? { token: process.env.NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN, tenant: process.env.NEXT_PUBLIC_EFFIGENT_DEV_TENANT }
+  : null;
+
+function DevAdminLiveProvider({ ready, children }: { ready: boolean; children: ReactNode }) {
+  const api = useMemo(() => createApi(async () => DEV_ADMIN!.token, { 'X-Effigent-Tenant': DEV_ADMIN!.tenant }), []);
+  return <LiveProvider api={api} scope={`dev/${DEV_ADMIN!.tenant}`} ready={ready} fixture={false}>{children}</LiveProvider>;
+}
+
 export function LiveDataProvider({ dev, children }: { dev: boolean; children: ReactNode }) {
   const { demo, ready } = useDemoMode();
   if (demo) return <FixtureLiveProvider>{children}</FixtureLiveProvider>;
+  if (dev && DEV_ADMIN) return <DevAdminLiveProvider ready={ready}>{children}</DevAdminLiveProvider>;
   if (dev) return <LiveProvider api={devEmptyApi} scope="dev" ready={ready} fixture={false}>{children}</LiveProvider>;
   return <ClerkLiveProvider gate={ready}>{children}</ClerkLiveProvider>;
 }

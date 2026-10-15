@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/effigent/effigent/internal/controlplane/notify"
 	"github.com/effigent/effigent/internal/controlplane/store"
 )
 
@@ -15,8 +16,9 @@ type Server struct {
 	Store         *store.Store
 	Key           ed25519.PrivateKey
 	Auth          *Authenticator
-	PublicBaseURL string // used in install commands, e.g. https://api.effigent.ai
-	ConsoleOrigin string // CORS origin allowed for the console, e.g. https://app.effigent.ai
+	PublicBaseURL string         // used in install commands, e.g. https://api.effigent.ai
+	ConsoleOrigin string         // CORS origin allowed for the console, e.g. https://app.effigent.ai
+	Notify        *notify.Sender // announces approval requests (Slack always; email when SMTP is set)
 	Logf          func(string, ...any)
 
 	limits *limits
@@ -38,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /ep/v1/policy", s.endpointAuth(s.endpointPolicy))
 	mux.HandleFunc("POST /ep/v1/heartbeat", s.endpointAuth(s.heartbeat))
 	mux.HandleFunc("POST /ep/v1/events", s.endpointAuth(s.ingest))
+	mux.HandleFunc("POST /ep/v1/approvals", s.endpointAuth(s.requestApproval))
 
 	// console API
 	mux.HandleFunc("GET /api/v1/me", s.console(read, s.me))
@@ -52,6 +55,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/events", s.console(read, s.listEvents))
 	mux.HandleFunc("GET /api/v1/audit", s.console(read, s.listAudit))
 	mux.HandleFunc("GET /api/v1/audit/verify", s.console(read, s.verifyAudit))
+	mux.HandleFunc("GET /api/v1/approvals", s.console(read, s.listApprovals))
+	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.console(write, s.decideApproval))
+	mux.HandleFunc("GET /api/v1/notifications", s.console(read, s.getNotifications))
+	mux.HandleFunc("PUT /api/v1/notifications", s.console(write, s.putNotifications))
+	mux.HandleFunc("POST /api/v1/notifications/test", s.console(write, s.testNotifications))
 	return s.rateLimitIP(s.cors(mux))
 }
 
@@ -59,7 +67,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.ConsoleOrigin != "" && r.Header.Get("Origin") == s.ConsoleOrigin && strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Access-Control-Allow-Origin", s.ConsoleOrigin)
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Effigent-Tenant")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Vary", "Origin")
 			if r.Method == http.MethodOptions {

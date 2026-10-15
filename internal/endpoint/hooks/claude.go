@@ -49,7 +49,9 @@ var pathTools = map[string]bool{
 //   - WebFetch: the URL's host (domain_deny, network_deny, network_allow).
 //
 // In denylist and allowlist mode a match is denied; in monitor and learn
-// mode it is only reported (would_block).
+// mode it is only reported (would_block). A call that no deny list matches
+// but an approval list does (exec_approve, command_approve, tool_approve, …)
+// returns Approve in the enforcing modes: the daemon asks an approver.
 func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
 	var f finding
 	switch {
@@ -64,6 +66,17 @@ func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
 	case in.ToolName == "WebFetch":
 		if u, err := url.Parse(str(in.ToolInput, "url")); err == nil {
 			f = checkHost(rule, u.Hostname())
+		}
+	}
+
+	if f.reason == "" {
+		if a := checkApproval(rule, in); a.reason != "" {
+			if enforcing(rule) {
+				return Decision{Approve: true, Report: "approval", Kind: a.kind, Target: a.target, Rule: a.rule,
+					Reason: a.reason}
+			}
+			return Decision{Report: "would_block", Kind: a.kind, Target: a.target, Rule: a.rule,
+				Reason: "Effigent policy would ask for approval: " + a.reason}
 		}
 	}
 
@@ -329,4 +342,71 @@ func inNets(list []string, ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// checkApproval matches a tool call against the approval lists. Programs,
+// files and hosts reuse the deny matchers on a view of the rule whose deny
+// lists are the approval lists, so both match the same way.
+func checkApproval(rule policy.Rule, in ClaudeInput) finding {
+	if !rule.NeedsApproval() {
+		return finding{}
+	}
+	view := policy.Rule{Mode: policy.Denylist, ExecDeny: rule.ExecApprove, FileDeny: rule.FileApprove,
+		DomainDeny: rule.DomainApprove, NetDeny: rule.NetApprove}
+	var f finding
+	for _, p := range rule.ToolApprove {
+		if textMatch(p, in.ToolName) {
+			return finding{reason: "the " + in.ToolName + " tool needs approval", kind: "tool", target: Summary(in), rule: "tool_approve"}
+		}
+	}
+	switch {
+	case in.ToolName == "Bash":
+		line := str(in.ToolInput, "command")
+		for _, c := range splitShell(line) {
+			args, _ := unwrap(c.args)
+			if len(args) == 0 {
+				continue
+			}
+			cmd := strings.Join(append([]string{progName(args[0])}, args[1:]...), " ")
+			for _, p := range rule.CommandApprove {
+				if textMatch(p, cmd) {
+					return finding{reason: "`" + clip(cmd, 80) + "` needs approval", kind: "exec", target: "exec " + clip(cmd, 200), rule: "command_approve"}
+				}
+			}
+		}
+		f = checkCommand(view, line, in.Cwd)
+	case pathTools[in.ToolName]:
+		for _, k := range []string{"file_path", "notebook_path", "path"} {
+			if p := str(in.ToolInput, k); p != "" {
+				f = f.or(checkPath(view, resolve(p, in.Cwd)))
+			}
+		}
+	case in.ToolName == "WebFetch":
+		if u, err := url.Parse(str(in.ToolInput, "url")); err == nil {
+			f = checkHost(view, u.Hostname())
+		}
+	}
+	if f.reason == "" {
+		return finding{}
+	}
+	f.rule = strings.Replace(f.rule, "_deny", "_approve", 1)
+	f.reason = strings.Replace(f.reason, " is not allowed", " needs approval", 1)
+	f.reason = strings.Replace(f.reason, " are not allowed", " need approval", 1)
+	return f
+}
+
+// textMatch: exact, or a prefix when the pattern ends in "*" (case-sensitive,
+// like the central policy's matcher).
+func textMatch(pattern, s string) bool {
+	if p, ok := strings.CutSuffix(pattern, "*"); ok {
+		return strings.HasPrefix(s, p)
+	}
+	return pattern == s
+}
+
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }

@@ -101,6 +101,42 @@ export interface ApiEnrollment {
   command: string;
 }
 
+/** An approval request (cp.approvals): an agent hook paused a tool call that
+ *  matched an approval list. `used` = approved and acted on by the endpoint. */
+export interface ApiApproval {
+  id: string;
+  endpoint_id: string;
+  fingerprint: string;
+  agent: string;
+  session_id: string;
+  tool: string;
+  summary: string; // redacted on the endpoint
+  cwd: string;
+  rule: string; // exec_approve | command_approve | tool_approve | file_approve | domain_approve | network_approve
+  reason: string;
+  hostname: string;
+  os_user: string;
+  state: 'pending' | 'approved' | 'denied' | 'expired' | 'used';
+  requested_at: string;
+  expires_at: string;
+  decided_at: string | null;
+  decided_by: string;
+  decided_by_name: string;
+  note: string;
+  used_at: string | null;
+  notified?: Record<string, string>;
+}
+
+/** Where approval requests are announced. The webhook URL itself is never returned. */
+export interface ApiNotifications {
+  slack_webhook_set: boolean;
+  slack_webhook_hint?: string;
+  emails: string[];
+  email_available: boolean; // the control plane has SMTP configured
+  updated_by?: string;
+  updated_at?: string;
+}
+
 /** Org admins and security admins may change policy, machines and tokens;
  *  everyone else is read-only (server.Principal.CanWrite). */
 export const canWrite = (role: string | undefined) => role === 'admin' || role === 'security_admin';
@@ -137,7 +173,7 @@ export interface Api {
 
 /** `getToken` is called on every request — Clerk session tokens live ~60s and
  *  the SDK refreshes them, so a cached string would start failing with 401. */
-export function createApi(getToken: GetToken): Api {
+export function createApi(getToken: GetToken, headers: Record<string, string> = {}): Api {
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await getToken();
     if (!token) throw new ApiError(401, 'not signed in');
@@ -145,7 +181,7 @@ export function createApi(getToken: GetToken): Api {
     try {
       res = await fetch(`${API_BASE}/api/v1${path}`, {
         method,
-        headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+        headers: { ...headers, Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         cache: 'no-store',
       });

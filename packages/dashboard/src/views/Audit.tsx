@@ -17,12 +17,16 @@ const TYPE_LABEL: Record<Exclude<EventType, 'approval'>, string> = {
 };
 const typeLabel = (t: EventType) => (t === 'approval' ? 'Approval' : TYPE_LABEL[t]);
 
-const OUTCOMES: (Outcome | 'all')[] = ['all', 'blocked', 'would_block', 'allowed', 'system'];
+const OUTCOMES: (Outcome | 'all')[] = ['all', 'blocked', 'would_block', 'pending', 'allowed', 'system'];
 
 const ACTION_LABEL: Record<string, string> = {
   'policy.publish': 'Published policy',
   'endpoint.revoke': 'Revoked endpoint',
   'enrollment_token.create': 'Created enrollment token',
+  'approval.request': 'Agent asked for approval',
+  'approval.approve': 'Approved a request',
+  'approval.deny': 'Denied a request',
+  'notifications.update': 'Changed approval notifications',
 };
 const actionLabel = (a: string) => ACTION_LABEL[a] ?? (a.startsWith('denied.') ? `Denied: ${a.slice(7)}` : a);
 

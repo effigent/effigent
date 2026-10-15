@@ -34,6 +34,13 @@ function ApiBanner({ dev }: { dev: boolean }) {
   const { error, refresh, fixture } = useLive();
   const { setDemo } = useDemoMode();
   if (fixture) return null;
+  if (dev && process.env.NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN) {
+    return (
+      <div className="callout api-banner" role="status">
+        <Ic n="eye" size={16} /><span>Dev build: auth is bypassed and the console uses the local control plane&apos;s admin token ({process.env.NEXT_PUBLIC_EFFIGENT_DEV_TENANT}).</span>
+      </div>
+    );
+  }
   if (dev) {
     return (
       <div className="callout api-banner" role="status">

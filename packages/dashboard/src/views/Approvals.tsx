@@ -1,12 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ACTION_CLASS_LABEL, AGENT_TYPES, endpointById, envMeta, userById } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useStore } from '@/store.tsx';
-import type { Action, Approval } from '@/types.ts';
-import { AgentGlyph, ApprovalPill, Card, CardHead, ComingSoon, Empty, EnvTag, PageHead, RiskTag } from '@/components/ui.tsx';
+import type { Action, AgentType, Approval, ApprovalState } from '@/types.ts';
+import { useLive } from '@/live.tsx';
+import { apiErrorText, type ApiApproval } from '@/lib/api.ts';
+import { ago } from '@/lib/live-map.ts';
+import { AgentGlyph, ApprovalPill, Card, CardHead, Empty, EnvTag, Loading, PageHead, ReadOnlyNote, RiskTag } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
 export function actionText(a: Action): string {
@@ -76,18 +79,174 @@ function DetailPanel({ a }: { a: Approval }) {
 
 const SUB = 'Risky actions pause on the endpoint and wait here for a human decision.';
 
-/** The control plane does not route approvals to the console yet: an honest
- *  empty state, or the sample workspace in Demo Mode. */
+/** Live requests from the control plane, or the sample workspace in Demo Mode. */
 export function Approvals({ initialId }: { initialId?: string }) {
   const { demo } = useDemoMode();
   if (demo) return <ApprovalQueue initialId={initialId} />;
+  return <LiveApprovalQueue initialId={initialId} />;
+}
+
+const RULE_LABEL: Record<string, string> = {
+  exec_approve: 'Program needs approval (exec_approve)',
+  command_approve: 'Command needs approval (command_approve)',
+  tool_approve: 'Tool needs approval (tool_approve)',
+  file_approve: 'File needs approval (file_approve)',
+  domain_approve: 'Site needs approval (domain_approve)',
+  network_approve: 'Address needs approval (network_approve)',
+};
+
+/** cp approval state -> the console's pill. "used" = approved and run. */
+function pillState(a: ApiApproval): ApprovalState {
+  switch (a.state) {
+    case 'pending': return 'approval_pending';
+    case 'approved': case 'used': return 'approved';
+    case 'denied': return 'approval_denied';
+    default: return 'expired';
+  }
+}
+
+function untilText(ms: number): string {
+  if (ms <= 0) return 'expired';
+  const m = Math.ceil(ms / 60_000);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+function agentType(a: ApiApproval): AgentType {
+  return (a.agent in AGENT_TYPES ? a.agent : 'claude-code') as AgentType;
+}
+
+function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
+  const { api, canWrite, refresh } = useLive();
+  const { viewer, dispatch } = useStore();
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const pending = a.state === 'pending' && Date.parse(a.expires_at) > now;
+  const left = Date.parse(a.expires_at) - now;
+  const label = AGENT_TYPES[agentType(a)]?.label ?? a.agent;
+
+  const decide = async (decision: 'approve' | 'deny') => {
+    setBusy(true); setErr(null);
+    try {
+      await api.send('POST', `/approvals/${encodeURIComponent(a.id)}/decision`, { decision, note: note.trim(), name: viewer.name });
+      dispatch({ t: 'toast', text: `${decision === 'approve' ? 'Approved' : 'Denied'} — ${a.summary.slice(0, 80)}` });
+      await refresh();
+    } catch (e) {
+      setErr(apiErrorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sent = Object.entries(a.notified ?? {});
+  return (
+    <Card className="detail">
+      <div className="detail-hero">
+        <AgentGlyph type={agentType(a)} size={44} />
+        <div style={{ minWidth: 0 }}>
+          <h3>{a.reason || a.summary}</h3>
+          <div className="cell-sub">{label} on {a.hostname} · requested {ago(Date.parse(a.requested_at), now)}</div>
+        </div>
+      </div>
+      <div className="section-label">Exact action</div>
+      <div className="code-line">{a.summary}</div>
+      <dl className="kv">
+        <dt>Machine</dt><dd><Link href={`/enforcement?endpoint=${a.endpoint_id}`} className="mono-sm">{a.hostname}</Link>{a.os_user && <span className="muted"> · user {a.os_user}</span>}</dd>
+        <dt>Agent</dt><dd>{label}{a.tool && <span className="muted"> · tool <span className="mono-sm">{a.tool}</span></span>}</dd>
+        {a.cwd && <><dt>Working dir</dt><dd className="mono-sm">{a.cwd}</dd></>}
+        <dt>Session</dt><dd className="mono-sm">{a.session_id || '—'}</dd>
+        <dt>Rule</dt><dd>{RULE_LABEL[a.rule] ?? a.rule} · <Link href="/policies" className="view-all">policy</Link></dd>
+        <dt>Status</dt><dd><ApprovalPill state={pillState(a)} />
+          {a.state !== 'pending' && a.decided_at && <span className="muted"> by {a.decided_by_name || a.decided_by} · {ago(Date.parse(a.decided_at), now)}</span>}
+          {a.state === 'used' && a.used_at && <span className="muted"> · ran {ago(Date.parse(a.used_at), now)}</span>}
+          {a.state === 'approved' && <span className="muted"> · waiting for the agent to run it</span>}
+        </dd>
+        {sent.length > 0 && <><dt>Notified</dt><dd>{sent.map(([ch, r]) => <span key={ch} className={`badge ${r === 'sent' ? 'b-green' : ch === 'none' ? 'b-muted' : 'b-red'}`} title={r} style={{ marginRight: 6 }}>{ch === 'none' ? 'console only' : `${ch}: ${r === 'sent' ? 'sent' : 'failed'}`}</span>)}</dd></>}
+      </dl>
+      <div className="callout" style={{ marginTop: 0 }}>
+        <Ic n="lock" size={16} />
+        <span>
+          Approving lets this exact action run once. It binds to fingerprint <code>{a.fingerprint.slice(0, 16)}…</code> — a different command, file, session or user asks again.
+        </span>
+      </div>
+      {a.note && !pending && <div className="callout" style={{ background: 'var(--panel-3)', borderColor: 'var(--border)' }}><Ic n="chat" size={16} /><span>{a.note}</span></div>}
+      {err && <div className="callout bad"><Ic n="alert" size={16} /><span>{err}</span></div>}
+      {pending ? (
+        <>
+          <div className="field" style={{ padding: '14px 20px 0' }}>
+            <label htmlFor="appr-note">Note (shown to the agent and kept in the audit trail)</label>
+            <textarea id="appr-note" className="textarea" rows={2} value={note} disabled={!canWrite} onChange={(e) => setNote(e.target.value)} placeholder="Why you approved or denied" />
+          </div>
+          <div className="decide-bar">
+            <button className="btn-approve" disabled={!canWrite || busy} onClick={() => decide('approve')}><Ic n="check" size={15} /> Approve once</button>
+            <button className="btn-deny" disabled={!canWrite || busy} onClick={() => decide('deny')}><Ic n="x" size={15} /> Deny</button>
+          </div>
+          {!canWrite && <div style={{ padding: '0 20px 8px' }}><ReadOnlyNote what="approve or deny requests" /></div>}
+          <div className={`expires wrap ${left < 5 * 60_000 ? 'soon' : ''}`} style={{ padding: '0 20px 18px' }}><Ic n="clock" size={13} /> Expires in {untilText(left)}. Until then the agent is told the action is waiting; a retry after approval runs it.</div>
+        </>
+      ) : <div style={{ height: 18 }} />}
+    </Card>
+  );
+}
+
+function LiveApprovalQueue({ initialId }: { initialId?: string }) {
+  const { approvals, now, loaded, refresh } = useLive();
+  const [tick, setTick] = useState(() => Date.now());
+  // Pending requests matter by the second: refresh faster than the console's 15s poll while this page is open.
+  useEffect(() => {
+    const id = setInterval(() => { if (!document.hidden) { void refresh(); setTick(Date.now()); } }, 5_000);
+    return () => clearInterval(id);
+  }, [refresh]);
+  const t = Math.max(now, tick);
+  const isPending = (a: ApiApproval) => a.state === 'pending' && Date.parse(a.expires_at) > t;
+  const [tab, setTab] = useState<'pending' | 'history'>(() => {
+    const a = approvals.find((x) => x.id === initialId);
+    return a && a.state !== 'pending' ? 'history' : 'pending';
+  });
+  const [sel, setSel] = useState<string | null>(initialId ?? null);
+  const pending = approvals.filter(isPending);
+  const history = approvals.filter((a) => !isPending(a));
+  const rows = tab === 'pending' ? pending : history;
+  const current = approvals.find((a) => a.id === sel) ?? rows[0] ?? null;
+
   return (
     <div className="page">
-      <PageHead title="Approvals" sub={SUB} />
-      <Card>
-        <ComingSoon icon="shield" title="No approval requests yet"
-          sub="When a policy rule requires approval, the paused action will wait here for an approver to allow or deny it. Routing approvals to the console is not live yet." />
-      </Card>
+      <PageHead title="Approvals" sub={SUB}>
+        <Link className="btn sm" href="/settings#approvals"><Ic n="bell" /> Slack & email</Link>
+      </PageHead>
+      {!loaded ? <Card><Loading /></Card> : approvals.length === 0 ? (
+        <Card>
+          <Empty icon="shield" title="No approval requests yet"
+            sub="Add approval lists to your policy — e.g. command_approve: [&quot;git push*&quot;] or tool_approve: [&quot;mcp__github__*&quot;]. On macOS and Windows the agent pauses and asks; requests show up here and in Slack or email." />
+        </Card>
+      ) : (
+        <div className="appr-layout">
+          <Card>
+            <div className="tabs">
+              <button className={tab === 'pending' ? 'on' : ''} onClick={() => { setTab('pending'); setSel(null); }}>Pending <span className="n">{pending.length}</span></button>
+              <button className={tab === 'history' ? 'on' : ''} onClick={() => { setTab('history'); setSel(null); }}>History <span className="n">{history.length}</span></button>
+            </div>
+            {rows.length === 0 ? (
+              <Empty title={tab === 'pending' ? 'All caught up' : 'No decisions yet'} sub={tab === 'pending' ? 'Nothing is waiting for an approver right now.' : undefined} />
+            ) : rows.map((a) => (
+              <div key={a.id} className={`appr-item ${current?.id === a.id ? 'sel' : ''}`} onClick={() => setSel(a.id)} role="button" tabIndex={0}
+                onKeyDown={(e) => e.key === 'Enter' && setSel(a.id)}>
+                <AgentGlyph type={agentType(a)} size={34} />
+                <div className="appr-main">
+                  <div className="appr-title mono-sm">{a.summary}</div>
+                  <div className="appr-meta">{AGENT_TYPES[agentType(a)]?.label ?? a.agent} <i className="sep">•</i> {a.os_user || '—'} <i className="sep">•</i> {a.hostname} <i className="sep">•</i> {ago(Date.parse(a.requested_at), t)}</div>
+                </div>
+                {isPending(a)
+                  ? <span className={`expires ${Date.parse(a.expires_at) - t < 5 * 60_000 ? 'soon' : ''}`}><Ic n="clock" size={13} /> {untilText(Date.parse(a.expires_at) - t)}</span>
+                  : <ApprovalPill state={pillState(a)} />}
+              </div>
+            ))}
+          </Card>
+          {current ? <LiveDetail key={current.id} a={current} now={t} /> : (
+            <Card className="detail"><CardHead title="Nothing selected" sub="Pick a request to review the exact action." /></Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }

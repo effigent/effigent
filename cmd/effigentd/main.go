@@ -149,10 +149,27 @@ func daemon() {
 	eng.UseResolver(ctx, resolver, *procfs)
 	go resolver.Run(ctx, *dnsRefresh, eng.OnDomainsChanged)
 
+	var client *cpclient.Client // nil when not enrolled
+	if cp != nil {
+		client = &cpclient.Client{
+			State: cp, Dir: *stateDir, Logf: logger.Printf,
+			Apply: func(ctx context.Context, body []byte) error {
+				_, err := eng.SetPolicy(ctx, body)
+				return err
+			},
+			OnApply: func(v int64) {
+				policyVersion.Store(v)
+				logger.Printf("applied policy v%d from the control plane", v)
+				sinks.Write(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "info",
+					Rule: fmt.Sprintf("v%d", v), Message: fmt.Sprintf("policy v%d from the control plane is active", v)})
+			},
+		}
+	}
+
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
-			Hook: hookHandler(eng),
+			Hook: hookHandler(eng, func() *cpclient.Client { return client }),
 			Stats: func() map[string]any {
 				out := map[string]any{
 					"tetragon_connected": tgConnected.Load(),
@@ -180,20 +197,7 @@ func daemon() {
 		logger.Printf("API on http://%s", *listen)
 	}
 
-	if cp != nil {
-		client := &cpclient.Client{
-			State: cp, Dir: *stateDir, Logf: logger.Printf,
-			Apply: func(ctx context.Context, body []byte) error {
-				_, err := eng.SetPolicy(ctx, body)
-				return err
-			},
-			OnApply: func(v int64) {
-				policyVersion.Store(v)
-				logger.Printf("applied policy v%d from the control plane", v)
-				sinks.Write(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "info",
-					Rule: fmt.Sprintf("v%d", v), Message: fmt.Sprintf("policy v%d from the control plane is active", v)})
-			},
-		}
+	if client != nil {
 		if err := client.LoadCached(ctx); err != nil {
 			logger.Printf("cached policy: %v", err)
 		}

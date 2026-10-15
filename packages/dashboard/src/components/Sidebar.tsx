@@ -11,7 +11,7 @@ import { useDemoMode } from '@/demo.tsx';
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const { pending, env, dispatch } = useStore();
-  const { endpointRows, loaded, fixture } = useLive();
+  const { endpointRows, loaded, fixture, pendingApprovals } = useLive();
   const { demo } = useDemoMode();
   const eps = endpointRows.filter((e) => !e.revoked);
   const online = eps.filter((e) => e.status === 'online').length;
@@ -36,7 +36,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             aria-current={isActive(item.href) ? 'page' : undefined}>
             <Ic n={item.icon} />
             <span>{item.label}</span>
-            {item.href === '/approvals' && pending.length > 0 && <span className="nav-count" title={`${pending.length} pending`}>{pending.length}</span>}
+            {item.href === '/approvals' && (demo ? pending.length : pendingApprovals) > 0 && (
+              <span className="nav-count" title={`${demo ? pending.length : pendingApprovals} pending`}>{demo ? pending.length : pendingApprovals}</span>
+            )}
           </Link>
         ))}
       </nav>

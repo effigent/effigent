@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/effigent/effigent/internal/controlplane/notify"
 	"github.com/effigent/effigent/internal/controlplane/server"
 	"github.com/effigent/effigent/internal/controlplane/store"
 	"github.com/effigent/effigent/internal/shared/sign"
@@ -59,6 +60,8 @@ func main() {
 		Store: st, Key: key, Auth: auth, Logf: logger.Printf,
 		PublicBaseURL: envOr("EFFIGENT_PUBLIC_URL", "http://"+*listen),
 		ConsoleOrigin: os.Getenv("EFFIGENT_CONSOLE_ORIGIN"),
+		// Email for approval requests; Slack webhooks are set per tenant in the console.
+		Notify: &notify.Sender{SMTPURL: os.Getenv("EFFIGENT_SMTP_URL"), From: os.Getenv("EFFIGENT_EMAIL_FROM")},
 	}
 	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

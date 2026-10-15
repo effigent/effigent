@@ -58,6 +58,36 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   effigentd builds older than `domain_deny` support refuse a policy that uses it (parse
   error) and also stay on their current version: upgrade endpoints before publishing one.
 
+## 2b. Approvals
+
+- Endpoint policy lists `exec_approve`, `file_approve`, `domain_approve`, `network_approve`
+  (matched like their deny twins), `command_approve` (`"git push*"`: a simple command
+  after wrappers, exact or `*` prefix) and `tool_approve` (agent tool names, `mcp__github__*`);
+  top-level `approvals: {wait_seconds (≤90, default 45), ttl_minutes (default 60)}`.
+  A deny list always wins. Central `require_approval` compiles to these lists.
+- Hooks (`hooks.EvaluateClaude` → `Decision.Approve`) in denylist/allowlist mode;
+  monitor/learn report `would_block`. The daemon (`cmd/effigentd/hooks.go` `askApproval`)
+  fingerprints the call (`action.Fingerprint`: tenant, endpoint, session, OS user, tool +
+  full input), sends a redacted summary to `POST /ep/v1/approvals`, which creates or reuses
+  the open request (one per endpoint+fingerprint), notifies once, and long-polls up to
+  `wait_seconds` (≤90s). Approved → the call runs and the approval is used (single-use).
+  Pending / denied / expired → deny with a message telling the agent what to do. Not
+  enrolled or control plane unreachable → deny.
+- Timeouts line up: daemon wait ≤ hook budget − 10s; `effigentd hook` waits 100s and sends
+  `X-Effigent-Hook-Budget` (older hook binaries get 8s → no wait); `install-hooks` sets
+  Claude Code's hook `timeout: 120`.
+- Kernel (Linux): `Rule.Kernel()` turns the exec/file/domain/network approve lists into
+  denies; command/tool lists are invisible to it.
+- Control plane: `cp.approvals`, `cp.notification_settings` (migration 004). Console API
+  `GET /api/v1/approvals`, `POST /api/v1/approvals/{id}/decision` (admin/security_admin),
+  `GET|PUT /api/v1/notifications`, `POST /api/v1/notifications/test`. Notifications
+  (`internal/controlplane/notify`): Slack incoming webhook per tenant (only
+  `https://hooks.slack.com/services/…`, never returned by the API) and email over SMTP
+  (`EFFIGENT_SMTP_URL=smtp://user:pass@host:587` or `smtps://…:465`, `EFFIGENT_EMAIL_FROM`).
+  Messages link to `EFFIGENT_CONSOLE_ORIGIN/approvals?id=…`; deciding needs a console
+  login (no one-click approve links). Audit: `approval.request|approve|deny`,
+  `notifications.update`.
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -79,6 +109,10 @@ go run ./cmd/effigentd enroll --server http://127.0.0.1:8080 --token eft_… --s
 go run ./cmd/effigentd --state-dir ~/.effigent
 ./test/endpoint/e2e.sh                              # endpoint e2e (standalone, not enrolled)
 ./test/claude/run.sh                                # real Claude Code (needs ~/.effigent-claude.env)
+./test/hooks/approval.sh                            # approval flow: real hook process -> hooks-mode daemon -> local control plane
+# console against a local control plane (dev only): add to the dev command
+#   NEXT_PUBLIC_EFFIGENT_API_URL=http://127.0.0.1:8080 NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN=devadmin NEXT_PUBLIC_EFFIGENT_DEV_TENANT=org:dev
+#   (control plane: EFFIGENT_ADMIN_TENANTS=org:dev EFFIGENT_CONSOLE_ORIGIN=http://localhost:3000)
 npm run -w @effigent/dashboard dev                  # console (with the dev bypass vars)
 npm run -w @effigent/site build                     # site
 ```
@@ -99,7 +133,10 @@ npm run -w @effigent/site build                     # site
   against `domain_deny` (name + subdomains), `network_deny`, `network_allow` (IPs only).
   Limits: it reads the command, not what runs — scripts, interpreters (`python -c`),
   variables, aliases and tools that connect on their own aren't followed; MCP tools aren't
-  checked yet; only Claude Code has a hook. If the daemon is down the hook denies.
+  checked against deny lists yet (`tool_approve` can pause them); only Claude Code has a
+  hook. If the daemon is down the hook denies. Approvers: any console admin /
+  security_admin (central `approval.users/teams` are not enforced yet); approve from
+  the console only (Slack/email link to it).
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8–1.1s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
