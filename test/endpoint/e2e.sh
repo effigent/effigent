@@ -5,7 +5,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 OUT=${OUT:-$(mktemp -d)}
-API=http://127.0.0.1:7777
+PORT=${PORT:-7777}   # the installed effigentd also uses 7777: PORT=7787 ./test/endpoint/e2e.sh
+API=http://127.0.0.1:$PORT
 api() { curl -s -H "Authorization: Bearer apitoken" "$@"; }
 pass=0; fail=0
 ok()   { echo "  PASS  $*"; pass=$((pass+1)); }
@@ -17,18 +18,19 @@ go build -o bin/effigentd ./cmd/effigentd && go build -o bin/mockbackend ./test/
   GOOS=linux GOARCH=$VM_ARCH CGO_ENABLED=0 go build -o bin/effigentd-linux ./cmd/effigentd || exit 1
 docker build -q -t effigent-scenario -f test/endpoint/Dockerfile.scenario . >/dev/null || exit 1
 docker ps --format '{{.Names}}' | grep -qx tetragon || { echo "tetragon container is not running"; exit 1; }
-for port in 7777 9999; do
-  lsof -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1 && { echo "port $port is busy (another effigentd/mockbackend running?)"; exit 1; }
+for port in $PORT 9999; do
+  # lsof can't see a daemon running as root; a connect attempt can
+  curl -s -o /dev/null --max-time 1 http://127.0.0.1:$port/ && { echo "port $port is busy (another effigentd/mockbackend running? try PORT=7787)"; exit 1; }
 done
 
 ./bin/mockbackend -out "$OUT/backend.jsonl" -token testtoken >"$OUT/backend.log" 2>&1 & BPID=$!
-EFFIGENT_API_TOKEN=apitoken EFFIGENT_BACKEND_TOKEN=testtoken ./bin/effigentd -output json -log-file "$OUT/events.jsonl" \
-  -backend-url http://127.0.0.1:9999/ingest >/dev/null 2>"$OUT/effigent.err" & EPID=$!
+EFFIGENT_API_TOKEN=apitoken EFFIGENT_BACKEND_TOKEN=testtoken ./bin/effigentd -sensor tetragon -listen 127.0.0.1:$PORT \
+  -state-dir "$OUT/state" -output json -log-file "$OUT/events.jsonl" -backend-url http://127.0.0.1:9999/ingest >/dev/null 2>"$OUT/effigent.err" & EPID=$!
 trap 'kill $EPID $BPID 2>/dev/null; docker rm -f eff-longlived eff-domain >/dev/null 2>&1' EXIT
 sleep 2
 
-echo "== 1. denylist scenario (agent waits 1s before acting)"
-docker run --rm effigent-scenario >"$OUT/scenario.txt" 2>&1; sleep 2
+echo "== 1. denylist scenario (agent waits 2s before acting; detected agents are unenforced for ~1s, see section 2)"
+docker run --rm -e AGENT_DELAY=2 effigent-scenario >"$OUT/scenario.txt" 2>&1; sleep 2
 check "$OUT/scenario.txt" "curl http=200"                         "curl outside any agent still works"
 check "$OUT/scenario.txt" "curl exit=126 (126"                    "agent's curl blocked (exec deny)"
 check "$OUT/scenario.txt" "\[mcp-server-github\] curl exit=126"   "MCP server's curl blocked (followForks)"

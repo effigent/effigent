@@ -18,7 +18,7 @@ Keep this file current when architecture, data model or deployment change.
 | `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
 | `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). No sample data by default: pages without a backend (Approvals, Allow/Deny Lists, Identity) show "Coming soon" empty states; the Agent Graph is built client-side from real events (`src/lib/live-graph.ts`). **Demo Mode** (Settings / user menu; localStorage `effigent.demoMode`) swaps in a sample workspace from `src/lib/fixture-api.ts` on every page and never calls the real API. | Vercel, app.effigent.ai |
 | `packages/site` | Marketing site + docs, Next.js static export. | S3 + CloudFront, effigent.ai |
-| `test/endpoint` | Endpoint e2e against Tetragon (37 checks). | Docker Desktop |
+| `test/endpoint` | Endpoint e2e against Tetragon (37 checks). On a Mac with effigentd installed run `PORT=7787 ./test/endpoint/e2e.sh` (the installed daemon holds 7777). | Docker Desktop |
 | `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
 
 ## 2. How policy reaches the kernel
@@ -101,7 +101,7 @@ npm run -w @effigent/site build                     # site
   variables, aliases and tools that connect on their own aren't followed; MCP tools aren't
   checked yet; only Claude Code has a hook. If the daemon is down the hook denies.
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
-- Detected (not launched via `effigentd run`) agents are unenforced for ~0.8s while policies load.
+- Detected (not launched via `effigentd run`) agents are unenforced for ~0.8–1.1s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
 
 ## 6. Conventions
