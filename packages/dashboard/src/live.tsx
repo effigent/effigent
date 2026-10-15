@@ -55,6 +55,8 @@ export interface Live extends Data {
   pendingApprovals: number;
   /** Re-fetch everything now (after a write, or from a Retry button). */
   refresh: () => Promise<void>;
+  /** Re-fetch only the approval requests (the Approvals page polls this). */
+  refreshApprovals: () => Promise<void>;
 }
 
 const Ctx = createContext<Live | null>(null);
@@ -123,6 +125,14 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
   }, [ready, load]);
 
   const refresh = useCallback(() => load(true), [load]);
+  const refreshApprovals = useCallback(async () => {
+    const g = gen.current;
+    try {
+      const approvals = await api.get<ApiApproval[]>('/approvals?limit=200');
+      if (g === gen.current) setData((d) => ({ ...d, approvals }));
+    } catch { /* the next full poll reports errors */ }
+    if (g === gen.current) setNow(Date.now());
+  }, [api]);
 
   const value = useMemo<Live>(() => {
     const endpointRows = data.endpoints.map((e) => toEndpointRow(e, now));
@@ -132,13 +142,13 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
       return { ...ce, ago: ago(ce.at ?? null, now) };
     });
     return {
-      ...data, api, fixture, loaded, error, updatedAt, now, refresh,
+      ...data, api, fixture, loaded, error, updatedAt, now, refresh, refreshApprovals,
       canWrite: roleCanWrite(data.me?.role),
       endpointRows, consoleEvents,
       latestPolicy: data.policy?.version ?? 0,
       pendingApprovals: data.approvals.filter((a) => a.state === 'pending' && Date.parse(a.expires_at) > now).length,
     };
-  }, [data, api, fixture, loaded, error, updatedAt, now, refresh]);
+  }, [data, api, fixture, loaded, error, updatedAt, now, refresh, refreshApprovals]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

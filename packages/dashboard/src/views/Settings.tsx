@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
-import { API_BASE, apiErrorText, type ApiNotifications } from '@/lib/api.ts';
+import { API_BASE, ApiError, apiErrorText, type ApiNotifications } from '@/lib/api.ts';
 import { Storage } from '@/components/Storage.tsx';
 import { Card, CardHead, DemoNote, PageHead, ReadOnlyNote, Switch, ThemeSelect } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
@@ -124,7 +124,11 @@ function ApprovalNotifications() {
     let live = true;
     api.get<ApiNotifications>('/notifications')
       .then((v) => { if (live) { setN(v); setEmails(v.emails.join(', ')); } })
-      .catch((e) => { if (live) setMsg({ ok: false, text: apiErrorText(e) }); });
+      .catch((e) => {
+        if (!live) return;
+        setMsg({ ok: false, text: e instanceof ApiError && e.status === 404
+          ? 'The control plane does not support approvals yet — it needs to be updated.' : apiErrorText(e) });
+      });
     return () => { live = false; };
   }, [api]);
 

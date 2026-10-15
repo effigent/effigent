@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Approval states. "used" is an approval the endpoint has acted on: each
@@ -78,7 +79,18 @@ func newApprovalID() string {
 //   - denied while the original request would still be open: returned, so a
 //     retry doesn't re-ask the approvers;
 //   - otherwise a new pending request; created is true.
-func (s *Store) RequestApproval(ctx context.Context, a Approval, ttl time.Duration) (out Approval, created bool, err error) {
+func (s *Store) RequestApproval(ctx context.Context, a Approval, ttl time.Duration) (Approval, bool, error) {
+	out, created, err := s.requestApproval(ctx, a, ttl)
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23505" {
+		// The same call arrived twice at once and the other one filed the
+		// request first: use that one.
+		return s.requestApproval(ctx, a, ttl)
+	}
+	return out, created, err
+}
+
+func (s *Store) requestApproval(ctx context.Context, a Approval, ttl time.Duration) (out Approval, created bool, err error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return out, false, err

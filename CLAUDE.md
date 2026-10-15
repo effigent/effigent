@@ -57,6 +57,9 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   compile fails gets 422 and keeps its version; it shows as a lagging `policy_version`.
   effigentd builds older than `domain_deny` support refuse a policy that uses it (parse
   error) and also stay on their current version: upgrade endpoints before publishing one.
+  The same holds for the approval lists (`*_approve`, `approvals:`; effigentd < v0.5.0).
+  Deploy order for approvals: control plane (`deploy-cp.sh`, migration 004) → push `main`
+  (console) → tag effigentd → reinstall endpoints → publish a policy with approval lists.
 
 ## 2b. Approvals
 

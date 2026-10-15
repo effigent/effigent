@@ -190,13 +190,13 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
 }
 
 function LiveApprovalQueue({ initialId }: { initialId?: string }) {
-  const { approvals, now, loaded, refresh } = useLive();
+  const { approvals, now, loaded, refreshApprovals } = useLive();
   const [tick, setTick] = useState(() => Date.now());
-  // Pending requests matter by the second: refresh faster than the console's 15s poll while this page is open.
+  // Pending requests matter by the second: poll them faster than the console's 15s refresh while this page is open.
   useEffect(() => {
-    const id = setInterval(() => { if (!document.hidden) { void refresh(); setTick(Date.now()); } }, 5_000);
+    const id = setInterval(() => { if (!document.hidden) { void refreshApprovals(); setTick(Date.now()); } }, 5_000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refreshApprovals]);
   const t = Math.max(now, tick);
   const isPending = (a: ApiApproval) => a.state === 'pending' && Date.parse(a.expires_at) > t;
   const [tab, setTab] = useState<'pending' | 'history'>(() => {

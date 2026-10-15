@@ -191,6 +191,20 @@ func TestApprovalFlow(t *testing.T) {
 		t.Fatalf("long poll: %+v after %s", r, time.Since(start))
 	}
 
+	// ---- the same call twice at once: one request, both answered ----
+	var wg sync.WaitGroup
+	res := make([]endpointApprovalResp, 8)
+	for i := range res {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); res[i] = ask(laptop, 9, 0) }(i)
+	}
+	wg.Wait()
+	for _, r := range res {
+		if r.ID != res[0].ID || r.State != "pending" {
+			t.Fatalf("concurrent requests: %+v vs %+v", r, res[0])
+		}
+	}
+
 	// ---- deny: retries are refused without asking again ----
 	r3 := ask(laptop, 3, 0)
 	posts := slack.count()
@@ -213,7 +227,7 @@ func TestApprovalFlow(t *testing.T) {
 	for _, e := range audit {
 		seen[e.Action]++
 	}
-	if seen["approval.request"] < 4 || seen["approval.approve"] != 2 || seen["approval.deny"] != 1 || seen["notifications.update"] != 1 {
+	if seen["approval.request"] < 5 || seen["approval.approve"] != 2 || seen["approval.deny"] != 1 || seen["notifications.update"] != 1 {
 		t.Fatalf("audit: %v", seen)
 	}
 }
