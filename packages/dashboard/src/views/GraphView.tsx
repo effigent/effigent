@@ -130,6 +130,7 @@ export function GraphView({ initialAgent, initialView, initialNode }: { initialA
 }
 
 const MAX_TARGETS = 8; // per group
+const MAX_FILES = 40; // the files group, once opened
 
 /** Long targets (paths, mcp__server__tool names, URLs) may break after separators instead of mid-word. */
 function Breakable({ text }: { text: string }) {
@@ -247,7 +248,11 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
   const [view, setView] = useState<'graph' | 'list'>(initialView === 'list' ? 'list' : 'graph');
   const [selected, setSelected] = useState<string | null>(initialNode || null);
   const [showRoutine, setShowRoutine] = useState(false);
-  const data = useLiveGraph({ maxTargets: MAX_TARGETS, agent, showRoutine });
+  // Files and each MCP server's tools start folded; clicking opens them.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggle = (k: string) => setExpanded((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const groupMax = useMemo(() => (expanded.has('file') ? { file: MAX_FILES } : undefined), [expanded]);
+  const data = useLiveGraph({ maxTargets: MAX_TARGETS, agent, showRoutine, groupMax });
   const { graph, loaded, agents } = data;
 
   const sync = (a: string | null, v: 'graph' | 'list') => {
@@ -290,9 +295,9 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
           <Card className="graph-card">
             <CardHead
               title={<>{agent ? agentMeta(agent).label : 'All agents'} <span className="live-chip"><span className="dot" /> Live</span></>}
-              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` The busiest ${MAX_TARGETS} of each kind are shown; the rest are under "+N more".` : ''}${!showRoutine && graph.routineEvents ? ' Routine activity (ls, grep, git commit, ToolSearch…) is hidden.' : ''} Click a node for its recent events.`}
+              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` The busiest ${MAX_TARGETS} of each kind are shown; the rest are under "+N more".` : ''} Files and MCP tools are folded — click Files or a server to open them.${!showRoutine && graph.routineEvents ? ' Routine activity (ls, grep, git commit, ToolSearch…) is hidden.' : ''} Click a node for its recent events.`}
             />
-            <LiveGraphCanvas data={data} selected={selected} onSelect={setSelected} height={640} background />
+            <LiveGraphCanvas data={data} selected={selected} onSelect={setSelected} height={640} background expanded={expanded} onToggle={toggle} />
             <Legend live />
           </Card>
           <LiveDetail data={data} id={selected} />

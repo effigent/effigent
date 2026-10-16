@@ -44,6 +44,8 @@ export interface LiveNode {
   items?: { label: string; full: string; count: number }[];
   /** Targets: the layout group, "command" | "file" | "network" | "tool" | "routine" | "mcp:<server>". */
   group?: string;
+  /** "+N more" nodes: how many targets they stand for. */
+  hiddenCount?: number;
 }
 
 export interface LiveEdge {
@@ -70,6 +72,8 @@ export interface LiveGraphOptions {
   agent?: string | null; // only this agent name
   /** Targets shown per group (commands, files, network, tools, each MCP server); the rest fold into "+N more". */
   maxTargets: number;
+  /** Per-group override of maxTargets, e.g. { file: 40 } while the files group is open. */
+  groupMax?: Record<string, number>;
   /** Show routine commands (ls, cat, git status…) as one "Routine commands (N)" node per agent; hidden otherwise. */
   showRoutine?: boolean;
 }
@@ -266,7 +270,7 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   const shownBy = new Map<string, number>();
   for (const [id, { group }] of ranked) {
     const shown = shownBy.get(group) ?? 0;
-    if (shown < Math.max(0, o.maxTargets)) { kept.add(id); shownBy.set(group, shown + 1); }
+    if (shown < Math.max(0, o.groupMax?.[group] ?? o.maxTargets)) { kept.add(id); shownBy.set(group, shown + 1); }
     else hiddenBy.set(group, (hiddenBy.get(group) ?? 0) + 1);
   }
   const hidden = ranked.length - kept.size;
@@ -287,9 +291,9 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
     else {
       const k = hiddenBy.get(group) ?? 0;
       const [one, many] = h.c.mcp ? ['tool', 'tools'] : GROUP_NOUN[group] ?? ['target', 'targets'];
-      touch(tid, () => ({ kind: 'target', targetKind: 'more', label: `+${k} more`, sub: k === 1 ? one : many, full: '', group }), h.outcome, h.at, h.ev);
+      touch(tid, () => ({ kind: 'target', targetKind: 'more', label: `+${k} more`, sub: k === 1 ? one : many, full: '', group, hiddenCount: k }), h.outcome, h.at, h.ev);
     }
-    const action = folded ? 'exec' : show ? h.c.action : 'other';
+    const action = folded ? 'exec' : h.c.action; // "+N more" keeps what was done (read, write, exec…)
     if (h.c.mcp) {
       const sid = `s:${h.c.mcp}`;
       const name = h.c.mcp;
