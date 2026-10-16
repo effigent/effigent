@@ -350,6 +350,10 @@ func (s *Server) testNotifications(w http.ResponseWriter, r *http.Request, p Pri
 		s.fail(w, err)
 		return
 	}
+	var req struct {
+		Sample string `json:"sample"` // "approval": the exact message an approver gets, for a sample request
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&req)
 	m := notify.Message{
 		Title:  "Test: approval requests from Effigent will arrive here",
 		Fields: [][2]string{{"Action", "Bash: git push --force origin main (example)"}, {"Machine", "dev on example-laptop"}},
@@ -357,6 +361,13 @@ func (s *Server) testNotifications(w http.ResponseWriter, r *http.Request, p Pri
 	}
 	if s.ConsoleOrigin != "" {
 		m.Link = s.ConsoleOrigin + "/approvals"
+	}
+	if req.Sample == "approval" {
+		m = s.approvalMessage(store.Approval{ID: "apr_sample", Agent: "claude-code", Hostname: "dana-mbp", OSUser: "dana",
+			Summary: "Bash: git push --force origin main", Reason: "`git push --force origin main` needs approval",
+			Rule: "command_approve", ExpiresAt: time.Now().Add(time.Hour)})
+		m.Title = "[Sample] " + m.Title
+		m.Footer = "This is a sample from the Effigent console — nothing is waiting. " + m.Footer
 	}
 	res := map[string]string{}
 	if n.SlackWebhook != "" {

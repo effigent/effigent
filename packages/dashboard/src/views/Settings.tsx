@@ -147,10 +147,10 @@ function ApprovalNotifications() {
       setBusy(false);
     }
   };
-  const test = async () => {
+  const test = async (sample?: 'approval') => {
     setBusy(true); setMsg(null);
     try {
-      const r = await api.send<Record<string, string>>('POST', '/notifications/test');
+      const r = await api.send<Record<string, string>>('POST', '/notifications/test', sample ? { sample } : {});
       const parts = Object.entries(r).map(([ch, res]) => `${ch === 'slack' ? 'Slack' : 'Email'}: ${res}`);
       setMsg({ ok: Object.values(r).every((v) => v.startsWith('sent')), text: parts.length ? parts.join(' · ') : 'Nothing to test yet — add a Slack webhook or an email first.' });
     } catch (e) {
@@ -188,7 +188,10 @@ function ApprovalNotifications() {
         <button className="btn sm" disabled={!canWrite || busy || (n !== null && list.join(',') === n.emails.join(','))} onClick={() => save({ emails: list }, 'Email recipients saved.')}>Save</button>
       </div>
       <Row title="Send a test" desc={fixture ? 'Demo Mode: nothing is actually sent.' : 'Posts a sample request to Slack and email, so you can see where they land.'}>
-        <button className="btn sm" disabled={!canWrite || busy} onClick={test}><Ic n="bell" /> Send test</button>
+        <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button className="btn sm" disabled={!canWrite || busy} onClick={() => test()}><Ic n="bell" /> Send test</button>
+          <button className="btn sm" disabled={!canWrite || busy} onClick={() => test('approval')} title="The exact message approvers get, for a sample paused action">Send sample approval request</button>
+        </span>
       </Row>
       {msg && <div className={`callout ${msg.ok ? '' : 'bad'}`} style={{ margin: '0 20px 14px' }}><Ic n={msg.ok ? 'checkCircle' : 'alert'} size={16} /><span>{msg.text}</span></div>}
       {!canWrite && <div style={{ padding: '0 20px 14px' }}><ReadOnlyNote what="change approval notifications" /></div>}
