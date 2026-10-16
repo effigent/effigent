@@ -90,7 +90,18 @@ export interface Classified {
   /** Commands, and tools (only ever "routine"). */
   risk?: CommandRisk;
   rule?: string; // the risky-list entry that matched
+  /** Files: credentials, keys, secrets (SENSITIVE), or reported / matched by a file rule. */
+  sensitive?: boolean;
 }
+
+/** Paths that hold credentials or secrets: their own "Sensitive Data Access" group. */
+const SENSITIVE = [
+  /(^|\/)\.env(\.[\w-]+)?$/i, /\/\.ssh\//, /(^|\/)id_(rsa|ed25519|ecdsa|dsa)(\.pub)?$/, /\/\.aws\/(credentials|config)$/,
+  /\/\.kube\/config$/, /\/\.docker\/config\.json$/, /\/\.(netrc|npmrc|pypirc|git-credentials|pgpass)$/, /\/\.config\/gcloud\//,
+  /\/\.gnupg\//, /\.(pem|key|p12|pfx|jks|keystore)$/i, /(^|\/)secrets?\.(ya?ml|json|toml)$/i, /\.tfstate(\.backup)?$/,
+  /\/Library\/Keychains\//, /(^|\/)credentials(\.json)?$/i,
+];
+export const isSensitivePath = (p: string) => SENSITIVE.some((re) => re.test(p));
 
 /** Claude Code names MCP tools mcp__<server>__<tool>. */
 export function parseMcpTool(name: string): { server: string; tool: string } | null {
@@ -126,7 +137,7 @@ function command(value: string, action = 'exec', fallbackBinary?: string): Class
   return { kind: 'command', key: `${risk === 'routine' ? '~' : risk === 'risky' ? '!' : ''}${name}`, label: name, sub: 'Command', full: value || fallbackBinary || name, action, risk, rule };
 }
 function file(path: string, action: string): Classified {
-  return { kind: 'file', key: path, label: base(path) || path, sub: dirLabel(path), full: path, action };
+  return { kind: 'file', key: path, label: base(path) || path, sub: dirLabel(path), full: path, action, sensitive: isSensitivePath(path) };
 }
 function network(addr: string, action = 'connect'): Classified {
   return { kind: 'network', key: addr, label: addr, sub: 'Network', full: addr, action };
@@ -180,6 +191,8 @@ export function classify(e: ApiEvent): Classified | null {
     else c = command(line);
   } else if (b.process?.binary) c = command(args ? `${b.process.binary} ${args}` : '', 'exec', b.process.binary);
   if (!c) return null;
+  // effigentd reports sensitive files itself (file_open = a file_alert / file rule match)
+  if (c.kind === 'file' && (e.type === 'file_open' || /^file_(alert|deny|approve)$/.test(b.rule ?? ''))) c.sensitive = true;
 
   const via = b.via?.trim();
   if (via && !c.mcp) c.mcp = via.startsWith('mcp:') ? via.slice(4) : via;
@@ -257,7 +270,9 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   const ranked0 = collapse ? hits.filter((h) => h.c.risk !== 'routine') : hits;
 
   // Each group keeps its busiest targets; the rest fold into its "+N more".
-  const groupOf = (c: Classified) => (c.mcp ? `mcp:${c.mcp}` : c.kind);
+  // Layout groups: risky commands and sensitive files get their own.
+  const groupOf = (c: Classified) => (c.mcp ? `mcp:${c.mcp}` : c.kind === 'command' && c.risk === 'risky' ? 'risky'
+    : c.kind === 'file' && c.sensitive ? 'sensitive' : c.kind);
   const tally = new Map<string, { n: number; group: string }>();
   for (const h of ranked0) {
     const t = tally.get(h.tid) ?? { n: 0, group: groupOf(h.c) };
@@ -275,7 +290,8 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   }
   const hidden = ranked.length - kept.size;
   const MORE = (group: string) => `t:more:${group}`;
-  const GROUP_NOUN: Record<string, [string, string]> = { command: ['command', 'commands'], file: ['file', 'files'], network: ['destination', 'destinations'], tool: ['tool', 'tools'] };
+  const GROUP_NOUN: Record<string, [string, string]> = { command: ['command', 'commands'], risky: ['risky command', 'risky commands'], file: ['file', 'files'],
+    sensitive: ['sensitive file', 'sensitive files'], network: ['destination', 'destinations'], tool: ['tool', 'tools'] };
 
   for (const h of hits) {
     if (h.c.risk === 'routine' && !o.showRoutine) continue;

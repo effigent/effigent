@@ -71,7 +71,7 @@ const TARGET_ICON: Record<TargetKind, string> = { command: 'terminal', file: 'fi
 const SIZE = { machine: 54, agent: 66, mcp: 50, target: 46 } as const;
 
 export function nodeIcon(n: LiveNode, endpointById: Map<string, EndpointRow>): string {
-  if (n.id === FILES) return 'file';
+  if (isGroupNode(n.id)) return GROUP_BY_KEY.get(n.group ?? '')?.icon ?? 'layers';
   if (n.kind === 'machine') return endpointById.get(n.endpoint ?? '')?.platform === 'linux' ? 'server' : 'laptop';
   if (n.kind === 'agent') return agentMeta(n.agent).icon;
   if (n.kind === 'mcp') return 'plug';
@@ -96,7 +96,7 @@ export function nodeSub(n: LiveNode, endpointById: Map<string, EndpointRow>): st
     const ep = endpointById.get(n.endpoint ?? '');
     return ep ? `${ep.os}${ep.revoked ? ' · revoked' : ''}` : 'Machine';
   }
-  if (n.id === FILES || n.kind === 'mcp') return n.sub;
+  if (isGroupNode(n.id) || n.kind === 'mcp') return n.sub;
   if (n.kind === 'target' && (n.targetKind === 'routine' || n.targetKind === 'more')) return n.sub;
   const times = ` · ${n.count.toLocaleString()}×`;
   if (n.kind === 'target' && n.group?.startsWith('mcp:')) return 'Tool' + times; // the server is the node it hangs off
@@ -113,15 +113,23 @@ function tone(n: LiveNode): GNodeData['tone'] {
   return n.blocked > 0 ? 'bad' : n.wouldBlock > 0 ? 'warn' : 'ok';
 }
 
-/** Tree layout: machines → agents → what they touched, in one column grouped
- *  by kind (commands, network, files, tools, routine), followed by each MCP
- *  server with its tools in the next column. Groups never interleave, so an
- *  agent's edges fan out without crossing. */
-const DIRECT_ORDER = ['command', 'network', 'file', 'tool', 'routine'];
+/** Tree layout: machines → agents → one node per group (GROUPS), then each
+ *  MCP server; an open group lists its members beside it. Groups never
+ *  interleave, so an agent's edges fan out without crossing. */
 
-/** The node that stands for every file (closed) or heads the file list (open). */
-export const FILES = 'grp:file';
-const FILE_LIST = 'file:list'; // the open files, laid out as a grid beside FILES
+/** The groups every agent's activity is aggregated into; each is one node
+ *  until clicked open. MCP servers stay their own nodes (tools folded). */
+export const GROUPS: { key: string; label: string; icon: string; warn?: boolean }[] = [
+  { key: 'command', label: 'Commands', icon: 'terminal' },
+  { key: 'risky', label: 'Risky Commands', icon: 'alert', warn: true },
+  { key: 'network', label: 'Network Connections', icon: 'globe' },
+  { key: 'file', label: 'File System', icon: 'file' },
+  { key: 'sensitive', label: 'Sensitive Data Access', icon: 'lock', warn: true },
+  { key: 'tool', label: 'Agent Tools', icon: 'hook' },
+];
+const GROUP_BY_KEY = new Map(GROUPS.map((g) => [g.key, g]));
+export const groupNodeId = (k: string) => `grp:${k}`;
+const isGroupNode = (id: string) => id.startsWith('grp:');
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
@@ -132,40 +140,46 @@ function actionsOf(edges: LiveEdge[]): string {
   return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([a, n]) => `${a} ${n.toLocaleString()}`).join(' · ');
 }
 
-/** Folds the busy groups so the graph stays readable: files become one
- *  "Files" node and each MCP server hides its tools, until opened (`expanded`
- *  holds "file" and "mcp:<server>" keys). Open files show what was done to each. */
+/** Aggregates targets into GROUPS (one node each, edges summed per agent and
+ *  outcome) and folds each MCP server's tools. `expanded` holds the open
+ *  group keys and "mcp:<server>" keys: an open group keeps its node as a
+ *  header, with its members listed beside it (no edges: their subtitles say
+ *  what was done to them). */
 export function foldGraph(g: LiveGraph, expanded: Set<string>): LiveGraph {
-  const files = g.nodes.filter((n) => n.kind === 'target' && n.group === 'file');
-  const fileIds = new Set(files.map((n) => n.id));
-  const fileEdges = g.edges.filter((e) => fileIds.has(e.target));
   let nodes = [...g.nodes];
   let edges = [...g.edges];
-  if (files.length) {
-    const distinct = files.reduce((t, n) => t + (n.targetKind === 'more' ? n.hiddenCount ?? 0 : 1), 0);
-    const sum = (k: 'count' | 'allowed' | 'blocked' | 'wouldBlock') => files.reduce((t, n) => t + n[k], 0);
+  for (const grp of GROUPS) {
+    const members = g.nodes.filter((n) => n.kind === 'target' && n.group === grp.key);
+    if (!members.length) continue;
+    const ids = new Set(members.map((n) => n.id));
+    const inEdges = g.edges.filter((e) => ids.has(e.target));
+    const open = expanded.has(grp.key);
+    const distinct = members.reduce((t, n) => t + (n.targetKind === 'more' ? n.hiddenCount ?? 0 : 1), 0);
+    const sum = (k: 'count' | 'allowed' | 'blocked' | 'wouldBlock') => members.reduce((t, n) => t + n[k], 0);
+    const names = members.filter((n) => n.targetKind !== 'more').slice(0, 3).map((n) => n.label);
+    const summary = grp.key === 'file' || grp.key === 'sensitive' ? actionsOf(inEdges)
+      : names.join(', ') + (distinct > names.length ? ` +${(distinct - names.length).toLocaleString()}` : '');
     const head: LiveNode = {
-      id: FILES, kind: 'target', targetKind: 'file', group: 'file', full: '', eventIds: [],
-      label: `Files (${distinct.toLocaleString()})`, count: sum('count'), allowed: sum('allowed'), blocked: sum('blocked'), wouldBlock: sum('wouldBlock'),
-      lastAt: Math.max(...files.map((n) => n.lastAt)),
-      sub: expanded.has('file') ? 'Click to close' : `${actionsOf(fileEdges)} · click to open`,
+      id: groupNodeId(grp.key), kind: 'target', targetKind: members[0].targetKind === 'more' ? 'command' : members[0].targetKind, group: grp.key,
+      full: grp.label, eventIds: members.flatMap((n) => n.eventIds).sort((a, b) => b - a).slice(0, 60),
+      label: `${grp.label} (${distinct.toLocaleString()})`, count: sum('count'), allowed: sum('allowed'), blocked: sum('blocked'), wouldBlock: sum('wouldBlock'),
+      lastAt: Math.max(...members.map((n) => n.lastAt)), risk: grp.warn ? 'risky' : undefined,
+      sub: `${summary} · ${open ? 'click to close' : 'click to open'}`,
     };
-    // agents -> Files, one edge per agent and outcome
     const agg = new Map<string, LiveEdge>();
-    for (const e of fileEdges) {
+    for (const e of inEdges) {
       const key = `${e.source}|${e.outcome}`;
       const a = agg.get(key);
       if (a) { a.count += e.count; a.lastAt = Math.max(a.lastAt, e.lastAt); }
-      else agg.set(key, { ...e, id: `e:${key}:files`, target: FILES, action: 'files' });
+      else agg.set(key, { ...e, id: `e:${key}:${grp.key}`, target: head.id, action: grp.key });
     }
-    edges = edges.filter((e) => !fileIds.has(e.target)).concat([...agg.values()]);
-    nodes = nodes.filter((n) => !fileIds.has(n.id));
+    edges = edges.filter((e) => !ids.has(e.target)).concat([...agg.values()]);
+    nodes = nodes.filter((n) => !ids.has(n.id));
     nodes.push(head);
-    if (expanded.has('file')) {
-      // the list sits beside Files as a grid, no lines (they would cross the
-      // grid): each file's subtitle says what was done to it
-      nodes = nodes.concat(files.map((n) => ({ ...n, group: FILE_LIST,
-        sub: n.targetKind === 'more' ? n.sub : `${actionsOf(fileEdges.filter((e) => e.target === n.id))} · ${n.sub}` })));
+    if (open) {
+      nodes = nodes.concat(members.map((n) => ({ ...n,
+        sub: n.targetKind === 'more' || grp.key !== 'file' && grp.key !== 'sensitive' ? n.sub
+          : `${actionsOf(inEdges.filter((e) => e.target === n.id))} · ${n.sub}` })));
     }
   }
   // MCP servers: tools hidden until the server is opened
@@ -175,7 +189,7 @@ export function foldGraph(g: LiveGraph, expanded: Set<string>): LiveGraph {
     const calls = tools.reduce((t, n) => t + n.count, 0);
     const distinct = tools.reduce((t, n) => t + (n.targetKind === 'more' ? n.hiddenCount ?? 0 : 1), 0);
     const open = expanded.has(group);
-    nodes = nodes.map((n) => (n.id === m.id ? { ...n, sub: `MCP server · ${plural(distinct, 'tool', 'tools')} · ${calls.toLocaleString()} calls${open ? '' : ' · click to open'}` } : n));
+    nodes = nodes.map((n) => (n.id === m.id ? { ...n, sub: `MCP server · ${plural(distinct, 'tool', 'tools')} · ${calls.toLocaleString()} calls · ${open ? 'click to close' : 'click to open'}` } : n));
     if (!open) {
       const ids = new Set(tools.map((t) => t.id));
       nodes = nodes.filter((n) => !ids.has(n.id));
@@ -184,6 +198,8 @@ export function foldGraph(g: LiveGraph, expanded: Set<string>): LiveGraph {
   }
   return { ...g, nodes, edges };
 }
+
+const DIRECT_ORDER = [...GROUPS.map((g) => g.key), 'routine'];
 
 export function toFlow(g0: LiveGraph, endpointById: Map<string, EndpointRow>, o: { selected?: string | null; compact?: boolean; expanded?: Set<string> }): { nodes: GNode[]; edges: GEdge[] } {
   const g = foldGraph(g0, o.expanded ?? new Set());
@@ -201,45 +217,37 @@ export function toFlow(g0: LiveGraph, endpointById: Map<string, EndpointRow>, o:
     pos.set(m.id, [0, ys.length ? ys.reduce((t, y) => t + y, 0) / ys.length : 0]);
   }
 
-  // Group targets; within a group the busiest first and "+N more" last.
   const groups = new Map<string, LiveNode[]>();
   for (const t of targets) {
     const k = t.group ?? t.targetKind ?? 'more';
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k)!.push(t);
   }
-  // the Files header first, "+N more" last, the busiest in between
-  const rank = (n: LiveNode) => (n.id === FILES ? -1 : n.targetKind === 'more' ? 1 : 0);
+  // the group's own node first, "+N more" last, the busiest in between
+  const rank = (n: LiveNode) => (isGroupNode(n.id) ? -1 : n.targetKind === 'more' ? 1 : 0);
   for (const list of groups.values()) list.sort((a, b) => rank(a) - rank(b) || b.count - a.count || a.label.localeCompare(b.label));
-  const direct = [...groups.keys()].filter((k) => !k.startsWith('mcp:') && k !== FILE_LIST)
+  const direct = [...groups.keys()].filter((k) => !k.startsWith('mcp:'))
     .sort((a, b) => (DIRECT_ORDER.indexOf(a) + 1 || 99) - (DIRECT_ORDER.indexOf(b) + 1 || 99));
 
-  const ROW = o.compact ? 54 : 60, GAP = ROW * 0.7, X1 = 700, X2 = 1010;
+  // One column of group nodes; an open group (or MCP server) reserves rows
+  // for its members, listed beside it in up to 10-row columns.
+  const ROW = o.compact ? 54 : 60, GAP = ROW * 0.35, X1 = 700, X2 = 1010, COLW = 300, MAXROWS = 10;
   let y = 0;
   const placed: [string, number, number][] = [];
+  const block = (headId: string, members: LiveNode[]) => {
+    const rows = Math.max(1, Math.min(MAXROWS, members.length));
+    placed.push([headId, X1, y + ((rows - 1) * ROW) / 2]);
+    members.forEach((t, i) => placed.push([t.id, X2 + Math.floor(i / rows) * COLW, y + (i % rows) * ROW]));
+    y += rows * ROW + GAP;
+  };
   for (const k of direct) {
-    for (const t of groups.get(k)!) { placed.push([t.id, X1, y]); y += ROW; }
-    y += GAP;
+    const list = groups.get(k)!;
+    if (isGroupNode(list[0].id)) block(list[0].id, list.slice(1));
+    else for (const t of list) { placed.push([t.id, X1, y]); y += ROW + GAP; }
   }
-  for (const m of mcps) {
-    const tools = groups.get(`mcp:${m.label}`) ?? [];
-    const h = Math.max(1, tools.length);
-    placed.push([m.id, X1, y + ((h - 1) * ROW) / 2]);
-    tools.forEach((t, i) => placed.push([t.id, X2, y + i * ROW]));
-    y += h * ROW + GAP;
-  }
+  for (const m of mcps) block(m.id, groups.get(`mcp:${m.label}`) ?? []);
   const mid = (y - GAP - ROW) / 2;
   for (const [id, x, py] of placed) pos.set(id, [x, py - mid]);
-  // open files: a grid of up to 10 rows to the right of the Files node
-  const list = groups.get(FILE_LIST) ?? [];
-  if (list.length && pos.has(FILES)) {
-    const [, fy] = pos.get(FILES)!;
-    const rows = Math.min(10, list.length);
-    list.forEach((t, i) => pos.set(t.id, [X2 + Math.floor(i / rows) * 300, fy + (i % rows - (rows - 1) / 2) * ROW]));
-    // open MCP tools move right of the file grid so the two never overlap
-    const shift = Math.ceil(list.length / rows) * 300;
-    for (const t of targets) if (t.group?.startsWith('mcp:') && pos.has(t.id)) { const [x, py] = pos.get(t.id)!; pos.set(t.id, [x + shift, py]); }
-  }
 
   const sel = o.selected && g.nodes.some((n) => n.id === o.selected) ? o.selected : null;
   const near = new Set<string>();
@@ -296,14 +304,14 @@ function signature(g: LiveGraph): string {
 export function LiveGraphCanvas({ data, selected, onSelect, height, compact, interactive = true, background, expanded, onToggle }: {
   data: LiveGraphData; selected?: string | null; onSelect?: (id: string | null) => void; height: number | string;
   compact?: boolean; interactive?: boolean; background?: boolean;
-  /** Open groups ("file", "mcp:<server>"); clicking the Files node or an MCP server toggles them. */
+  /** Open groups (GROUPS keys, "mcp:<server>"); clicking a group node or an MCP server toggles it. */
   expanded?: Set<string>; onToggle?: (group: string) => void;
 }) {
   const { graph, endpointById } = data;
   const open = useMemo(() => expanded ?? new Set<string>(), [expanded]);
   const { nodes, edges } = useMemo(() => toFlow(graph, endpointById, { selected, compact, expanded: open }), [graph, endpointById, selected, compact, open]);
   const select = (id: string | null) => {
-    if (id === FILES) { onToggle?.('file'); return; }
+    if (id && isGroupNode(id)) { onToggle?.(id.slice(4)); return; }
     const n = id ? graph.nodes.find((x) => x.id === id) : undefined;
     if (n?.kind === 'mcp') onToggle?.(`mcp:${n.label}`);
     onSelect?.(id);
