@@ -133,7 +133,7 @@ export const GROUPS: { key: string; label: string; icon: string; warn?: boolean 
   { key: 'file', label: 'File System', icon: 'file' },
   { key: 'tool', label: 'Agent Tools', icon: 'hook' },
 ];
-const GROUP_BY_KEY = new Map(GROUPS.map((g) => [g.key, g]));
+const GROUP_BY_KEY = new Map([...GROUPS, { key: 'mcp', label: 'MCP Servers', icon: 'plug' }].map((g) => [g.key, g]));
 export const groupNodeId = (k: string) => `grp:${k}`;
 const isGroupNode = (id: string) => id.startsWith('grp:');
 
@@ -188,21 +188,45 @@ export function foldGraph(g: LiveGraph, expanded: Set<string>): LiveGraph {
           : `${actionsOf(inEdges.filter((e) => e.target === n.id))} · ${n.sub}` })));
     }
   }
-  // MCP servers: tools hidden until the server is opened
-  for (const m of g.nodes.filter((n) => n.kind === 'mcp')) {
-    const group = `mcp:${m.label}`;
-    const tools = g.nodes.filter((n) => n.group === group);
-    const calls = tools.reduce((t, n) => t + n.count, 0);
-    const distinct = tools.reduce((t, n) => t + (n.targetKind === 'more' ? n.hiddenCount ?? 0 : 1), 0);
-    const open = expanded.has(group);
-    // a server whose every call was stopped has no tools left here: they're under Blocked & Waiting
-    const sub = distinct === 0 ? 'MCP server · calls under Blocked & Waiting'
-      : `MCP server · ${plural(distinct, 'tool', 'tools')} · ${calls.toLocaleString()} calls · ${open ? 'click to close' : 'click to open'}`;
-    nodes = nodes.map((n) => (n.id === m.id ? { ...n, sub } : n));
-    if (!open) {
-      const ids = new Set(tools.map((t) => t.id));
-      nodes = nodes.filter((n) => !ids.has(n.id));
-      edges = edges.filter((e) => !ids.has(e.target));
+  // MCP: every server under one "MCP Servers" node. Open it to list the
+  // servers; open a server to list its tools beside it. No edges inside.
+  const servers = g.nodes.filter((n) => n.kind === 'mcp');
+  if (servers.length) {
+    const serverIds = new Set(servers.map((n) => n.id));
+    const toolIds = new Set(g.nodes.filter((n) => n.group?.startsWith('mcp:')).map((n) => n.id));
+    const intoServers = g.edges.filter((e) => serverIds.has(e.target));
+    const open = expanded.has('mcp');
+    const callsOf = (m: LiveNode) => g.nodes.filter((n) => n.group === `mcp:${m.label}`).reduce((t, n) => t + n.count, 0);
+    const busiest = [...servers].sort((a, b) => b.count - a.count);
+    const names = busiest.slice(0, 3).map((n) => n.label);
+    const sum = (k: 'count' | 'allowed' | 'blocked' | 'wouldBlock') => servers.reduce((t, n) => t + n[k], 0);
+    const head: LiveNode = {
+      id: groupNodeId('mcp'), kind: 'target', targetKind: 'tool', group: 'mcp', full: 'MCP Servers', label: `MCP Servers (${servers.length})`,
+      eventIds: servers.flatMap((n) => n.eventIds).sort((a, b) => b - a).slice(0, 60), lastAt: Math.max(...servers.map((n) => n.lastAt)),
+      count: sum('count'), allowed: sum('allowed'), blocked: sum('blocked'), wouldBlock: sum('wouldBlock'),
+      sub: `${names.join(', ')}${servers.length > 3 ? ` +${servers.length - 3}` : ''} · ${open ? 'click to close' : 'click to open'}`,
+    };
+    const agg = new Map<string, LiveEdge>();
+    for (const e of intoServers) {
+      const key = `${e.source}|${e.outcome}`;
+      const a = agg.get(key);
+      if (a) { a.count += e.count; a.lastAt = Math.max(a.lastAt, e.lastAt); }
+      else agg.set(key, { ...e, id: `e:${key}:mcp`, target: head.id, action: 'mcp' });
+    }
+    edges = edges.filter((e) => !serverIds.has(e.target) && !serverIds.has(e.source)).concat([...agg.values()]);
+    nodes = nodes.filter((n) => !serverIds.has(n.id) && !toolIds.has(n.id));
+    nodes.push(head);
+    if (open) {
+      for (const m of busiest) {
+        const tools = g.nodes.filter((n) => n.group === `mcp:${m.label}`);
+        const distinct = tools.reduce((t, n) => t + (n.targetKind === 'more' ? n.hiddenCount ?? 0 : 1), 0);
+        const serverOpen = expanded.has(`mcp:${m.label}`);
+        // a server whose every call was stopped has no tools left here: they're under Blocked & Waiting
+        const sub = distinct === 0 ? 'calls under Blocked & Waiting'
+          : `${plural(distinct, 'tool', 'tools')} · ${callsOf(m).toLocaleString()} calls · ${serverOpen ? 'click to close' : 'click to open'}`;
+        nodes.push({ ...m, sub, group: 'mcp' });
+        if (serverOpen) nodes = nodes.concat(tools);
+      }
     }
   }
   return { ...g, nodes, edges };
@@ -214,8 +238,8 @@ export function toFlow(g0: LiveGraph, endpointById: Map<string, EndpointRow>, o:
   const g = foldGraph(g0, o.expanded ?? new Set());
   const machines = g.nodes.filter((n) => n.kind === 'machine');
   const agents = machines.flatMap((m) => g.nodes.filter((a) => a.kind === 'agent' && a.endpoint === m.endpoint));
-  const mcps = g.nodes.filter((n) => n.kind === 'mcp');
-  const targets = g.nodes.filter((n) => n.kind === 'target');
+  // targets, plus the MCP servers listed inside an open "MCP Servers" group
+  const targets = g.nodes.filter((n) => n.kind === 'target' || n.kind === 'mcp');
 
   const pos = new Map<string, [number, number]>();
   const col = (ns: LiveNode[], x: number, gap: number) => ns.forEach((n, i) => pos.set(n.id, [x, (i - (ns.length - 1) / 2) * gap]));
@@ -235,7 +259,7 @@ export function toFlow(g0: LiveGraph, endpointById: Map<string, EndpointRow>, o:
   // the group's own node first, "+N more" last, the busiest in between
   const rank = (n: LiveNode) => (isGroupNode(n.id) ? -1 : n.targetKind === 'more' ? 1 : 0);
   for (const list of groups.values()) list.sort((a, b) => rank(a) - rank(b) || b.count - a.count || a.label.localeCompare(b.label));
-  const direct = [...groups.keys()].filter((k) => !k.startsWith('mcp:'))
+  const direct = [...groups.keys()].filter((k) => !k.startsWith('mcp:') && k !== 'mcp')
     .sort((a, b) => (DIRECT_ORDER.indexOf(a) + 1 || 99) - (DIRECT_ORDER.indexOf(b) + 1 || 99));
 
   // One column of group nodes; an open group (or MCP server) reserves rows
@@ -254,7 +278,25 @@ export function toFlow(g0: LiveGraph, endpointById: Map<string, EndpointRow>, o:
     if (isGroupNode(list[0].id)) block(list[0].id, list.slice(1));
     else for (const t of list) { placed.push([t.id, X1, y]); y += ROW + GAP; }
   }
-  for (const m of mcps) block(m.id, groups.get(`mcp:${m.label}`) ?? []);
+  // MCP Servers: the servers beside the head; an open server's tools beside the servers, from its row
+  const mcpList = groups.get('mcp');
+  if (mcpList?.length) {
+    const [head, ...servers] = mcpList[0].id === groupNodeId('mcp') ? mcpList : [mcpList[0], ...mcpList.slice(1)];
+    const srows = Math.max(1, Math.min(MAXROWS, servers.length));
+    const scols = Math.ceil(servers.length / srows);
+    let rows = srows;
+    const at: [string, number, number][] = [];
+    servers.forEach((m, i) => {
+      const r = i % srows;
+      at.push([m.id, X2 + Math.floor(i / srows) * COLW, y + r * ROW]);
+      const tools = groups.get(`mcp:${m.label}`) ?? [];
+      const trows = Math.max(1, Math.min(MAXROWS, tools.length));
+      tools.forEach((t, j) => at.push([t.id, X2 + (scols + Math.floor(j / trows)) * COLW, y + (r + (j % trows)) * ROW]));
+      if (tools.length) rows = Math.max(rows, r + trows);
+    });
+    placed.push([head.id, X1, y + ((Math.max(1, servers.length ? srows : 1) - 1) * ROW) / 2], ...at);
+    y += rows * ROW + GAP;
+  }
   const mid = (y - GAP - ROW) / 2;
   for (const [id, x, py] of placed) pos.set(id, [x, py - mid]);
 
@@ -270,7 +312,7 @@ export function toFlow(g0: LiveGraph, endpointById: Map<string, EndpointRow>, o:
       id: n.id, type: 'circle', position: { x: cx - size / 2, y: cy - size / 2 },
       data: {
         kind, label: n.kind === 'mcp' ? n.label : nodeLabel(n), sub: nodeSub(n, endpointById), icon: nodeIcon(n, endpointById), size,
-        tone: tone(n), labelPos: n.kind === 'target' ? 'right' : 'below',
+        tone: tone(n), labelPos: n.kind === 'target' || n.group === 'mcp' ? 'right' : 'below',
         color: n.kind === 'agent' ? agentMeta(n.agent).color : undefined,
         dim: !!sel && !near.has(n.id), selected: sel === n.id,
         risky: isRisky(n), muted: n.risk === 'routine',

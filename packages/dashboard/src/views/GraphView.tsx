@@ -251,7 +251,17 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
   // Every group (commands, risky commands, network, files, sensitive data, agent tools)
   // and each MCP server's tools start folded; clicking opens them.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const toggle = (k: string) => setExpanded((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const toggle = (k: string) => setExpanded((s) => {
+    const n = new Set(s);
+    if (n.has(k)) n.delete(k);
+    else {
+      // one MCP server's tools at a time, so their lists never overlap
+      if (k.startsWith('mcp:')) for (const x of n) if (x.startsWith('mcp:')) n.delete(x);
+      n.add(k);
+    }
+    if (k === 'mcp' && !n.has('mcp')) for (const x of [...n]) if (x.startsWith('mcp:')) n.delete(x);
+    return n;
+  });
   // an open group lists up to MAX_OPEN of its members
   const groupMax = useMemo(() => Object.fromEntries([...expanded].filter((k) => !k.startsWith('mcp:')).map((k) => [k, MAX_OPEN])), [expanded]);
   const data = useLiveGraph({ maxTargets: MAX_TARGETS, agent, showRoutine, groupMax });
@@ -297,7 +307,7 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
           <Card className="graph-card">
             <CardHead
               title={<>{agent ? agentMeta(agent).label : 'All agents'} <span className="live-chip"><span className="dot" /> Live</span></>}
-              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` The busiest ${MAX_TARGETS} of each kind are shown; the rest are under "+N more".` : ''} Activity is grouped (commands, risky commands, network, file system, sensitive data, agent tools, MCP servers) — click a group to open it.${!showRoutine && graph.routineEvents ? ' Routine activity (ls, grep, git commit, ToolSearch…) is hidden.' : ''} Click a node for its recent events.`}
+              sub={`Machines → agents → MCP servers → what they touched, from the ${data.rangeLabel}.${graph.hiddenTargets ? ` The busiest ${MAX_TARGETS} of each kind are shown; the rest are under "+N more".` : ''} Activity is grouped (blocked, risky, sensitive data, uploads, cloud, git, installs, databases, commands, network, files, agent tools, MCP servers) — click a group to open it.${!showRoutine && graph.routineEvents ? ' Routine activity (ls, grep, git commit, ToolSearch…) is hidden.' : ''} Click a node for its recent events.`}
             />
             <LiveGraphCanvas data={data} selected={selected} onSelect={setSelected} height={640} background expanded={expanded} onToggle={toggle} />
             <Legend live />
