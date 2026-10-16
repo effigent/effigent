@@ -86,7 +86,9 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   `GET|PUT /api/v1/notifications`, `POST /api/v1/notifications/test`. Notifications
   (`internal/controlplane/notify`): Slack incoming webhook per tenant (only
   `https://hooks.slack.com/services/…`, never returned by the API) and email over SMTP
-  (`EFFIGENT_SMTP_URL=smtp://user:pass@host:587` or `smtps://…:465`, `EFFIGENT_EMAIL_FROM`).
+  (`EFFIGENT_SMTP_URL=smtp://user:pass@host:587` or `smtps://…:465`), or — in production — the
+  Amazon SES API with the instance role (`EFFIGENT_SES_REGION=us-east-1`; domain effigent.ai
+  verified with Easy DKIM in Route 53), plus `EFFIGENT_EMAIL_FROM`.
   Messages link to `EFFIGENT_CONSOLE_ORIGIN/approvals?id=…`; deciding needs a console
   login (no one-click approve links). Audit: `approval.request|approve|deny`,
   `notifications.update`.

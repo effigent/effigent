@@ -61,7 +61,8 @@ func main() {
 		PublicBaseURL: envOr("EFFIGENT_PUBLIC_URL", "http://"+*listen),
 		ConsoleOrigin: os.Getenv("EFFIGENT_CONSOLE_ORIGIN"),
 		// Email for approval requests; Slack webhooks are set per tenant in the console.
-		Notify: &notify.Sender{SMTPURL: os.Getenv("EFFIGENT_SMTP_URL"), From: os.Getenv("EFFIGENT_EMAIL_FROM")},
+		Notify: &notify.Sender{SMTPURL: os.Getenv("EFFIGENT_SMTP_URL"), SESRegion: os.Getenv("EFFIGENT_SES_REGION"),
+			From: os.Getenv("EFFIGENT_EMAIL_FROM")},
 		// Local development only (e.g. a Windmill on localhost): http:// and private
 		// webhook targets. Never set in production — it reopens SSRF.
 		AllowInsecureWebhooks: os.Getenv("EFFIGENT_DEV_INSECURE_WEBHOOKS") == "1",

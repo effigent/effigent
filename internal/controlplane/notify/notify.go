@@ -1,6 +1,6 @@
 // Package notify announces approval requests: a Slack incoming webhook per
-// tenant, and email over SMTP (any provider: SES, Resend, Postmark, Google
-// Workspace…). Messages link to the console, where an approver signs in to
+// tenant, and email through the Amazon SES API (the service's own AWS role) or
+// over SMTP (any provider: Resend, Postmark, Google Workspace…). Messages link to the console, where an approver signs in to
 // decide; nothing in a message can approve by itself.
 package notify
 
@@ -20,6 +20,7 @@ import (
 	"net/smtp"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,12 +37,20 @@ type Sender struct {
 	// SMTPURL: smtp://user:pass@host:587 (STARTTLS, required unless the host
 	// is local) or smtps://user:pass@host:465 (TLS from the start).
 	SMTPURL string
-	From    string // "Effigent <approvals@effigent.ai>"
-	HTTP    *http.Client
+	// SESRegion sends through the Amazon SES API with the process's AWS role
+	// instead (used when SMTPURL is empty), e.g. "us-east-1".
+	SESRegion string
+	From      string // "Effigent <approvals@effigent.ai>"
+	HTTP      *http.Client
+
+	sesOnce sync.Once
+	ses     *sesSender
 }
 
 // EmailEnabled reports whether this server can send email.
-func (s *Sender) EmailEnabled() bool { return s != nil && s.SMTPURL != "" && s.From != "" }
+func (s *Sender) EmailEnabled() bool {
+	return s != nil && (s.SMTPURL != "" || s.SESRegion != "") && s.From != ""
+}
 
 // ValidSlackWebhook accepts only Slack's incoming-webhook URLs, so the control
 // plane never posts to an address a tenant admin picked (internal services).
@@ -120,7 +129,7 @@ func slackEscape(s string) string {
 // Email sends the message as plain text to each recipient.
 func (s *Sender) Email(ctx context.Context, to []string, m Message) error {
 	if !s.EmailEnabled() {
-		return errors.New("email is not configured on this control plane (EFFIGENT_SMTP_URL, EFFIGENT_EMAIL_FROM)")
+		return errors.New("email is not configured on this control plane (EFFIGENT_SES_REGION or EFFIGENT_SMTP_URL, and EFFIGENT_EMAIL_FROM)")
 	}
 	if len(to) == 0 {
 		return nil
@@ -133,6 +142,12 @@ func (s *Sender) Email(ctx context.Context, to []string, m Message) error {
 	from, err := mail.ParseAddress(s.From)
 	if err != nil {
 		return fmt.Errorf("EFFIGENT_EMAIL_FROM: %w", err)
+	}
+	if s.SMTPURL == "" {
+		s.sesOnce.Do(func() { s.ses = &sesSender{region: s.SESRegion} })
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return s.ses.send(ctx, from, to, render(from, to, m))
 	}
 	u, err := url.Parse(s.SMTPURL)
 	if err != nil || (u.Scheme != "smtp" && u.Scheme != "smtps") || u.Hostname() == "" {
