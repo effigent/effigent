@@ -27,6 +27,11 @@ const ACTION_LABEL: Record<string, string> = {
   'approval.approve': 'Approved a request',
   'approval.deny': 'Denied a request',
   'notifications.update': 'Changed approval notifications',
+  'api_key.create': 'Created an API key',
+  'api_key.revoke': 'Revoked an API key',
+  'webhook.create': 'Added a webhook',
+  'webhook.delete': 'Deleted a webhook',
+  'webhook.test': 'Sent a webhook test',
 };
 const actionLabel = (a: string) => ACTION_LABEL[a] ?? (a.startsWith('denied.') ? `Denied: ${a.slice(7)}` : a);
 

@@ -43,6 +43,8 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Logf("enrolled endpoint %s (%s) for %s", id, req.Info.Hostname, tenant)
+	s.emit(r.Context(), tenant, "endpoint.enrolled", map[string]any{"endpoint_id": id, "hostname": req.Info.Hostname,
+		"os": req.Info.OS, "arch": req.Info.Arch, "version": req.Info.Version})
 	s.audit(r, Principal{UserID: "endpoint:" + id, Tenant: tenant, Via: "enrollment-token"}, "endpoint.enroll", id,
 		map[string]string{"hostname": req.Info.Hostname, "os": req.Info.OS, "arch": req.Info.Arch, "version": req.Info.Version})
 	writeJSON(w, http.StatusOK, EnrollResponse{EndpointID: id, Secret: secret, Tenant: tenant,
@@ -139,6 +141,12 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 		if err := s.Store.InsertEvents(r.Context(), ep.Tenant, ep.ID, evs); err != nil {
 			s.fail(w, err)
 			return
+		}
+		for _, e := range evs {
+			if e.Type == "blocked" || e.Type == "approval_denied" {
+				s.emit(r.Context(), ep.Tenant, "action.blocked", map[string]any{"endpoint_id": ep.ID, "hostname": ep.Hostname,
+					"event": json.RawMessage(e.Body)})
+			}
 		}
 	}
 	_ = s.Store.Heartbeat(r.Context(), ep.ID, ep.PolicyVersion)

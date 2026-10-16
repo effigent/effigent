@@ -3,10 +3,13 @@
 package server
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/effigent/effigent/internal/controlplane/notify"
 	"github.com/effigent/effigent/internal/controlplane/store"
@@ -20,8 +23,16 @@ type Server struct {
 	ConsoleOrigin string         // CORS origin allowed for the console, e.g. https://app.effigent.ai
 	Notify        *notify.Sender // announces approval requests (Slack always; email when SMTP is set)
 	Logf          func(string, ...any)
+	// AllowInsecureWebhooks lets webhooks use http:// and private addresses (tests, local dev).
+	AllowInsecureWebhooks bool
+	WebhookPoll           time.Duration // how often the delivery worker looks for due events (default 2s)
 
-	limits *limits
+	limits       *limits
+	whOnce       sync.Once
+	whCap        *capLimiter
+	whClientOnce sync.Once
+	whClient     *http.Client
+	workerOnce   sync.Once
 }
 
 func (s *Server) publicKey() ed25519.PublicKey { return s.Key.Public().(ed25519.PublicKey) }
@@ -29,6 +40,15 @@ func (s *Server) publicKey() ed25519.PublicKey { return s.Key.Public().(ed25519.
 func (s *Server) Handler() http.Handler {
 	if s.limits == nil {
 		s.limits = newLimits()
+	}
+	if s.Store != nil {
+		s.workerOnce.Do(func() { go s.runWebhooks(context.Background()) })
+		if s.Auth != nil && s.Auth.APIKeys == nil {
+			s.Auth.APIKeys = func(ctx context.Context, secret string) (string, string, []string, error) {
+				k, err := s.Store.AuthAPIKey(ctx, secret)
+				return k.Tenant, k.ID, k.Scopes, err
+			}
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -44,22 +64,32 @@ func (s *Server) Handler() http.Handler {
 
 	// console API
 	mux.HandleFunc("GET /api/v1/me", s.console(read, s.me))
-	mux.HandleFunc("POST /api/v1/enrollment-tokens", s.console(write, s.createEnrollmentToken))
+	mux.HandleFunc("POST /api/v1/enrollment-tokens", s.scoped("endpoints", write, s.createEnrollmentToken))
 	mux.HandleFunc("GET /api/v1/endpoints", s.console(read, s.listEndpoints))
-	mux.HandleFunc("DELETE /api/v1/endpoints/{id}", s.console(write, s.revokeEndpoint))
-	mux.HandleFunc("PATCH /api/v1/endpoints/{id}", s.console(write, s.setEndpointOwner))
+	mux.HandleFunc("DELETE /api/v1/endpoints/{id}", s.scoped("endpoints", write, s.revokeEndpoint))
+	mux.HandleFunc("PATCH /api/v1/endpoints/{id}", s.scoped("endpoints", write, s.setEndpointOwner))
 	mux.HandleFunc("GET /api/v1/endpoints/{id}/policy", s.console(read, s.endpointCompiledPolicy))
 	mux.HandleFunc("GET /api/v1/policy", s.console(read, s.getPolicy))
-	mux.HandleFunc("PUT /api/v1/policy", s.console(write, s.putPolicy))
+	mux.HandleFunc("PUT /api/v1/policy", s.scoped("policy", write, s.putPolicy))
 	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))
 	mux.HandleFunc("GET /api/v1/events", s.console(read, s.listEvents))
 	mux.HandleFunc("GET /api/v1/audit", s.console(read, s.listAudit))
 	mux.HandleFunc("GET /api/v1/audit/verify", s.console(read, s.verifyAudit))
 	mux.HandleFunc("GET /api/v1/approvals", s.console(read, s.listApprovals))
-	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.console(write, s.decideApproval))
+	mux.HandleFunc("GET /api/v1/approvals/{id}", s.console(read, s.getApproval))
+	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.scoped("approvals", write, s.decideApproval))
 	mux.HandleFunc("GET /api/v1/notifications", s.console(read, s.getNotifications))
 	mux.HandleFunc("PUT /api/v1/notifications", s.console(write, s.putNotifications))
 	mux.HandleFunc("POST /api/v1/notifications/test", s.console(write, s.testNotifications))
+	// integrations: API keys and webhooks are managed by people only
+	mux.HandleFunc("GET /api/v1/api-keys", s.console(read, s.listAPIKeys))
+	mux.HandleFunc("POST /api/v1/api-keys", s.console(write, s.createAPIKey))
+	mux.HandleFunc("DELETE /api/v1/api-keys/{id}", s.console(write, s.revokeAPIKey))
+	mux.HandleFunc("GET /api/v1/webhooks", s.console(read, s.listWebhooks))
+	mux.HandleFunc("POST /api/v1/webhooks", s.console(write, s.createWebhook))
+	mux.HandleFunc("DELETE /api/v1/webhooks/{id}", s.console(write, s.deleteWebhook))
+	mux.HandleFunc("POST /api/v1/webhooks/{id}/test", s.console(write, s.testWebhook))
+	mux.HandleFunc("GET /api/v1/webhooks/{id}/deliveries", s.console(read, s.listDeliveries))
 	return s.rateLimitIP(s.cors(mux))
 }
 

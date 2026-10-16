@@ -87,6 +87,7 @@ func (s *Server) requestApproval(w http.ResponseWriter, r *http.Request, ep stor
 		s.audit(r, Principal{UserID: "endpoint:" + ep.ID, Tenant: ep.Tenant, Via: "endpoint"}, "approval.request", a.ID,
 			map[string]any{"agent": a.Agent, "rule": a.Rule, "summary": a.Summary, "hostname": a.Hostname})
 		resp.Notified = s.announce(context.WithoutCancel(r.Context()), a)
+		s.emit(context.WithoutCancel(r.Context()), ep.Tenant, "approval.requested", s.approvalEvent(a))
 	}
 
 	wait := min(time.Duration(req.WaitSeconds)*time.Second, MaxApprovalWait)
@@ -228,7 +229,33 @@ func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, p Princi
 		s.fail(w, err)
 		return
 	}
+	s.emit(r.Context(), p.Tenant, "approval.decided", s.approvalEvent(a))
 	s.audit(r, p, "approval."+req.Decision, a.ID, map[string]any{"summary": a.Summary, "hostname": a.Hostname, "rule": a.Rule, "note": a.Note})
+	writeJSON(w, http.StatusOK, a)
+}
+
+// approvalEvent is a webhook's data for an approval: the request and where to review it.
+func (s *Server) approvalEvent(a store.Approval) map[string]any {
+	d := map[string]any{"approval": a}
+	if s.ConsoleOrigin != "" {
+		d["review_url"] = s.ConsoleOrigin + "/approvals?id=" + a.ID
+	}
+	return d
+}
+
+// getApproval returns one request, so automations can re-check it before acting.
+func (s *Server) getApproval(w http.ResponseWriter, r *http.Request, p Principal) {
+	a, err := s.Store.GetApproval(r.Context(), p.Tenant, r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "no such approval request")
+		return
+	} else if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if a.State == store.ApprovalPending && !a.ExpiresAt.After(time.Now()) {
+		a.State = store.ApprovalExpired
+	}
 	writeJSON(w, http.StatusOK, a)
 }
 

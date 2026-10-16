@@ -1,0 +1,171 @@
+{
+  "summary": "Effigent: approve agent actions in Slack or Teams",
+  "description": "Triggered by an Effigent webhook (approval.requested). Re-reads the request from Effigent, posts it to Slack and/or Microsoft Teams with Approve / Deny buttons, waits, and sends the decision back. Set the Slack/Teams target in the 'ask' step and the Effigent resource (default f/effigent/workspace) in 'current' and 'decide'. A timeout does nothing: the request expires in Effigent and the action stays blocked.",
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": "string",
+        "description": "Effigent event type (sent by the webhook)"
+      },
+      "data": {
+        "type": "object",
+        "description": "Effigent event data (sent by the webhook)"
+      },
+      "id": {
+        "type": "string",
+        "description": "Effigent event id (sent by the webhook)"
+      }
+    },
+    "required": [
+      "type"
+    ]
+  },
+  "value": {
+    "modules": [
+      {
+        "id": "check",
+        "summary": "Only approval requests",
+        "value": {
+          "type": "rawscript",
+          "language": "bun",
+          "content": "export async function main(type: string, data: any) {\n  if (type !== \"approval.requested\") return null;\n  return data?.approval?.id ?? null;\n}\n",
+          "input_transforms": {
+            "type": {
+              "type": "javascript",
+              "expr": "flow_input.type"
+            },
+            "data": {
+              "type": "javascript",
+              "expr": "flow_input.data"
+            }
+          }
+        },
+        "stop_after_if": {
+          "expr": "result === null",
+          "skip_if_stopped": true
+        }
+      },
+      {
+        "id": "current",
+        "summary": "Re-read the request from Effigent (never trust the webhook body alone)",
+        "value": {
+          "type": "script",
+          "path": "f/effigent/get_approval",
+          "input_transforms": {
+            "effigent": {
+              "type": "static",
+              "value": "$res:f/effigent/workspace"
+            },
+            "approval_id": {
+              "type": "javascript",
+              "expr": "results.check"
+            }
+          }
+        },
+        "stop_after_if": {
+          "expr": "result.state !== \"pending\"",
+          "skip_if_stopped": true
+        }
+      },
+      {
+        "id": "ask",
+        "summary": "Ask in Slack / Teams and wait (set the Slack resource + channel, or the Teams team + channel, here)",
+        "value": {
+          "type": "rawscript",
+          "language": "bun",
+          "content": "import * as wmill from \"windmill-client\";\n\nconst AGENTS: Record<string, string> = { \"claude-code\": \"Claude Code\", codex: \"Codex\", \"gemini-cli\": \"Gemini CLI\" };\n\nexport async function main(approval: any, review_url = \"\", slack_resource_path = \"\", slack_channel = \"\", teams_team = \"\", teams_channel = \"\") {\n  const who = approval.os_user ? `${approval.os_user} on ${approval.hostname}` : approval.hostname;\n  const message = [\n    `Effigent: ${AGENTS[approval.agent] ?? approval.agent} (${who}) is waiting for approval`,\n    approval.summary,\n    `Why: ${approval.reason}`,\n    `Request ${approval.id}${review_url ? ` \u00b7 ${review_url}` : \"\"}`,\n  ].join(\"\\n\");\n  if (slack_resource_path && slack_channel) {\n    await wmill.requestInteractiveSlackApproval({ slackResourcePath: slack_resource_path, channelId: slack_channel, message });\n  }\n  if (teams_team && teams_channel) {\n    await wmill.requestInteractiveTeamsApproval({ teamName: teams_team, channelName: teams_channel, message });\n  }\n  const urls = await wmill.getResumeUrls();\n  return { message, approval_page: urls.approvalPage };\n}\n",
+          "input_transforms": {
+            "approval": {
+              "type": "javascript",
+              "expr": "results.current"
+            },
+            "review_url": {
+              "type": "javascript",
+              "expr": "flow_input.data?.review_url ?? \"\""
+            },
+            "slack_resource_path": {
+              "type": "static",
+              "value": ""
+            },
+            "slack_channel": {
+              "type": "static",
+              "value": ""
+            },
+            "teams_team": {
+              "type": "static",
+              "value": ""
+            },
+            "teams_channel": {
+              "type": "static",
+              "value": ""
+            }
+          }
+        },
+        "suspend": {
+          "required_events": 1,
+          "timeout": 3600,
+          "continue_on_disapprove_timeout": true
+        }
+      },
+      {
+        "id": "decision",
+        "summary": "Approve, deny, or let it expire",
+        "value": {
+          "type": "rawscript",
+          "language": "bun",
+          "content": "export async function main(resume: any, resumes: any[], approvers: string[]) {\n  const err = resume?.error?.name;\n  // timed out: do nothing; the request expires in Effigent and the action stays blocked\n  if (err && err !== \"SuspendedDisapproved\") return { decision: \"skip\" };\n  const note = (err ? (resumes ?? []).find((r) => r && !r.error)?.note : resume?.note) ?? \"\";\n  return { decision: err ? \"deny\" : \"approve\", approver: (approvers ?? []).join(\", \"), note };\n}\n",
+          "input_transforms": {
+            "resume": {
+              "type": "javascript",
+              "expr": "resume"
+            },
+            "resumes": {
+              "type": "javascript",
+              "expr": "resumes"
+            },
+            "approvers": {
+              "type": "javascript",
+              "expr": "approvers"
+            }
+          }
+        },
+        "stop_after_if": {
+          "expr": "result.decision === \"skip\"",
+          "skip_if_stopped": true
+        }
+      },
+      {
+        "id": "decide",
+        "summary": "Send the decision to Effigent",
+        "value": {
+          "type": "script",
+          "path": "f/effigent/decide_approval",
+          "input_transforms": {
+            "effigent": {
+              "type": "static",
+              "value": "$res:f/effigent/workspace"
+            },
+            "approval_id": {
+              "type": "javascript",
+              "expr": "results.current.id"
+            },
+            "decision": {
+              "type": "javascript",
+              "expr": "results.decision.decision"
+            },
+            "approver": {
+              "type": "javascript",
+              "expr": "results.decision.approver ? `${results.decision.approver} (via Windmill)` : \"Windmill\""
+            },
+            "note": {
+              "type": "javascript",
+              "expr": "results.decision.note"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

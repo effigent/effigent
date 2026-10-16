@@ -91,10 +91,31 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   login (no one-click approve links). Audit: `approval.request|approve|deny`,
   `notifications.update`.
 
+## 2c. Integrations (API keys, webhooks)
+
+- **API keys** (`efk_…`, sha256 in `cp.api_keys`): scopes `read` (every GET; always
+  added), `approvals` (decide), `endpoints` (enroll tokens, revoke, owner), `policy`
+  (publish). Routes opt in with `s.scoped("<scope>", write, h)`; `s.console(write, h)`
+  stays people-only (keys, webhooks, notifications). Principal `apikey:<id>`, via `api-key`.
+- **Webhooks** (`cp.webhooks`, migration 005): https only; private/loopback/link-local/
+  CGNAT refused on the dialed address (DNS rebinding), no redirects; the URL may carry
+  the receiver's token and is never returned (`url_hint`). Signed
+  `X-Effigent-Signature: t=<unix>,v1=hex(HMAC-SHA256(secret, "t.body"))`, secret shown once.
+  Events: approval.requested, approval.decided, action.blocked (opt-in, 60/min cap,
+  `dropped` counter), endpoint.enrolled, endpoint.revoked, policy.published, test.
+  `emit()` only enqueues (`cp.webhook_deliveries`); the worker (started by `Handler()`)
+  claims due rows with `for update skip locked` + a 60s lease and retries 10s, 1m, 5m,
+  30m, 2h, 6h; 4xx except 408/429 are final. `EFFIGENT_DEV_INSECURE_WEBHOOKS=1` (local
+  only) allows http:// and private targets.
+- `GET /api/v1/approvals/{id}` lets automations re-check a request before acting.
+- `integrations/windmill/`: resource type, scripts, and the Slack/Teams approval flow
+  (tested against Windmill CE v1.837 locally; Slack/Teams buttons not exercised).
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
   endpoint secret (`eps_…`, hashed) used as Bearer on `/ep/v1/*`. Revocation via console.
+- API keys: see 2c.
 - Console API: Clerk session JWT (verified via `CLERK_ISSUER`/.well-known/jwks.json;
   tenant = `org:<id>` or `user:<id>`, same refs as v1 `tenants.clerk_ref`), or
   `EFFIGENT_ADMIN_TOKEN` + `X-Effigent-Tenant` for automation.

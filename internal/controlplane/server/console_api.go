@@ -61,6 +61,7 @@ func (s *Server) revokeEndpoint(w http.ResponseWriter, r *http.Request, p Princi
 		return
 	}
 	s.audit(r, p, "endpoint.revoke", r.PathValue("id"), nil)
+	s.emit(r.Context(), p.Tenant, "endpoint.revoked", map[string]any{"endpoint_id": r.PathValue("id"), "by": p.UserID})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -123,6 +124,7 @@ func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, p Principal) 
 		s.Logf("policy v%d (%d central policies) published for %s by %s", v, len(ps), p.Tenant, p.UserID)
 		s.audit(r, p, "policy.publish", fmt.Sprintf("v%d", v), map[string]any{"version": v, "comment": req.Comment,
 			"bytes": len(req.Body), "policies": len(ps), "unsupported": len(rep.Unsupported)})
+		s.emit(r.Context(), p.Tenant, "policy.published", map[string]any{"version": v, "comment": req.Comment, "by": p.UserID, "central_policies": len(ps)})
 		writeJSON(w, http.StatusOK, map[string]any{"version": v, "report": rep})
 		return
 	}
@@ -137,6 +139,7 @@ func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, p Principal) 
 	}
 	s.Logf("policy v%d published for %s by %s", v, p.Tenant, p.UserID)
 	s.audit(r, p, "policy.publish", fmt.Sprintf("v%d", v), map[string]any{"version": v, "comment": req.Comment, "bytes": len(req.Body)})
+	s.emit(r.Context(), p.Tenant, "policy.published", map[string]any{"version": v, "comment": req.Comment, "by": p.UserID})
 	writeJSON(w, http.StatusOK, map[string]any{"version": v})
 }
 

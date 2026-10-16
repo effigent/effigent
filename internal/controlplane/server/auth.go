@@ -17,8 +17,16 @@ type Principal struct {
 	UserID string `json:"user_id"`
 	Tenant string `json:"tenant"` // Clerk ref: "org:<id>" or "user:<id>"
 	Role   string `json:"role"`
-	Via    string `json:"via"` // "clerk" | "admin-token"
+	Via    string `json:"via"` // "clerk" | "admin-token" | "api-key"
+	// Scopes limit an API key: read, approvals, endpoints, policy.
+	Scopes []string `json:"scopes,omitempty"`
 }
+
+// API key scopes. "read" covers every GET; the others are what a key may change.
+var apiKeyScopes = []string{"read", "approvals", "endpoints", "policy"}
+
+// APIKeyLookup resolves an `efk_` key (the store's AuthAPIKey).
+type APIKeyLookup func(ctx context.Context, secret string) (tenant, id string, scopes []string, err error)
 
 // Authenticator accepts Clerk session JWTs (verified against the instance's
 // JWKS) and, for automation, a static admin token plus X-Effigent-Tenant.
@@ -33,6 +41,8 @@ type Authenticator struct {
 	// authorizedParties, when set, are the only origins whose Clerk session
 	// tokens are accepted (Clerk's "azp" claim), e.g. https://app.effigent.ai.
 	authorizedParties map[string]bool
+	// APIKeys resolves workspace API keys; nil disables them.
+	APIKeys APIKeyLookup
 }
 
 // Options configures NewAuthenticator.
@@ -85,6 +95,16 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, error) {
 	if !ok || tok == "" {
 		return Principal{}, errors.New("missing bearer token")
 	}
+	if strings.HasPrefix(tok, "efk_") {
+		if a.APIKeys == nil {
+			return Principal{}, errors.New("API keys are not enabled")
+		}
+		tenant, id, scopes, err := a.APIKeys(r.Context(), tok)
+		if err != nil {
+			return Principal{}, errors.New("invalid or revoked API key")
+		}
+		return Principal{UserID: "apikey:" + id, Tenant: tenant, Role: "api_key", Via: "api-key", Scopes: scopes}, nil
+	}
 	if a.adminToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(a.adminToken)) == 1 {
 		tenant := r.Header.Get("X-Effigent-Tenant")
 		if tenant == "" {
@@ -134,7 +154,25 @@ const (
 	write
 )
 
+// HasScope reports whether an API key principal carries scope.
+func (p Principal) HasScope(scope string) bool {
+	for _, s := range p.Scopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// console guards a console API route for people (Clerk sessions, the admin
+// token). API keys get only what scoped() opens to them.
 func (s *Server) console(need access, next func(http.ResponseWriter, *http.Request, Principal)) http.HandlerFunc {
+	return s.scoped("", need, next)
+}
+
+// scoped guards a route that API keys with `scope` may also call ("read"
+// for reads). scope "" keeps API keys out (keys, webhooks, notifications).
+func (s *Server) scoped(scope string, need access, next func(http.ResponseWriter, *http.Request, Principal)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.Auth.Authenticate(r)
 		if err != nil {
@@ -143,6 +181,24 @@ func (s *Server) console(need access, next func(http.ResponseWriter, *http.Reque
 		}
 		if ok, wait := s.limits.console.allow("user:" + p.Tenant + "/" + p.UserID); !ok {
 			tooMany(w, wait)
+			return
+		}
+		if p.Via == "api-key" {
+			want := scope
+			if need == read && want == "" {
+				want = "read"
+			}
+			if scope == "" && need == write {
+				s.audit(r, p, "denied."+r.Method+" "+r.URL.Path, "", nil)
+				writeErr(w, http.StatusForbidden, "API keys can't do this; sign in to the console")
+				return
+			}
+			if !p.HasScope(want) {
+				s.audit(r, p, "denied."+r.Method+" "+r.URL.Path, "", map[string]any{"needs_scope": want})
+				writeErr(w, http.StatusForbidden, "this API key needs the "+want+" scope")
+				return
+			}
+			next(w, r, p)
 			return
 		}
 		if need == write && !p.CanWrite() {

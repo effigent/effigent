@@ -1,0 +1,12 @@
+{
+  "name": "effigent",
+  "description": "An Effigent workspace: the control plane URL and an API key (console: Settings > Integrations).",
+  "schema": {
+    "type": "object",
+    "required": ["api_key"],
+    "properties": {
+      "base_url": { "type": "string", "default": "https://api.effigent.ai", "description": "Effigent control plane" },
+      "api_key": { "type": "string", "description": "efk_… key; give it the approvals scope to decide requests" }
+    }
+  }
+}

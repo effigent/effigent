@@ -43,6 +43,12 @@ export function createFixtureApi(): Api {
   const iso = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString();
   const me: ApiMe = { user_id: 'user_demo', tenant: 'org:demo', role: 'admin', via: 'clerk' };
   let version = 3;
+  let apiKeys: { id: string; name: string; prefix: string; scopes: string[]; created_by: string; created_at: string; expires_at: null; last_used_at: string | null; revoked: boolean }[] = [
+    { id: 'key-1', name: 'windmill', prefix: 'efk_3f9a1c2e', scopes: ['approvals', 'read'], created_by: me.user_id, created_at: iso(60 * 24 * 3), expires_at: null, last_used_at: iso(4), revoked: false },
+  ];
+  let webhooks: { id: string; name: string; url_hint: string; events: string[]; enabled: boolean; created_at: string; last_status: number | null; last_error: string; last_attempt_at: string | null; dropped: number }[] = [
+    { id: 'wh-1', name: 'windmill approvals', url_hint: 'https://app.windmill.dev/…', events: ['approval.requested', 'approval.decided'], enabled: true, created_at: iso(60 * 24 * 3), last_status: 200, last_error: '', last_attempt_at: iso(4), dropped: 0 },
+  ];
   let notifications: ApiNotifications = { slack_webhook_set: true, slack_webhook_hint: '…demo', emails: ['security@acme.example'], email_available: true };
   let policy: ApiPolicyVersion = { version, body: DEMO_POLICY, comment: 'deny curl/wget/nc for every agent', created_by: me.user_id, created_at: iso(240) };
   const history: ApiPolicyVersion[] = [
@@ -84,6 +90,9 @@ export function createFixtureApi(): Api {
       if (p === '/audit/verify') return delay({ ok: true, entries: audit.length, head: audit[audit.length - 1]?.hash }) as Promise<T>;
       if (p === '/approvals') return delay([]) as Promise<T>; // the demo queue reads the sample store
       if (p === '/notifications') return delay(notifications) as Promise<T>;
+      if (p === '/api-keys') return delay(apiKeys) as Promise<T>;
+      if (p === '/webhooks') return delay(webhooks) as Promise<T>;
+      if (/^\/webhooks\/[^/]+\/deliveries$/.test(p)) return delay([]) as Promise<T>;
       return Promise.reject(new ApiError(404, 'not found'));
     },
     send<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -114,6 +123,37 @@ export function createFixtureApi(): Api {
         if (b.emails) notifications = { ...notifications, emails: b.emails };
         log('notifications.update', 'approvals', { slack_webhook_set: notifications.slack_webhook_set, emails: notifications.emails });
         return delay(notifications) as Promise<T>;
+      }
+      if (method === 'POST' && path === '/api-keys') {
+        const b = (body ?? {}) as { name?: string; scopes?: string[] };
+        if (!b.name) return Promise.reject(new ApiError(400, 'give the key a name (e.g. windmill)'));
+        const key = `efk_demo_${Math.random().toString(36).slice(2, 14)}`; // not a real key
+        const k = { id: `key-${apiKeys.length + 1}`, name: b.name, prefix: key.slice(0, 12), scopes: [...new Set([...(b.scopes ?? []), 'read'])],
+          created_by: me.user_id, created_at: new Date().toISOString(), expires_at: null, last_used_at: null, revoked: false };
+        apiKeys = [k, ...apiKeys];
+        log('api_key.create', k.id, { name: k.name, scopes: k.scopes });
+        return delay({ ...k, key }) as Promise<T>;
+      }
+      if (method === 'DELETE' && path.startsWith('/api-keys/')) {
+        apiKeys = apiKeys.map((k) => (k.id === path.slice(10) ? { ...k, revoked: true } : k));
+        log('api_key.revoke', path.slice(10), null);
+        return delay({ ok: true }) as Promise<T>;
+      }
+      if (method === 'POST' && path === '/webhooks') {
+        const b = (body ?? {}) as { name?: string; url?: string; events?: string[] };
+        if (!b.url?.startsWith('https://')) return Promise.reject(new ApiError(400, 'webhooks must use https'));
+        const h = { id: `wh-${webhooks.length + 1}`, name: b.name ?? '', url_hint: `https://${new URL(b.url).host}/…`, events: b.events ?? [],
+          enabled: true, created_at: new Date().toISOString(), last_status: null, last_error: '', last_attempt_at: null, dropped: 0 };
+        webhooks = [...webhooks, h];
+        log('webhook.create', h.id, { name: h.name, url: h.url_hint, events: h.events });
+        return delay({ ...h, secret: 'whsec_demo_not_a_real_secret' }) as Promise<T>;
+      }
+      if (method === 'DELETE' && path.startsWith('/webhooks/')) {
+        webhooks = webhooks.filter((h) => h.id !== path.slice(10));
+        return delay({ ok: true }) as Promise<T>;
+      }
+      if (method === 'POST' && /^\/webhooks\/[^/]+\/test$/.test(path)) {
+        return delay({ ok: true, status: 200 }) as Promise<T>; // Demo Mode: nothing is sent
       }
       if (method === 'POST' && path === '/notifications/test') {
         return delay({ ...(notifications.slack_webhook_set ? { slack: 'sent (Demo Mode: nothing was posted)' } : {}),
