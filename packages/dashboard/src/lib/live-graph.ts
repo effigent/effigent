@@ -92,6 +92,56 @@ export interface Classified {
   rule?: string; // the risky-list entry that matched
   /** Files: credentials, keys, secrets (SENSITIVE), or reported / matched by a file rule. */
   sensitive?: boolean;
+  /** Commands: what kind of work (commandCategory): uploads, databases, cloud, packages, git. */
+  category?: CommandCategory;
+}
+
+export type CommandCategory = 'uploads' | 'databases' | 'cloud' | 'packages' | 'git';
+
+const CLOUD = new Set(['gcloud', 'gsutil', 'bq', 'aws', 'az', 'kubectl', 'helm', 'terraform', 'tofu', 'pulumi', 'firebase', 'vercel', 'netlify',
+  'fly', 'flyctl', 'heroku', 'wrangler', 'eksctl', 'ansible', 'ansible-playbook', 'serverless', 'sls', 'cdk', 'sam', 'doctl', 'railway', 'supabase']);
+const GIT = new Set(['git', 'gh', 'glab', 'hub']);
+const DATABASES = new Set(['psql', 'mysql', 'mariadb', 'mongo', 'mongosh', 'redis-cli', 'sqlite3', 'clickhouse-client', 'cqlsh', 'pg_dump',
+  'pg_restore', 'mysqldump', 'mongodump', 'mongoexport', 'mongoimport']);
+const INSTALLS: Record<string, RegExp> = {
+  npm: /^(i|install|add|ci)$/, pnpm: /^(i|install|add)$/, yarn: /^(add|install)$/, bun: /^(add|install|i)$/, pip: /^install$/, pip3: /^install$/,
+  poetry: /^add$/, uv: /^(add|pip)$/, brew: /^install$/, apt: /^install$/, 'apt-get': /^install$/, gem: /^install$/, cargo: /^(install|add)$/,
+  go: /^(install|get)$/, composer: /^(require|install)$/,
+};
+const WRAPPERS = new Set(['sudo', 'env', 'nohup', 'time', 'nice', 'exec', 'command', 'xargs', 'timeout', 'caffeinate']);
+
+/** Data leaving the machine on purpose: POST/upload flags, copies to remote hosts or buckets. */
+function isUpload(prog: string, args: string[]): boolean {
+  switch (prog) {
+    case 'curl':
+      return args.some((a, i) => /^(-d|--data(-\w+)?|-F|--form|-T|--upload-file)$/.test(a) || /^--data(-\w+)?=/.test(a)
+        || ((a === '-X' || a === '--request') && /^(POST|PUT|PATCH)$/i.test(args[i + 1] ?? '')));
+    case 'wget': return args.some((a) => /^--(post|body)-(data|file)/.test(a));
+    case 'scp': case 'sftp': case 'ftp': return true;
+    case 'rsync': return args.some((a) => /^[^/-][^\s]*:/.test(a));
+    case 'aws': return args[0] === 's3' && /^(cp|mv|sync)$/.test(args[1] ?? '') && /^s3:\/\//.test(args[args.length - 1] ?? '');
+    case 'gsutil': return /^(cp|mv|rsync)$/.test(args[0] ?? '') && /^gs:\/\//.test(args[args.length - 1] ?? '');
+  }
+  return false;
+}
+
+/** What kind of work a command line does, by its most telling part:
+ *  uploads > databases > cloud > packages > git. */
+export function commandCategory(line: string): CommandCategory | undefined {
+  const found = new Set<CommandCategory>();
+  for (const seg of line.split(/&&|\|\||[;|\n]/)) {
+    const words = seg.trim().split(/\s+/).filter(Boolean);
+    while (words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || WRAPPERS.has(words[0]))) words.shift();
+    if (!words.length) continue;
+    const prog = base(words[0]).replace(/\.exe$/i, '').toLowerCase();
+    const args = words.slice(1);
+    if (isUpload(prog, args)) return 'uploads';
+    if (DATABASES.has(prog)) found.add('databases');
+    else if (CLOUD.has(prog)) found.add('cloud');
+    else if (INSTALLS[prog]?.test(args[0] ?? '')) found.add('packages');
+    else if (GIT.has(prog)) found.add('git');
+  }
+  return (['databases', 'cloud', 'packages', 'git'] as const).find((c) => found.has(c));
 }
 
 /** Paths that hold credentials or secrets: their own "Sensitive Data Access" group. */
@@ -134,7 +184,10 @@ function command(value: string, action = 'exec', fallbackBinary?: string): Class
   const { risk, rule } = classifyCommand(line);
   // A risky command is named after what made it risky ("ls && curl x" → curl).
   const name = risk === 'risky' && rule ? rule : commandLabel(line);
-  return { kind: 'command', key: `${risk === 'routine' ? '~' : risk === 'risky' ? '!' : ''}${name}`, label: name, sub: 'Command', full: value || fallbackBinary || name, action, risk, rule };
+  const category = commandCategory(line);
+  // the category is part of the key: `curl -d @dump` (upload) and `curl https://…` are different nodes
+  return { kind: 'command', key: `${category ? `${category}:` : ''}${risk === 'routine' ? '~' : risk === 'risky' ? '!' : ''}${name}`, label: name, sub: 'Command',
+    full: value || fallbackBinary || name, action, risk, rule, category };
 }
 function file(path: string, action: string): Classified {
   return { kind: 'file', key: path, label: base(path) || path, sub: dirLabel(path), full: path, action, sensitive: isSensitivePath(path) };
@@ -270,12 +323,17 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   const ranked0 = collapse ? hits.filter((h) => h.c.risk !== 'routine') : hits;
 
   // Each group keeps its busiest targets; the rest fold into its "+N more".
-  // Layout groups: risky commands and sensitive files get their own.
-  const groupOf = (c: Classified) => (c.mcp ? `mcp:${c.mcp}` : c.kind === 'command' && c.risk === 'risky' ? 'risky'
-    : c.kind === 'file' && c.sensitive ? 'sensitive' : c.kind);
+  // Layout groups. Anything policy stopped (blocked, would block, waiting for
+  // or denied approval) is under "blocked"; then sensitive files, commands by
+  // category (uploads, databases, cloud, packages, git), risky commands, and
+  // the rest by kind.
+  const stopped = new Set(hits.filter((h) => h.outcome === 'blocked' || h.outcome === 'would_block').map((h) => h.tid));
+  const groupOf = (c: Classified, tid: string) => (stopped.has(tid) ? 'blocked' : c.mcp ? `mcp:${c.mcp}`
+    : c.kind === 'file' && c.sensitive ? 'sensitive' : c.kind === 'command' && c.category ? c.category
+    : c.kind === 'command' && c.risk === 'risky' ? 'risky' : c.kind);
   const tally = new Map<string, { n: number; group: string }>();
   for (const h of ranked0) {
-    const t = tally.get(h.tid) ?? { n: 0, group: groupOf(h.c) };
+    const t = tally.get(h.tid) ?? { n: 0, group: groupOf(h.c, h.tid) };
     t.n++;
     tally.set(h.tid, t);
   }
@@ -291,13 +349,15 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   const hidden = ranked.length - kept.size;
   const MORE = (group: string) => `t:more:${group}`;
   const GROUP_NOUN: Record<string, [string, string]> = { command: ['command', 'commands'], risky: ['risky command', 'risky commands'], file: ['file', 'files'],
-    sensitive: ['sensitive file', 'sensitive files'], network: ['destination', 'destinations'], tool: ['tool', 'tools'] };
+    sensitive: ['sensitive file', 'sensitive files'], network: ['destination', 'destinations'], tool: ['tool', 'tools'], blocked: ['action', 'actions'],
+    uploads: ['upload', 'uploads'], databases: ['database command', 'database commands'], cloud: ['cloud command', 'cloud commands'],
+    packages: ['install', 'installs'], git: ['git command', 'git commands'] };
 
   for (const h of hits) {
     if (h.c.risk === 'routine' && !o.showRoutine) continue;
     const folded = collapse && h.c.risk === 'routine';
     const show = folded || kept.has(h.tid);
-    const group = folded ? 'routine' : groupOf(h.c);
+    const group = folded ? 'routine' : groupOf(h.c, h.tid);
     const tid = folded ? ROUTINE(h.agentId) : show ? h.tid : MORE(group);
     if (folded) {
       const n = routineCount.get(h.agentId) ?? 0;

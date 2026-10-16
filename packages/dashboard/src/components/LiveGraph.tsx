@@ -120,11 +120,17 @@ function tone(n: LiveNode): GNodeData['tone'] {
 /** The groups every agent's activity is aggregated into; each is one node
  *  until clicked open. MCP servers stay their own nodes (tools folded). */
 export const GROUPS: { key: string; label: string; icon: string; warn?: boolean }[] = [
-  { key: 'command', label: 'Commands', icon: 'terminal' },
+  { key: 'blocked', label: 'Blocked & Waiting', icon: 'ban', warn: true },
   { key: 'risky', label: 'Risky Commands', icon: 'alert', warn: true },
+  { key: 'sensitive', label: 'Sensitive Data Access', icon: 'lock', warn: true },
+  { key: 'uploads', label: 'Data Uploads', icon: 'upload', warn: true },
+  { key: 'cloud', label: 'Cloud & Deploy', icon: 'cloud' },
+  { key: 'git', label: 'Git & Code Hosting', icon: 'github' },
+  { key: 'packages', label: 'Package Installs', icon: 'package' },
+  { key: 'databases', label: 'Databases', icon: 'database' },
+  { key: 'command', label: 'Commands', icon: 'terminal' },
   { key: 'network', label: 'Network Connections', icon: 'globe' },
   { key: 'file', label: 'File System', icon: 'file' },
-  { key: 'sensitive', label: 'Sensitive Data Access', icon: 'lock', warn: true },
   { key: 'tool', label: 'Agent Tools', icon: 'hook' },
 ];
 const GROUP_BY_KEY = new Map(GROUPS.map((g) => [g.key, g]));
@@ -189,7 +195,10 @@ export function foldGraph(g: LiveGraph, expanded: Set<string>): LiveGraph {
     const calls = tools.reduce((t, n) => t + n.count, 0);
     const distinct = tools.reduce((t, n) => t + (n.targetKind === 'more' ? n.hiddenCount ?? 0 : 1), 0);
     const open = expanded.has(group);
-    nodes = nodes.map((n) => (n.id === m.id ? { ...n, sub: `MCP server · ${plural(distinct, 'tool', 'tools')} · ${calls.toLocaleString()} calls · ${open ? 'click to close' : 'click to open'}` } : n));
+    // a server whose every call was stopped has no tools left here: they're under Blocked & Waiting
+    const sub = distinct === 0 ? 'MCP server · calls under Blocked & Waiting'
+      : `MCP server · ${plural(distinct, 'tool', 'tools')} · ${calls.toLocaleString()} calls · ${open ? 'click to close' : 'click to open'}`;
+    nodes = nodes.map((n) => (n.id === m.id ? { ...n, sub } : n));
     if (!open) {
       const ids = new Set(tools.map((t) => t.id));
       nodes = nodes.filter((n) => !ids.has(n.id));
