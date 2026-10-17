@@ -357,6 +357,15 @@ func (s *Server) handleSlackDecision(r *http.Request, app store.SlackApp, c link
 		say(fmt.Sprintf("This was a sample — nothing is waiting. A real click would be recorded as %s <%s> (%s).", u.Name(), u.Email, role))
 		return
 	}
+	// routed to a group: its members decide (admins may step in)
+	if cur, err := s.Store.GetApproval(ctx, c.Tenant, c.Approval); err == nil && cur.GroupID != "" {
+		if cfg, err := s.Store.GetRouting(ctx, c.Tenant); err == nil {
+			if g := cfg.Group(cur.GroupID); g != nil && memberOf(g, "", u.Email) == nil && role != "admin" && role != "security_admin" {
+				say("This request is decided by " + g.Name + ", and " + u.Email + " isn't in that group. Nothing was decided.")
+				return
+			}
+		}
+	}
 	verb := map[bool]string{true: "approve", false: "deny"}[approve]
 	by := "slack:" + app.TeamID + ":" + u.ID
 	name := clip(fmt.Sprintf("%s <%s> (via Slack)", u.Name(), u.Email), 200)

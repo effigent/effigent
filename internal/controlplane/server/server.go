@@ -121,7 +121,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/audit/verify", s.console(read, s.verifyAudit))
 	mux.HandleFunc("GET /api/v1/approvals", s.console(read, s.listApprovals))
 	mux.HandleFunc("GET /api/v1/approvals/{id}", s.console(read, s.getApproval))
-	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.scoped("approvals", write, s.decideApproval))
+	// read, not write: approver-group members may be plain members; decideApproval checks who may decide
+	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.scoped("approvals", read, s.decideApproval))
+	mux.HandleFunc("GET /api/v1/approval-routing", s.console(read, s.getRouting))
+	mux.HandleFunc("PUT /api/v1/approval-routing", s.console(write, s.putRouting))
+	mux.HandleFunc("POST /api/v1/approval-routing/test", s.console(read, s.testRouting))
 	mux.HandleFunc("GET /api/v1/notifications", s.console(read, s.getNotifications))
 	mux.HandleFunc("PUT /api/v1/notifications", s.console(write, s.putNotifications))
 	mux.HandleFunc("POST /api/v1/notifications/test", s.console(write, s.testNotifications))

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,8 +85,20 @@ func (s *Server) requestApproval(w http.ResponseWriter, r *http.Request, ep stor
 	}
 	resp := endpointApprovalResp{Created: created}
 	if created {
+		// who decides: fixed now, when the request is filed
+		if cfg, err := s.Store.GetRouting(r.Context(), ep.Tenant); err != nil {
+			s.Logf("approval %s: routing: %v", a.ID, err)
+		} else if route, group := routeFor(cfg, a); group != nil {
+			a.GroupID = group.ID
+			if route != nil {
+				a.RouteID = route.ID
+			}
+			if err := s.Store.SetApprovalRoute(r.Context(), a.ID, a.GroupID, a.RouteID); err != nil {
+				s.Logf("approval %s: %v", a.ID, err)
+			}
+		}
 		s.audit(r, Principal{UserID: "endpoint:" + ep.ID, Tenant: ep.Tenant, Via: "endpoint"}, "approval.request", a.ID,
-			map[string]any{"agent": a.Agent, "rule": a.Rule, "summary": a.Summary, "hostname": a.Hostname})
+			map[string]any{"agent": a.Agent, "rule": a.Rule, "summary": a.Summary, "hostname": a.Hostname, "group_id": a.GroupID, "route_id": a.RouteID})
 		resp.Notified = s.announce(context.WithoutCancel(r.Context()), a)
 		s.emit(context.WithoutCancel(r.Context()), ep.Tenant, "approval.requested", s.approvalEvent(a))
 	}
@@ -131,10 +144,23 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 			ok = append(ok, "slack")
 		}
 	}
-	if len(set.Emails) > 0 {
+	recipients := set.Emails
+	if cfg, err := s.Store.GetRouting(ctx, a.Tenant); err == nil {
+		if g := cfg.Group(a.GroupID); g != nil {
+			// routed: the group's members decide, so they are the ones asked
+			recipients = nil
+			for _, m := range g.Members {
+				if m.Email != "" && !slices.ContainsFunc(recipients, func(e string) bool { return strings.EqualFold(e, m.Email) }) {
+					recipients = append(recipients, m.Email)
+				}
+			}
+			m.Fields = append(m.Fields, [2]string{"Decided by", g.Name})
+		}
+	}
+	if len(recipients) > 0 {
 		// one message per recipient: each carries buttons signed for that address
 		var failed []string
-		for _, rcpt := range set.Emails {
+		for _, rcpt := range recipients {
 			em := m
 			em.Actions = s.approvalActions(a, rcpt, "email")
 			if err := s.Notify.Email(ctx, []string{rcpt}, em); err != nil {
@@ -149,7 +175,7 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 		}
 	}
 	if len(results) == 0 {
-		results["none"] = "no email recipients configured; the request waits in the console"
+		results["none"] = "no email recipients (or the routed group has no emails); the request waits in the console"
 	}
 	for ch, res := range results {
 		if strings.HasPrefix(res, "error") {
@@ -208,7 +234,27 @@ func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request, p Princip
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, as)
+	cfg, err := s.Store.GetRouting(r.Context(), p.Tenant)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	type view struct {
+		store.Approval
+		GroupName        string `json:"group_name"`
+		CanDecide        bool   `json:"can_decide"`         // this caller may decide it
+		DecideIsOverride bool   `json:"decide_is_override"` // ...as an admin stepping in for the group
+	}
+	out := make([]view, 0, len(as))
+	for _, a := range as {
+		v := view{Approval: a}
+		if g := cfg.Group(a.GroupID); g != nil {
+			v.GroupName = g.Name
+		}
+		v.CanDecide, v.DecideIsOverride, _ = canDecide(p, a, cfg)
+		out = append(out, v)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -221,11 +267,46 @@ func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, http.StatusBadRequest, `body must be {"decision": "approve" | "deny", "note": "…"}`)
 		return
 	}
+	cur, err := s.Store.GetApproval(r.Context(), p.Tenant, r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "no such approval request")
+		return
+	} else if err != nil {
+		s.fail(w, err)
+		return
+	}
+	cfg, err := s.Store.GetRouting(r.Context(), p.Tenant)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	ok, override, member := canDecide(p, cur, cfg)
+	if !ok {
+		who := "workspace admins and security admins"
+		if g := cfg.Group(cur.GroupID); g != nil {
+			who = "members of " + g.Name + " (or a workspace admin)"
+		}
+		writeErr(w, http.StatusForbidden, "only "+who+" can decide this request")
+		return
+	}
 	name := clip(strings.Join(strings.Fields(req.Name), " "), 80)
+	if member != nil { // the group knows who this is
+		name = cmpOr(member.Name, member.Email)
+		if member.Email != "" && member.Name != "" {
+			name = member.Name + " <" + member.Email + ">"
+		}
+	}
 	if name == "" {
 		name = p.UserID
 	}
-	a, err := s.Store.DecideApproval(r.Context(), p.Tenant, r.PathValue("id"), req.Decision == "approve", p.UserID, name,
+	groupName := ""
+	if g := cfg.Group(cur.GroupID); g != nil {
+		groupName = g.Name
+	}
+	if override {
+		name += " (admin, for " + groupName + ")"
+	}
+	a, err := s.Store.DecideApproval(r.Context(), p.Tenant, cur.ID, req.Decision == "approve", p.UserID, name,
 		clip(strings.TrimSpace(req.Note), 500), approvalUseWindow)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -239,7 +320,8 @@ func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, p Princi
 		return
 	}
 	s.emit(r.Context(), p.Tenant, "approval.decided", s.approvalEvent(a))
-	s.audit(r, p, "approval."+req.Decision, a.ID, map[string]any{"summary": a.Summary, "hostname": a.Hostname, "rule": a.Rule, "note": a.Note})
+	s.audit(r, p, "approval."+req.Decision, a.ID, map[string]any{"summary": a.Summary, "hostname": a.Hostname, "rule": a.Rule, "note": a.Note,
+		"group": groupName, "admin_override": override})
 	writeJSON(w, http.StatusOK, a)
 }
 

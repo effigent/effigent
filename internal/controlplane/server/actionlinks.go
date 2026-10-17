@@ -114,6 +114,25 @@ func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := c.Recipient + " (via " + c.Channel + ")"
+	if a.GroupID != "" {
+		cfg, err := s.Store.GetRouting(r.Context(), c.Tenant)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if g := cfg.Group(a.GroupID); g != nil {
+			m := memberOf(g, "", c.Recipient)
+			if m == nil {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, page("Not an approver for this", `<p>This request is decided by <b>`+html.EscapeString(g.Name)+`</b>, and `+
+					html.EscapeString(c.Recipient)+` is no longer in that group. Ask one of its members, or a workspace admin, to decide it in the console.</p>`))
+				return
+			}
+			if m.Name != "" {
+				who = m.Name + " <" + c.Recipient + "> (via email)"
+			}
+		}
+	}
 	if r.Method == http.MethodPost {
 		_ = r.ParseForm()
 		d := r.PostForm.Get("decision")

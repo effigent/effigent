@@ -49,16 +49,18 @@ type Approval struct {
 	Note          string          `json:"note"`
 	UsedAt        *time.Time      `json:"used_at"`
 	Notified      json.RawMessage `json:"notified,omitempty"`
+	GroupID       string          `json:"group_id"` // the approver group it was routed to ("" = workspace admins)
+	RouteID       string          `json:"route_id"` // the routing rule that matched
 }
 
 const approvalCols = `id, tenant_ref, endpoint_id, fingerprint, agent, session_id, tool, summary, cwd, rule, reason,
-  hostname, os_user, state, requested_at, expires_at, decided_at, decided_by, decided_by_name, note, used_at, notified`
+  hostname, os_user, state, requested_at, expires_at, decided_at, decided_by, decided_by_name, note, used_at, notified, group_id, route_id`
 
 func scanApproval(r pgx.Row) (Approval, error) {
 	var a Approval
 	err := r.Scan(&a.ID, &a.Tenant, &a.EndpointID, &a.Fingerprint, &a.Agent, &a.SessionID, &a.Tool, &a.Summary, &a.Cwd,
 		&a.Rule, &a.Reason, &a.Hostname, &a.OSUser, &a.State, &a.RequestedAt, &a.ExpiresAt, &a.DecidedAt, &a.DecidedBy,
-		&a.DecidedByName, &a.Note, &a.UsedAt, &a.Notified)
+		&a.DecidedByName, &a.Note, &a.UsedAt, &a.Notified, &a.GroupID, &a.RouteID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -155,6 +157,92 @@ func (s *Store) endpointApproval(ctx context.Context, endpointID, id string) (Ap
 		return Approval{}, err
 	}
 	return scanApproval(s.db.QueryRow(ctx, `select `+approvalCols+` from cp.approvals where id = $1 and endpoint_id = $2`, id, endpointID))
+}
+
+// SetApprovalRoute records who a new request was routed to.
+func (s *Store) SetApprovalRoute(ctx context.Context, id, groupID, routeID string) error {
+	_, err := s.db.Exec(ctx, `update cp.approvals set group_id = $2, route_id = $3 where id = $1`, id, groupID, routeID)
+	return err
+}
+
+// ---- routing ----
+
+// RoutingConfig says who decides what: approver groups and ordered rules.
+type RoutingConfig struct {
+	Groups       []ApproverGroup `json:"groups"`
+	Routes       []ApprovalRoute `json:"routes"`
+	DefaultGroup string          `json:"default_group"` // requests no rule matches ("" = workspace admins)
+	UpdatedBy    string          `json:"updated_by,omitempty"`
+	UpdatedAt    *time.Time      `json:"updated_at,omitempty"`
+}
+
+type ApproverGroup struct {
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Members     []GroupMember `json:"members"`
+}
+
+// GroupMember is a workspace member (Clerk user id) with their email for notifications.
+type GroupMember struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	Name   string `json:"name,omitempty"`
+}
+
+// ApprovalRoute sends matching requests to a group. Empty lists match anything.
+type ApprovalRoute struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Kinds    []string `json:"kinds"`    // command, website, tool, file
+	Patterns []string `json:"patterns"` // any: case-insensitive text in the action or reason, * = wildcard
+	Machines []string `json:"machines"` // hostnames
+	Agents   []string `json:"agents"`
+	GroupID  string   `json:"group_id"`
+}
+
+func (c RoutingConfig) Group(id string) *ApproverGroup {
+	for i := range c.Groups {
+		if c.Groups[i].ID == id {
+			return &c.Groups[i]
+		}
+	}
+	return nil
+}
+
+func (s *Store) GetRouting(ctx context.Context, tenant string) (RoutingConfig, error) {
+	var c RoutingConfig
+	var raw []byte
+	var by string
+	var at time.Time
+	err := s.db.QueryRow(ctx, `select config, updated_by, updated_at from cp.approval_routing where tenant_ref = $1`, tenant).Scan(&raw, &by, &at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RoutingConfig{Groups: []ApproverGroup{}, Routes: []ApprovalRoute{}}, nil
+	} else if err != nil {
+		return c, err
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return c, err
+	}
+	if c.Groups == nil {
+		c.Groups = []ApproverGroup{}
+	}
+	if c.Routes == nil {
+		c.Routes = []ApprovalRoute{}
+	}
+	c.UpdatedBy, c.UpdatedAt = by, &at
+	return c, nil
+}
+
+func (s *Store) PutRouting(ctx context.Context, tenant, by string, c RoutingConfig) error {
+	c.UpdatedBy, c.UpdatedAt = "", nil
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `insert into cp.approval_routing (tenant_ref, config, updated_by, updated_at) values ($1, $2, $3, now())
+		on conflict (tenant_ref) do update set config = $2, updated_by = $3, updated_at = now()`, tenant, raw, by)
+	return err
 }
 
 // SetApprovalNotified records how the request was announced.
