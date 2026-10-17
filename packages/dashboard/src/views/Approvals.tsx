@@ -122,6 +122,9 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const pending = a.state === 'pending' && Date.parse(a.expires_at) > now;
+  // routed requests: the group's members decide, admins may step in (older control planes: admins)
+  const mayDecide = a.can_decide ?? canWrite;
+  const override = !!a.decide_is_override;
   const left = Date.parse(a.expires_at) - now;
   const label = AGENT_TYPES[agentType(a)]?.label ?? a.agent;
 
@@ -156,6 +159,7 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
         {a.cwd && <><dt>Working dir</dt><dd className="mono-sm">{a.cwd}</dd></>}
         <dt>Session</dt><dd className="mono-sm">{a.session_id || '—'}</dd>
         <dt>Rule</dt><dd>{RULE_LABEL[a.rule] ?? a.rule} · <Link href="/policies" className="view-all">policy</Link></dd>
+        <dt>Decided by</dt><dd>{a.group_name ? <><b>{a.group_name}</b> <span className="muted">· routed by <Link href="/team" className="view-all">Team &amp; Approvers</Link></span></> : <span className="muted">Workspace admins (no routing rule matched)</span>}</dd>
         <dt>Status</dt><dd><ApprovalPill state={pillState(a)} />
           {a.state !== 'pending' && a.decided_at && <span className="muted"> by {a.decided_by_name || a.decided_by} · {ago(Date.parse(a.decided_at), now)}</span>}
           {a.state === 'used' && a.used_at && <span className="muted"> · ran {ago(Date.parse(a.used_at), now)}</span>}
@@ -175,13 +179,14 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
         <>
           <div className="field" style={{ padding: '14px 20px 0' }}>
             <label htmlFor="appr-note">Note (shown to the agent and kept in the audit trail)</label>
-            <textarea id="appr-note" className="textarea" rows={2} value={note} disabled={!canWrite} onChange={(e) => setNote(e.target.value)} placeholder="Why you approved or denied" />
+            <textarea id="appr-note" className="textarea" rows={2} value={note} disabled={!mayDecide} onChange={(e) => setNote(e.target.value)} placeholder="Why you approved or denied" />
           </div>
+          {override && <div className="callout warn" style={{ margin: '12px 20px 0' }}><Ic n="alert" size={16} /><span>This request is for <b>{a.group_name}</b>. You can step in as a workspace admin; the decision is recorded as an admin override.</span></div>}
           <div className="decide-bar">
-            <button className="btn-approve" disabled={!canWrite || busy} onClick={() => decide('approve')}><Ic n="check" size={15} /> Approve once</button>
-            <button className="btn-deny" disabled={!canWrite || busy} onClick={() => decide('deny')}><Ic n="x" size={15} /> Deny</button>
+            <button className="btn-approve" disabled={!mayDecide || busy} onClick={() => decide('approve')}><Ic n="check" size={15} /> {override ? 'Approve as admin' : 'Approve once'}</button>
+            <button className="btn-deny" disabled={!mayDecide || busy} onClick={() => decide('deny')}><Ic n="x" size={15} /> {override ? 'Deny as admin' : 'Deny'}</button>
           </div>
-          {!canWrite && <div style={{ padding: '0 20px 8px' }}><ReadOnlyNote what="approve or deny requests" /></div>}
+          {!mayDecide && <div className="muted" style={{ padding: '0 20px 8px', fontSize: 13 }}>{a.group_name ? <>Waiting for <b>{a.group_name}</b> — only its members (or a workspace admin) can decide.</> : <ReadOnlyNote what="approve or deny requests" />}</div>}
           <div className={`expires wrap ${left < 5 * 60_000 ? 'soon' : ''}`} style={{ padding: '0 20px 18px' }}><Ic n="clock" size={13} /> Expires in {untilText(left)}. Until then the agent is told the action is waiting; a retry after approval runs it.</div>
         </>
       ) : <div style={{ height: 18 }} />}

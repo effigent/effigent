@@ -53,6 +53,9 @@ export function createFixtureApi(): Api {
   let webhooks: { id: string; name: string; url_hint: string; events: string[]; enabled: boolean; created_at: string; last_status: number | null; last_error: string; last_attempt_at: string | null; dropped: number }[] = [
     { id: 'wh-1', name: 'windmill approvals', url_hint: 'https://app.windmill.dev/…', events: ['approval.requested', 'approval.decided'], enabled: true, created_at: iso(60 * 24 * 3), last_status: 200, last_error: '', last_attempt_at: iso(4), dropped: 0 },
   ];
+  let routing: { groups: { id: string; name: string; description?: string; members: { user_id: string; email: string; name?: string }[] }[];
+    routes: { id: string; name: string; kinds: string[]; patterns: string[]; machines: string[]; agents: string[]; group_id: string }[];
+    default_group: string; updated_by?: string; updated_at?: string } = { groups: [], routes: [], default_group: '' };
   let notifications: ApiNotifications = { slack_webhook_set: false, emails: ['security@acme.example'], email_available: true,
     slack_app: { connected: true, team_id: 'T0DEMO', team_name: 'Acme', channel: 'C0SECURITY', approvers: 'members',
       interactions_url: 'https://api.effigent.ai/slack/interactions', available: true, directory_available: true } };
@@ -107,6 +110,7 @@ export function createFixtureApi(): Api {
         const last = page[page.length - 1];
         return delay({ events: page, next_before: match.length > limit && last ? `${Date.parse(last.time) * 1e6}_${last.id}` : '', retention_days: 90 }) as Promise<T>;
       }
+      if (p === '/approval-routing') return delay(routing) as Promise<T>;
       if (p === '/events/verify') return delay({ ok: true, batches: 42, events: events.length, archived_batches: 0, endpoints: endpoints.length, legacy_events: 0, unbatched_events: 0, problems: [] }) as Promise<T>;
       if (p === '/events/archives') return delay({ retention_days: 90, archive_enabled: true, archives: [] }) as Promise<T>;
       if (p === '/audit') {
@@ -153,6 +157,21 @@ export function createFixtureApi(): Api {
         ep.revoked = true;
         log('endpoint.revoke', ep.id, null);
         return delay({ ok: true }) as Promise<T>;
+      }
+      if (method === 'PUT' && path === '/approval-routing') {
+        routing = { ...(body as typeof routing), updated_by: me.user_id, updated_at: new Date().toISOString() };
+        return delay(routing) as Promise<T>;
+      }
+      if (method === 'POST' && path === '/approval-routing/test') {
+        // the control plane's matcher, simplified: first rule whose kind and any pattern match
+        const b = body as { summary: string; reason: string; rule: string; config?: typeof routing };
+        const c = b.config ?? routing;
+        const kind: Record<string, string> = { command_approve: 'command', domain_approve: 'website', tool_approve: 'tool', file_approve: 'file' };
+        const text = `${b.summary}\n${b.reason}`;
+        const hit = c.routes.find((r) => (!r.kinds.length || r.kinds.includes(kind[b.rule])) && (!r.patterns.length || r.patterns.some((p) =>
+          new RegExp(p.trim().split('*').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'), 'is').test(text))));
+        const g = c.groups.find((x) => x.id === (hit ? hit.group_id : c.default_group));
+        return delay({ route_name: hit?.name ?? '', group_name: g?.name ?? '', default: !hit && !!g }) as Promise<T>;
       }
       if (path === '/notifications/slack-app' && (method === 'PUT' || method === 'DELETE')) {
         const b = (body ?? {}) as { channel?: string; approvers?: 'members' | 'workspace' };

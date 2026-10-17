@@ -202,6 +202,7 @@ const devEmptyApi: Api = {
     if (p === '/endpoints' || p === '/events' || p === '/policy/history' || p === '/audit' || p === '/approvals' || p === '/api-keys' || p === '/webhooks') return Promise.resolve([] as T);
     if (p === '/me' || p === '/policy') return Promise.resolve(null as T);
     if (p === '/exceptions') return Promise.resolve([] as T);
+    if (p === '/approval-routing') return Promise.resolve({ groups: [], routes: [], default_group: '' } as T);
     if (p === '/events/archives') return Promise.resolve({ retention_days: 90, archive_enabled: false, archives: [] } as T);
     if (p === '/exceptions/options') return Promise.resolve({ options: [], agents: [], mode: '' } as T);
     return Promise.reject(new ApiError(503, NO_CONTROL_PLANE));

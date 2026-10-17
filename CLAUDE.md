@@ -120,6 +120,19 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   `EFFIGENT_CONSOLE_ORIGIN/approvals?id=…`. Audit: `approval.request|approve|deny`,
   `notifications.update`, `notifications.slack_app.connect|disconnect`.
 
+- **Approval routing** (migration 008, `server/routing.go`): per tenant one document in
+  `cp.approval_routing` — approver groups (members by Clerk user id + email, picked in the
+  console from Clerk's frontend org memberships; no backend Clerk key needed) and ordered rules
+  (kinds command/website/tool/file from the approve list; patterns case-insensitive, `*`
+  wildcard, unanchored over the redacted summary + reason; machines; agents) + default group.
+  A new request is routed once when filed (`approvals.group_id/route_id`; first rule, else
+  default, else workspace admins as before). Only the group's members are emailed; decisions
+  (`POST /approvals/{id}/decision`, now gated in the handler, not the route) by members (any
+  role), or admins/security_admins as an override (name + audit `admin_override`), or API keys
+  with `approvals`. Email links re-check membership at decision time. Console: Team & Approvers
+  (`/team`). `GET|PUT /api/v1/approval-routing` (audited before/after),
+  `POST /api/v1/approval-routing/test` (also takes an unsaved `config`).
+
 ## 2c. Integrations (API keys, webhooks)
 
 - **API keys** (`efk_…`, sha256 in `cp.api_keys`): scopes `read` (every GET; always

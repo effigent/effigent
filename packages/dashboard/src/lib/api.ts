@@ -125,6 +125,11 @@ export interface ApiApproval {
   note: string;
   used_at: string | null;
   notified?: Record<string, string>;
+  /** Approval routing: the group it was routed to ("" = workspace admins). */
+  group_id?: string;
+  group_name?: string;
+  can_decide?: boolean; // the signed-in person may decide it
+  decide_is_override?: boolean; // ...as an admin stepping in for the group
 }
 
 /** Where approval requests are announced. The webhook URL itself is never returned. */

@@ -413,6 +413,7 @@ export const navSections: { title: string; soon?: boolean; items: { href: string
     { href: '/enforcement', label: 'Machines', icon: 'laptop', hint: 'Install Effigent on laptops and servers, see their status' },
   ] },
   { title: 'Workspace', items: [
+    { href: '/team', label: 'Team & Approvers', icon: 'users', hint: 'Who is in the workspace and who decides which approvals' },
     { href: '/settings', label: 'Settings', icon: 'gear', hint: 'Slack & email, API keys & webhooks, your role' },
   ] },
   { title: 'Coming soon', soon: true, items: [
