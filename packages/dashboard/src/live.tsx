@@ -27,18 +27,24 @@ import type { ConsoleEvent } from '@/types.ts';
 const POLL_MS = 15_000;
 const EVENT_LIMIT = 500; // the API has no time filter; 500 feeds the agent graph and keeps a 15s poll small (server default 200, max 1000)
 const AUDIT_LIMIT = 200;
+/** What the agent graph is drawn from first: everything policy stopped or flagged in the last
+ *  90 days (blocked, would block, approval waiting or denied, sensitive-file alerts), then the
+ *  newest events. */
+const PROBLEM_TYPES = 'blocked,would_block,approval_pending,approval_denied,file_open';
+const PROBLEM_LIMIT = 1000;
 
 interface Data {
   me: ApiMe | null;
   endpoints: ApiEndpoint[];
   events: ApiEvent[];
+  problems: ApiEvent[];
   policy: ApiPolicyVersion | null;
   history: ApiPolicyVersion[];
   audit: ApiAuditEntry[];
   approvals: ApiApproval[];
 }
 
-const EMPTY: Data = { me: null, endpoints: [], events: [], policy: null, history: [], audit: [], approvals: [] };
+const EMPTY: Data = { me: null, endpoints: [], events: [], problems: [], policy: null, history: [], audit: [], approvals: [] };
 
 export interface Live extends Data {
   api: Api;
@@ -51,6 +57,9 @@ export interface Live extends Data {
   canWrite: boolean;
   endpointRows: EndpointRow[];
   consoleEvents: ConsoleEvent[]; // newest first, `ago` filled in
+  /** The agent graph's events: problems in the last 90 days plus the newest events, newest first. */
+  graphEvents: ApiEvent[];
+  consoleById: Map<number, ConsoleEvent>;
   latestPolicy: number; // newest published version (0 = none)
   pendingApprovals: number;
   /** Re-fetch everything now (after a write, or from a Retry button). */
@@ -72,10 +81,14 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
   // `full` also reloads the slow-moving resources (me, history, audit).
   const load = useCallback(async (full: boolean) => {
     const g = gen.current;
-    const [me, endpoints, events, policy, history, audit, approvals] = await Promise.allSettled([
+    const since = new Date(Date.now() - 90 * 86_400_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const [me, endpoints, events, problems, policy, history, audit, approvals] = await Promise.allSettled([
       full ? api.get<ApiMe>('/me') : Promise.resolve(null),
       api.get<ApiEndpoint[]>('/endpoints'),
       api.get<ApiEvent[]>(`/events?limit=${EVENT_LIMIT}`),
+      // an older control plane ignores paged=1 and answers with the newest events: fine either way
+      api.get<{ events: ApiEvent[] } | ApiEvent[]>(`/events?paged=1&limit=${PROBLEM_LIMIT}&type=${PROBLEM_TYPES}&since=${since}`)
+        .then((r) => (Array.isArray(r) ? r : r.events ?? [])),
       api.get<ApiPolicyVersion>('/policy'),
       full ? api.get<ApiPolicyVersion[]>('/policy/history') : Promise.resolve(null),
       full ? api.get<ApiAuditEntry[]>(`/audit?limit=${AUDIT_LIMIT}`) : Promise.resolve(null),
@@ -88,12 +101,13 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
       me: val(me, d.me),
       endpoints: val(endpoints, d.endpoints),
       events: val(events, d.events),
+      problems: val(problems, d.problems),
       policy: val(policy, d.policy),
       history: val(history, d.history),
       audit: val(audit, d.audit),
       approvals: val(approvals, d.approvals),
     }));
-    const failed = [me, endpoints, events, policy, history, audit, approvals].find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    const failed = [me, endpoints, events, problems, policy, history, audit, approvals].find((r): r is PromiseRejectedResult => r.status === 'rejected');
     setError(failed ? apiErrorText(failed.reason) : null);
     const t = Date.now();
     if (!failed) setUpdatedAt(t);
@@ -141,10 +155,18 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
       const ce = toConsoleEvent(e, hostById);
       return { ...ce, ago: ago(ce.at ?? null, now) };
     });
+    const consoleById = new Map(data.events.map((e, i) => [e.id, consoleEvents[i]]));
+    const seen = new Set(data.events.map((e) => e.id));
+    const extra = data.problems.filter((e) => !seen.has(e.id));
+    for (const e of extra) {
+      const ce = toConsoleEvent(e, hostById);
+      consoleById.set(e.id, { ...ce, ago: ago(ce.at ?? null, now) });
+    }
+    const graphEvents = extra.length ? [...data.events, ...extra].sort((a, b) => Date.parse(b.time) - Date.parse(a.time) || b.id - a.id) : data.events;
     return {
       ...data, api, fixture, loaded, error, updatedAt, now, refresh, refreshApprovals,
       canWrite: roleCanWrite(data.me?.role),
-      endpointRows, consoleEvents,
+      endpointRows, consoleEvents, graphEvents, consoleById,
       latestPolicy: data.policy?.version ?? 0,
       pendingApprovals: data.approvals.filter((a) => a.state === 'pending' && Date.parse(a.expires_at) > now).length,
     };

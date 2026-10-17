@@ -36,14 +36,14 @@ export interface LiveGraphData {
 
 /** The live graph for the current time range (and optionally one agent name). */
 export function useLiveGraph({ maxTargets, agent, showRoutine = false, groupMax }: { maxTargets: number; agent?: string | null; showRoutine?: boolean; groupMax?: Record<string, number> }): LiveGraphData {
-  const { events, consoleEvents, endpointRows, loaded, now } = useLive();
+  const { graphEvents: events, consoleById, endpointRows, loaded, now } = useLive();
   const { range } = useStore();
   const since = now - RANGE_MS[range];
 
   const endpointById = useMemo(() => new Map(endpointRows.map((e) => [e.id, e])), [endpointRows]);
   const hostById = useMemo(() => new Map(endpointRows.map((e) => [e.id, e.hostname])), [endpointRows]);
   const graph = useMemo(() => buildLiveGraph(events, hostById, { since, agent, maxTargets, showRoutine, groupMax }), [events, hostById, since, agent, maxTargets, showRoutine, groupMax]);
-  const eventById = useMemo(() => new Map(consoleEvents.map((e, i) => [events[i]?.id ?? -1, e])), [consoleEvents, events]);
+  const eventById = consoleById;
   const agents = useMemo(() => {
     const m = new Map<string, { machines: Set<string>; events: number }>();
     for (const e of events) {

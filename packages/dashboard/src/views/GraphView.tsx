@@ -148,7 +148,7 @@ function LiveDetail({ data, id }: { data: LiveGraphData; id: string | null }) {
     const count = (k: string) => graph.nodes.filter((n) => n.kind === k).length;
     return (
       <Card className="detail">
-        <CardHead title="Details" sub={`Built from the ${graph.events.toLocaleString()} agent events in the ${data.rangeLabel}. Select a node to see its recent events.`} />
+        <CardHead title="Details" sub={`Built from ${graph.events.toLocaleString()} agent events in the ${data.rangeLabel}: everything policy blocked, flagged or held for approval, then the newest activity. Select a node to see its recent events.`} />
         <dl className="kv">
           <dt>Machines</dt><dd>{count('machine')}</dd>
           <dt>Agents</dt><dd>{count('agent')}</dd>
