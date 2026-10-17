@@ -137,8 +137,12 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   30m, 2h, 6h; 4xx except 408/429 are final. `EFFIGENT_DEV_INSECURE_WEBHOOKS=1` (local
   only) allows http:// and private targets.
 - `GET /api/v1/approvals/{id}` lets automations re-check a request before acting.
-- Control plane env for Slack approvals: `EFFIGENT_SECRETS_KEY` (≥ 32 chars) and
-  `CLERK_SECRET_KEY`. Deploy order: control plane (migration 006) → console.
+- **Slack is off in production for now (email only)**: `EFFIGENT_SLACK=1` turns Slack
+  approval messages on; off, nothing posts to Slack, Slack can't be connected
+  (`/notifications` reports `slack_enabled: false`) and the console hides it. Next step is a
+  B2B Slack app (one Effigent app, "Add to Slack" OAuth per customer workspace) instead of
+  each customer creating their own app. Control plane env for Slack approvals:
+  `EFFIGENT_SLACK=1`, `EFFIGENT_SECRETS_KEY` (≥ 32 chars) and `CLERK_SECRET_KEY`. Deploy order: control plane (migration 006) → console.
 - Audit trail: `GET /api/v1/audit?paged=1` → `{entries, total, next_before}`; filters
   `action` (comma-separated prefixes), `via` (actor kinds), `actor`, `q` (words, ILIKE over
   action/target/actor/details/ip), `since`/`until` (RFC 3339), cursor `before=<seq>`,

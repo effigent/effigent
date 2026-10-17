@@ -135,6 +135,7 @@ function ApprovalNotifications() {
   }, [api]);
 
   const list = emails.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
+  const slack = !!n?.slack_enabled;
   const save = async (body: { slack_webhook?: string; emails?: string[] }, done: string) => {
     setBusy(true); setMsg(null);
     try {
@@ -152,7 +153,7 @@ function ApprovalNotifications() {
     try {
       const r = await api.send<Record<string, string>>('POST', '/notifications/test', sample ? { sample } : {});
       const parts = Object.entries(r).map(([ch, res]) => `${ch === 'slack' ? 'Slack' : 'Email'}: ${res}`);
-      setMsg({ ok: Object.values(r).every((v) => v.startsWith('sent')), text: parts.length ? parts.join(' · ') : 'Nothing to test yet — connect Slack or add an email first.' });
+      setMsg({ ok: Object.values(r).every((v) => v.startsWith('sent')), text: parts.length ? parts.join(' · ') : slack ? 'Nothing to test yet — connect Slack or add an email first.' : 'Nothing to test yet — add an email first.' });
     } catch (e) {
       setMsg({ ok: false, text: apiErrorText(e) });
     } finally {
@@ -162,8 +163,11 @@ function ApprovalNotifications() {
 
   return (
     <Card>
-      <CardHead title="Approvals" sub="When an agent pauses for approval, the request is posted to Slack and email. Approvers decide in Slack (with the Effigent app), from the email, or in the console — every decision records who made it." />
-      {n && <SlackApp n={n} onChange={setN} />}
+      <CardHead title="Approvals" sub={slack
+        ? 'When an agent pauses for approval, the request is posted to Slack and email. Approvers decide in Slack (with the Effigent app), from the email, or in the console — every decision records who made it.'
+        : 'When an agent pauses for approval, each approver below gets an email with Approve / Deny buttons, or decides in the console. Every decision records who made it.'} />
+      {n && slack && <SlackApp n={n} onChange={setN} />}
+      {slack && <>
       <Row title={n?.slack_app?.connected ? 'Slack webhook (not used while the app is connected)' : 'Slack webhook'}
         desc="Simpler: an incoming webhook posts each request to one channel. Its buttons open the console to decide, since a webhook can’t tell who clicked.">
         {n?.slack_webhook_set
@@ -181,6 +185,7 @@ function ApprovalNotifications() {
         </button>
         <a className="view-all" style={{ alignSelf: 'center' }} href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noreferrer">How to get a webhook</a>
       </div>
+      </>}
       <Row title="Email" desc="Each request is emailed to these addresses (comma-separated).">
         {n && !n.email_available && <span className="badge b-gold" title="The control plane needs EFFIGENT_SMTP_URL and EFFIGENT_EMAIL_FROM">Email not set up on the server</span>}
       </Row>
@@ -189,7 +194,7 @@ function ApprovalNotifications() {
           onChange={(e) => setEmails(e.target.value)} aria-label="Approver emails" />
         <button className="btn sm" disabled={!canWrite || busy || (n !== null && list.join(',') === n.emails.join(','))} onClick={() => save({ emails: list }, 'Email recipients saved.')}>Save</button>
       </div>
-      <Row title="Send a test" desc={fixture ? 'Demo Mode: nothing is actually sent.' : 'Posts a sample request to Slack and email, so you can see where they land.'}>
+      <Row title="Send a test" desc={fixture ? 'Demo Mode: nothing is actually sent.' : slack ? 'Posts a sample request to Slack and email, so you can see where they land.' : 'Emails a sample request, so you can see what approvers get.'}>
         <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button className="btn sm" disabled={!canWrite || busy} onClick={() => test()}><Ic n="bell" /> Send test</button>
           <button className="btn sm" disabled={!canWrite || busy} onClick={() => test('approval')} title="The exact message approvers get, for a sample paused action">Send sample approval request</button>

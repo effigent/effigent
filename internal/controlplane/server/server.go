@@ -29,6 +29,9 @@ type Server struct {
 	// AIKey / AIModel: the Anthropic API key and model for the policy assistant (empty key = off).
 	AIKey, AIModel string
 	AIBaseURL      string // default https://api.anthropic.com (tests point it elsewhere)
+	// SlackEnabled turns Slack approval messages on (EFFIGENT_SLACK=1). Off:
+	// approvals go out by email only, and Slack can't be connected.
+	SlackEnabled bool
 	// SecretsKey seals tenant secrets at rest (Slack app credentials); see SecretsKeyFrom.
 	SecretsKey []byte
 	// Directory maps a Slack approver's email to their console role (Clerk);

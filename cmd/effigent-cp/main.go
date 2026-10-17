@@ -69,6 +69,8 @@ func main() {
 		// policy assistant (Anthropic); model default claude-haiku-5-5
 		AIKey: os.Getenv("EFFIGENT_ANTHROPIC_API_KEY"), AIModel: os.Getenv("EFFIGENT_AI_MODEL"),
 	}
+	// Slack approval messages: off until the shared (B2B) Slack app exists.
+	srv.SlackEnabled = os.Getenv("EFFIGENT_SLACK") == "1"
 	// Slack app credentials are sealed with this key; without it Slack apps can't be connected.
 	if srv.SecretsKey, err = server.SecretsKeyFrom(os.Getenv("EFFIGENT_SECRETS_KEY")); err != nil {
 		logger.Fatalf("%v", err)

@@ -57,7 +57,7 @@ func TestApprovalFlow(t *testing.T) {
 	}
 	_, key, _ := ed25519.GenerateKey(nil)
 	slack := &slackRecorder{}
-	srv := httptest.NewServer((&Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, ConsoleOrigin: "https://app.example",
+	srv := httptest.NewServer((&Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, ConsoleOrigin: "https://app.example", SlackEnabled: true,
 		Notify: &notify.Sender{HTTP: &http.Client{Transport: slack}}}).Handler())
 	defer srv.Close()
 

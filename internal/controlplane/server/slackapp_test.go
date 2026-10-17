@@ -135,7 +135,7 @@ func TestSlackApprover(t *testing.T) {
 		"U_NOMAIL": slackUserJSON("U_NOMAIL", "No Mail", "", nil),
 		"U_EVE":    slackUserJSON("U_EVE", "<!channel> Eve", "eve@acme.io", nil),
 	}}
-	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, ConsoleOrigin: "https://app.example",
+	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, ConsoleOrigin: "https://app.example", SlackEnabled: true,
 		Notify:    &notify.Sender{HTTP: &http.Client{Transport: slack}, SlackAPIBase: "https://slack.test/api"},
 		Directory: fakeDirectory{"sec@acme.io": "security_admin", "dev@acme.io": "member", "eve@acme.io": "admin"}}
 	srv := httptest.NewServer(s.Handler())
@@ -169,6 +169,14 @@ func TestSlackApprover(t *testing.T) {
 
 	// ---- connecting ----
 	connect := map[string]any{"bot_token": botToken, "signing_secret": signing, "channel": "C0SECURITY"}
+	s.SlackEnabled = false // email only: Slack can't be connected
+	if code := call("PUT", "/api/v1/notifications/slack-app", "", connect, nil); code != http.StatusServiceUnavailable {
+		t.Fatalf("connect with Slack off: %d", code)
+	}
+	if code := call("PUT", "/api/v1/notifications", "", map[string]any{"slack_webhook": "https://hooks.slack.com/services/T/B/x"}, nil); code != 400 {
+		t.Fatalf("webhook with Slack off: %d", code)
+	}
+	s.SlackEnabled = true
 	if code := call("PUT", "/api/v1/notifications/slack-app", "", connect, nil); code != http.StatusServiceUnavailable {
 		t.Fatalf("connect without EFFIGENT_SECRETS_KEY: %d", code)
 	}

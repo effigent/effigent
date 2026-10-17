@@ -194,6 +194,6 @@ func page(title, body string) string {
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(title) + ` · Effigent</title></head>` +
 		`<body style="margin:0;background:#f4f5fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827">` +
 		`<div style="max-width:560px;margin:32px auto;padding:0 16px"><div style="background:#fff;border:1px solid #e5e7ef;border-radius:14px;overflow:hidden">` +
-		`<div style="background:#0f1530;color:#fff;padding:14px 24px;font-weight:700;display:flex;align-items:center;gap:10px"><img src="`+notify.LogoURL+`" width="32" height="32" alt="" style="border-radius:8px">Effigent <span style="color:#9aa3c7;font-weight:400">· AI Agent Control Plane</span></div>` +
+		`<div style="background:#0f1530;color:#fff;padding:14px 24px;font-weight:700;display:flex;align-items:center;gap:10px"><img src="` + notify.LogoURL + `" width="32" height="32" alt="" style="border-radius:8px">Effigent <span style="color:#9aa3c7;font-weight:400">· AI Agent Control Plane</span></div>` +
 		`<div style="padding:24px"><h1 style="margin:0 0 14px;font-size:20px">` + html.EscapeString(title) + `</h1>` + body + `</div></div></div></body></html>`
 }

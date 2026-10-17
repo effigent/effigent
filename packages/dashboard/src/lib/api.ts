@@ -135,6 +135,8 @@ export interface ApiNotifications {
   email_available: boolean; // the control plane has SMTP configured
   updated_by?: string;
   updated_at?: string;
+  /** this control plane posts approvals to Slack (EFFIGENT_SLACK); off = email only */
+  slack_enabled?: boolean;
   /** the workspace's own Slack app (absent on control planes before it) */
   slack_app?: ApiSlackApp;
 }

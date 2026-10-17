@@ -324,11 +324,14 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
 
   // Each group keeps its busiest targets; the rest fold into its "+N more".
   // Layout groups. MCP tools always stay under their server (a blocked one
-  // shows red there, and so does the MCP group); anything else policy stopped
-  // (blocked, would block, waiting for or denied approval) is under "blocked";
-  // then sensitive files, commands by category (uploads, databases, cloud,
-  // packages, git), risky commands, and the rest by kind.
-  const stopped = new Set(hits.filter((h) => h.outcome === 'blocked' || h.outcome === 'would_block').map((h) => h.tid));
+  // shows red there, and so does the MCP group); anything else policy always
+  // stopped (blocked, would block, waiting for or denied approval — and never
+  // ran) is under "blocked", matching its red node; a target that also ran
+  // stays in its own group, its stopped calls a red edge. Then sensitive
+  // files, commands by category (uploads, databases, cloud, packages, git),
+  // risky commands, and the rest by kind.
+  const ran = new Set(hits.filter((h) => h.outcome === 'allowed').map((h) => h.tid));
+  const stopped = new Set(hits.filter((h) => (h.outcome === 'blocked' || h.outcome === 'would_block') && !ran.has(h.tid)).map((h) => h.tid));
   const groupOf = (c: Classified, tid: string) => (c.mcp ? `mcp:${c.mcp}` : stopped.has(tid) ? 'blocked'
     : c.kind === 'file' && c.sensitive ? 'sensitive' : c.kind === 'command' && c.category ? c.category
     : c.kind === 'command' && c.risk === 'risky' ? 'risky' : c.kind);

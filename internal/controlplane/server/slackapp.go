@@ -115,6 +115,10 @@ func (s *Server) putSlackApp(w http.ResponseWriter, r *http.Request, p Principal
 		writeErr(w, http.StatusBadRequest, "bad body")
 		return
 	}
+	if !s.SlackEnabled {
+		writeErr(w, http.StatusServiceUnavailable, "Slack approvals aren't available yet; use email")
+		return
+	}
 	if len(s.SecretsKey) != 32 {
 		writeErr(w, http.StatusServiceUnavailable, errNoSecretsKey.Error())
 		return
@@ -286,7 +290,7 @@ func (s *Server) slackInteractions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app := set.SlackApp
-	if !app.Connected() {
+	if !s.SlackEnabled || !app.Connected() {
 		writeErr(w, http.StatusUnauthorized, "Slack is not connected for this workspace")
 		return
 	}

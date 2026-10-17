@@ -38,7 +38,7 @@ func TestApprovalLinks(t *testing.T) {
 	auth, _ := NewAuthenticator(ctx, Options{AdminToken: "t0ken", AdminTenants: []string{tenant}})
 	_, key, _ := ed25519.GenerateKey(nil)
 	slack := &slackRecorder{}
-	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, Notify: &notify.Sender{HTTP: &http.Client{Transport: slack}}}
+	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, SlackEnabled: true, Notify: &notify.Sender{HTTP: &http.Client{Transport: slack}}}
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	s.PublicBaseURL, s.ConsoleOrigin = srv.URL, "https://app.example"

@@ -123,7 +123,7 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 	m := s.approvalMessage(a)
 	results := map[string]string{}
 	var ok []string
-	if set.SlackApp.Connected() || set.SlackWebhook != "" {
+	if s.SlackEnabled && (set.SlackApp.Connected() || set.SlackWebhook != "") {
 		if err := s.postSlack(ctx, a.Tenant, set, m, &a); err != nil {
 			results["slack"] = "error: " + err.Error()
 		} else {
@@ -149,7 +149,7 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 		}
 	}
 	if len(results) == 0 {
-		results["none"] = "no Slack or email recipients configured; the request waits in the console"
+		results["none"] = "no email recipients configured; the request waits in the console"
 	}
 	for ch, res := range results {
 		if strings.HasPrefix(res, "error") {
@@ -276,11 +276,12 @@ type notificationView struct {
 	UpdatedBy        string       `json:"updated_by,omitempty"`
 	UpdatedAt        time.Time    `json:"updated_at,omitempty"`
 	SlackApp         slackAppView `json:"slack_app"`
+	SlackEnabled     bool         `json:"slack_enabled"` // this control plane posts to Slack
 }
 
 func (s *Server) notificationView(n store.NotificationSettings) notificationView {
 	v := notificationView{SlackWebhookSet: n.SlackWebhook != "", Emails: n.Emails, EmailAvailable: s.Notify.EmailEnabled(),
-		UpdatedBy: n.UpdatedBy, UpdatedAt: n.UpdatedAt, SlackApp: s.slackAppView(n.SlackApp)}
+		UpdatedBy: n.UpdatedBy, UpdatedAt: n.UpdatedAt, SlackApp: s.slackAppView(n.SlackApp), SlackEnabled: s.SlackEnabled}
 	if v.SlackWebhookSet {
 		v.SlackWebhookHint = "…" + n.SlackWebhook[max(0, len(n.SlackWebhook)-4):]
 	}
@@ -315,6 +316,10 @@ func (s *Server) putNotifications(w http.ResponseWriter, r *http.Request, p Prin
 	}
 	if req.SlackWebhook != nil {
 		u := strings.TrimSpace(*req.SlackWebhook)
+		if u != "" && !s.SlackEnabled {
+			writeErr(w, http.StatusBadRequest, "Slack approvals aren't available yet; use email")
+			return
+		}
 		if u != "" {
 			if err := notify.ValidSlackWebhook(u); err != nil {
 				writeErr(w, http.StatusBadRequest, err.Error())
@@ -382,7 +387,7 @@ func (s *Server) testNotifications(w http.ResponseWriter, r *http.Request, p Pri
 		m.Footer = "This is a sample from the Effigent console — nothing is waiting. " + m.Footer
 	}
 	res := map[string]string{}
-	if n.SlackApp.Connected() || n.SlackWebhook != "" {
+	if s.SlackEnabled && (n.SlackApp.Connected() || n.SlackWebhook != "") {
 		res["slack"] = "sent"
 		if err := s.postSlack(r.Context(), p.Tenant, n, m, sample); err != nil {
 			res["slack"] = err.Error()
