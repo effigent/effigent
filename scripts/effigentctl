@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# effigentctl — drive an Effigent workspace from the command line with an API key.
+#
+#   effigentctl policy get [file]                 print (or save) the published policy
+#   effigentctl policy publish <file> "comment"   publish a policy file as the next version
+#   effigentctl policy history                    versions and comments
+#   effigentctl exceptions list
+#   effigentctl exceptions add '<json>'           e.g. '{"endpoints":["my-mbp"],"list":"tool_deny","value":"mcp__x__*"}'
+#   effigentctl exceptions remove <id>
+#   effigentctl machines                          enrolled machines, version and policy
+#   effigentctl events [type] [limit]             recent agent events (type: blocked, would_block, …)
+#   effigentctl approvals [state]                 approval requests (state: pending, …)
+#
+# Key: $EFFIGENT_API_KEY, or the file ~/.config/effigent/api-key (mode 600).
+# Create one in the console: Settings > Integrations > API keys (scopes as needed).
+set -euo pipefail
+BASE="${EFFIGENT_API_URL:-https://api.effigent.ai}/api/v1"
+KEY="${EFFIGENT_API_KEY:-$(cat "${EFFIGENT_API_KEY_FILE:-$HOME/.config/effigent/api-key}" 2>/dev/null || true)}"
+[ -n "$KEY" ] || { echo "no API key: set EFFIGENT_API_KEY or write it to ~/.config/effigent/api-key" >&2; exit 2; }
+
+api() { # method path [json-body]
+  local out code
+  out=$(mktemp); trap 'rm -f "$out"' RETURN
+  if [ $# -ge 3 ]; then
+    code=$(curl -sS -o "$out" -w '%{http_code}' -X "$1" "$BASE$2" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' --data-binary "$3")
+  else
+    code=$(curl -sS -o "$out" -w '%{http_code}' -X "$1" "$BASE$2" -H "Authorization: Bearer $KEY")
+  fi
+  if [ "${code:0:1}" != 2 ]; then echo "HTTP $code: $(cat "$out")" >&2; return 1; fi
+  cat "$out"
+}
+# fmt MODE [ARG]: format the API's JSON from stdin
+fmt() {
+  python3 - "$@" 3<&0 <<'PY'
+import json, os, sys
+d = json.load(os.fdopen(3))
+mode, arg = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
+if mode == "policy":
+    print(f"# v{d['version']}: {d['comment']}"); print(d["body"])
+elif mode == "policy-save":
+    open(arg, "w").write(d["body"]); print(f"v{d['version']} saved to {arg}")
+elif mode == "published":
+    print(f"published v{d['version']}")
+elif mode == "history":
+    for v in d: print(f"v{v['version']}  {v['created_at'][:19]}  {v['created_by']}  {v['comment']}")
+elif mode == "exceptions":
+    for x in d: print(f"{x['id']}  {x['list']} {x['value']}  agents={x.get('agents') or 'all'}  machines={x['machines']}  active={x['active']}")
+    if not d: print("no exceptions")
+elif mode == "exception-added":
+    print(f"added {d['exception']['id']} (policy v{d['version']})")
+elif mode == "exception-removed":
+    print(f"removed (policy v{d['version']})")
+elif mode == "machines":
+    for e in d: print(f"{e['hostname']:28} {e['version']:16} policy v{e['policy_version']}  last seen {e['last_seen'] or 'never'}{'  REVOKED' if e['revoked'] else ''}")
+elif mode == "events":
+    for e in d: print(f"{e['time'][:19]}  {e['type']:14} {e.get('agent') or '':12} {(e.get('body') or {}).get('target', '')[:90]}")
+elif mode == "approvals":
+    for a in d: print(f"{a['id']}  {a['state']:8} {a['hostname']:24} {a['summary'][:80]}")
+    if not d: print("none")
+PY
+}
+
+case "${1:-} ${2:-}" in
+  "policy get")
+    if [ -n "${3:-}" ]; then api GET /policy | fmt policy-save "$3"
+    else api GET /policy | fmt policy; fi ;;
+  "policy publish")
+    [ -f "${3:-}" ] || { echo "usage: effigentctl policy publish <file> \"comment\"" >&2; exit 2; }
+    body=$(python3 -c 'import json,sys; print(json.dumps({"body": open(sys.argv[1]).read(), "comment": sys.argv[2]}))' "$3" "${4:-published with effigentctl}")
+    api PUT /policy "$body" | fmt published ;;
+  "policy history")
+    api GET /policy/history | fmt history ;;
+  "exceptions list")
+    api GET /exceptions | fmt exceptions ;;
+  "exceptions add")
+    api POST /exceptions "${3:?json}" | fmt exception-added ;;
+  "exceptions remove")
+    api DELETE "/exceptions/${3:?id}" | fmt exception-removed ;;
+  "machines "*)
+    api GET /endpoints | fmt machines ;;
+  "events "*)
+    q="limit=${3:-20}"; [ -n "${2:-}" ] && q="type=$2&$q"
+    api GET "/events?$q" | fmt events ;;
+  "approvals "*)
+    q=""; [ -n "${2:-}" ] && q="?state=$2"
+    api GET "/approvals$q" | fmt approvals ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
