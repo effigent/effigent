@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// LogoURL is the icon at the top of every email: a PNG on the site (email
+// clients block data: URIs and most don't show SVG or WebP).
+const LogoURL = "https://effigent.ai/email/effigent-icon.png"
+
 // htmlBody is the designed email: a header, the request as a table, and the
 // buttons. Table layout and inline styles, which every mail client renders.
 func htmlBody(m Message) string {
@@ -43,7 +47,10 @@ func htmlBody(m Message) string {
 	return `<!doctype html><html><body style="margin:0;padding:0;background:#f4f5fb">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5fb;padding:28px 12px"><tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #e5e7ef;border-radius:14px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
-<tr><td style="background:#0f1530;padding:16px 24px;color:#ffffff;font-size:15px;font-weight:700;letter-spacing:.2px">Effigent <span style="color:#9aa3c7;font-weight:400">· AI Agent Control Plane</span></td></tr>
+<tr><td style="background:#0f1530;padding:14px 24px"><table role="presentation" cellpadding="0" cellspacing="0"><tr>
+<td style="padding:0 10px 0 0;vertical-align:middle"><img src="` + LogoURL + `" width="32" height="32" alt="Effigent" style="display:block;width:32px;height:32px;border:0;border-radius:8px"></td>
+<td style="vertical-align:middle;color:#ffffff;font-size:15px;font-weight:700;letter-spacing:.2px">Effigent <span style="color:#9aa3c7;font-weight:400">· AI Agent Control Plane</span></td>
+</tr></table></td></tr>
 <tr><td style="padding:24px">
 <h1 style="margin:0 0 14px;font-size:19px;line-height:1.35;color:#111827">` + e(strings.Join(strings.Fields(m.Title), " ")) + `</h1>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">` + rows.String() + `</table>

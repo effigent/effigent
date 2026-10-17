@@ -323,12 +323,13 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
   const ranked0 = collapse ? hits.filter((h) => h.c.risk !== 'routine') : hits;
 
   // Each group keeps its busiest targets; the rest fold into its "+N more".
-  // Layout groups. Anything policy stopped (blocked, would block, waiting for
-  // or denied approval) is under "blocked"; then sensitive files, commands by
-  // category (uploads, databases, cloud, packages, git), risky commands, and
-  // the rest by kind.
+  // Layout groups. MCP tools always stay under their server (a blocked one
+  // shows red there, and so does the MCP group); anything else policy stopped
+  // (blocked, would block, waiting for or denied approval) is under "blocked";
+  // then sensitive files, commands by category (uploads, databases, cloud,
+  // packages, git), risky commands, and the rest by kind.
   const stopped = new Set(hits.filter((h) => h.outcome === 'blocked' || h.outcome === 'would_block').map((h) => h.tid));
-  const groupOf = (c: Classified, tid: string) => (stopped.has(tid) ? 'blocked' : c.mcp ? `mcp:${c.mcp}`
+  const groupOf = (c: Classified, tid: string) => (c.mcp ? `mcp:${c.mcp}` : stopped.has(tid) ? 'blocked'
     : c.kind === 'file' && c.sensitive ? 'sensitive' : c.kind === 'command' && c.category ? c.category
     : c.kind === 'command' && c.risk === 'risky' ? 'risky' : c.kind);
   const tally = new Map<string, { n: number; group: string }>();
