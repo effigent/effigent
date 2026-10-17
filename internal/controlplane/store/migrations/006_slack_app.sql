@@ -8,5 +8,3 @@ alter table cp.notification_settings
   add column if not exists slack_team_id            text not null default '',
   add column if not exists slack_team_name          text not null default '',
   add column if not exists slack_approvers          text not null default 'members';
-
-create index if not exists notification_settings_slack_team on cp.notification_settings (slack_team_id) where slack_team_id <> '';

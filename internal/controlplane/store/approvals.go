@@ -245,7 +245,9 @@ type SlackApp struct {
 	Approvers string
 }
 
-func (a SlackApp) Connected() bool { return a.BotTokenEnc != "" && a.SigningSecretEnc != "" && a.TeamID != "" }
+func (a SlackApp) Connected() bool {
+	return a.BotTokenEnc != "" && a.SigningSecretEnc != "" && a.TeamID != ""
+}
 
 func (s *Store) GetNotificationSettings(ctx context.Context, tenant string) (NotificationSettings, error) {
 	var n NotificationSettings
@@ -277,14 +279,4 @@ func (s *Store) PutNotificationSettings(ctx context.Context, tenant string, n No
 			slack_team_name = $9, slack_approvers = $10`,
 		tenant, n.SlackWebhook, n.Emails, n.UpdatedBy, a.BotTokenEnc, a.SigningSecretEnc, a.Channel, a.TeamID, a.TeamName, a.Approvers)
 	return err
-}
-
-// TenantsForSlackTeam lists the tenants whose Slack app is installed in a
-// Slack workspace (normally one).
-func (s *Store) TenantsForSlackTeam(ctx context.Context, teamID string) ([]string, error) {
-	rows, err := s.db.Query(ctx, `select tenant_ref from cp.notification_settings where slack_team_id = $1 and slack_team_id <> ''`, teamID)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
 }

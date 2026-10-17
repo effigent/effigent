@@ -275,7 +275,7 @@ func (s *Server) slackInteractions(w http.ResponseWriter, r *http.Request) {
 	}
 	// The button's own token says which tenant this is; it is ours (HMAC),
 	// so only that tenant's signing secret may have signed the click.
-	c, expired, err := s.parseLink(act.Value)
+	c, _, err := s.parseLink(act.Value) // an expired request is answered after the identity check
 	if err != nil || c.Channel != slackChannelApp {
 		writeErr(w, http.StatusUnauthorized, "unknown button")
 		return
@@ -308,14 +308,16 @@ func (s *Server) slackInteractions(w http.ResponseWriter, r *http.Request) {
 	// directory, the decision) is reported through response_url.
 	rr := r.Clone(context.WithoutCancel(r.Context()))
 	w.WriteHeader(http.StatusOK)
-	go s.handleSlackDecision(rr, app, c, expired, in, act.ActionID == "approve")
+	go s.handleSlackDecision(rr, app, c, in, act.ActionID == "approve")
 }
 
-func (s *Server) handleSlackDecision(r *http.Request, app store.SlackApp, c linkClaims, expired bool, in slackInteraction, approve bool) {
+func (s *Server) handleSlackDecision(r *http.Request, app store.SlackApp, c linkClaims, in slackInteraction, approve bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	// every answer may carry names and emails from Slack profiles: escaped,
+	// so a display name like "<!channel>" can't ping anyone
 	say := func(text string) {
-		if err := s.Notify.SlackRespond(ctx, in.ResponseURL, map[string]any{"response_type": "ephemeral", "replace_original": false, "text": text}); err != nil {
+		if err := s.Notify.SlackRespond(ctx, in.ResponseURL, map[string]any{"response_type": "ephemeral", "replace_original": false, "text": notify.SlackEscape(text)}); err != nil {
 			s.Logf("slack interaction %s: %v", c.Approval, err)
 		}
 	}
@@ -362,7 +364,7 @@ func (s *Server) handleSlackDecision(r *http.Request, app store.SlackApp, c link
 			state = "expired"
 		}
 		s.slackReplace(ctx, in.ResponseURL, cur, slackStatus(state, line, cur.DecidedAt))
-		say("This request is already " + state + line + ".")
+		say("This request is already " + map[string]string{store.ApprovalUsed: "approved (and used)"}[state] + map[bool]string{true: state}[state != store.ApprovalUsed] + line + ".")
 		return
 	} else if errors.Is(err, store.ErrNotFound) {
 		say("This approval request no longer exists.")
@@ -372,7 +374,6 @@ func (s *Server) handleSlackDecision(r *http.Request, app store.SlackApp, c link
 		say("Effigent couldn't record the decision. Try again, or decide in the console.")
 		return
 	}
-	_ = expired // an expired request is refused by DecideApproval above
 	p := Principal{UserID: by, Tenant: c.Tenant, Role: role, Via: "slack"}
 	s.audit(r, p, "approval."+verb, a.ID, map[string]any{"summary": a.Summary, "hostname": a.Hostname, "rule": a.Rule, "note": "",
 		"via": "slack", "slack_user_id": u.ID, "slack_team_id": app.TeamID, "slack_username": u.Username, "name": u.Name(), "email": u.Email})
@@ -413,7 +414,7 @@ func slackStatus(state, by string, at *time.Time) string {
 	if label == "" {
 		label = state
 	}
-	return strings.TrimSpace(icon + " *" + label + "*" + by + when)
+	return strings.TrimSpace(icon + " *" + label + "*" + notify.SlackEscape(by) + when)
 }
 
 // slackReplace rewrites the original request message without its buttons,

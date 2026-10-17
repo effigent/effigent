@@ -89,10 +89,10 @@ func ValidEmail(a string) error {
 func SlackBlocks(m Message) []map[string]any {
 	var fields []map[string]any
 	for _, f := range m.Fields {
-		fields = append(fields, map[string]any{"type": "mrkdwn", "text": "*" + slackEscape(f[0]) + "*\n" + slackEscape(f[1])})
+		fields = append(fields, map[string]any{"type": "mrkdwn", "text": "*" + SlackEscape(f[0]) + "*\n" + SlackEscape(f[1])})
 	}
 	blocks := []map[string]any{
-		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*" + slackEscape(m.Title) + "*"}},
+		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*" + SlackEscape(m.Title) + "*"}},
 	}
 	for i := 0; i < len(fields); i += 10 { // Slack allows 10 fields per section
 		blocks = append(blocks, map[string]any{"type": "section", "fields": fields[i:min(i+10, len(fields))]})
@@ -121,7 +121,7 @@ func SlackBlocks(m Message) []map[string]any {
 		blocks = append(blocks, map[string]any{"type": "actions", "elements": buttons})
 	}
 	if m.Footer != "" {
-		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": slackEscape(m.Footer)}}})
+		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": SlackEscape(m.Footer)}}})
 	}
 	return blocks
 }
@@ -158,8 +158,8 @@ func (s *Sender) httpClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-// slackEscape escapes the three characters Slack's mrkdwn treats as control.
-func slackEscape(s string) string {
+// SlackEscape escapes the three characters Slack's mrkdwn treats as control.
+func SlackEscape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 

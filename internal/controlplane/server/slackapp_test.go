@@ -55,7 +55,7 @@ func (f *fakeSlack) RoundTrip(r *http.Request) (*http.Response, error) {
 	case "/api/auth.test":
 		return reply(map[string]any{"ok": true, "team_id": "T1", "team": "Acme", "user_id": "UBOT", "bot_id": "B1"})
 	case "/api/chat.postMessage":
-		if !strings.Contains(string(b), `"channel":"C0SECURITY"`) {
+		if !strings.Contains(string(b), `"channel":"C0SECURITY"`) && !strings.Contains(string(b), `"channel":"C0SECOPS"`) {
 			return reply(map[string]any{"ok": false, "error": "not_in_channel"})
 		}
 		f.posts = append(f.posts, string(b))
@@ -133,10 +133,11 @@ func TestSlackApprover(t *testing.T) {
 		"U_DEV":    slackUserJSON("U_DEV", "Dana Dev", "dev@acme.io", nil),
 		"U_GUEST":  slackUserJSON("U_GUEST", "Gus Guest", "gus@partner.io", map[string]any{"is_restricted": true}),
 		"U_NOMAIL": slackUserJSON("U_NOMAIL", "No Mail", "", nil),
+		"U_EVE":    slackUserJSON("U_EVE", "<!channel> Eve", "eve@acme.io", nil),
 	}}
 	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, ConsoleOrigin: "https://app.example",
 		Notify:    &notify.Sender{HTTP: &http.Client{Transport: slack}, SlackAPIBase: "https://slack.test/api"},
-		Directory: fakeDirectory{"sec@acme.io": "security_admin", "dev@acme.io": "member"}}
+		Directory: fakeDirectory{"sec@acme.io": "security_admin", "dev@acme.io": "member", "eve@acme.io": "admin"}}
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	s.PublicBaseURL = srv.URL
@@ -184,6 +185,17 @@ func TestSlackApprover(t *testing.T) {
 	var nv notificationView
 	if code := call("PUT", "/api/v1/notifications/slack-app", "", connect, &nv); code != 200 || !nv.SlackApp.Connected || nv.SlackApp.TeamName != "Acme" || nv.SlackApp.Approvers != "members" {
 		t.Fatalf("connect: %d %+v", code, nv.SlackApp)
+	}
+	// changing only the channel keeps the stored token and secret, and proves the new channel works
+	slack.mu.Lock()
+	posted := len(slack.posts)
+	slack.mu.Unlock()
+	if code := call("PUT", "/api/v1/notifications/slack-app", "", map[string]any{"channel": "C0SECOPS"}, &nv); code != 200 || nv.SlackApp.Channel != "C0SECOPS" || len(slack.posts) != posted+1 {
+		t.Fatalf("channel change: %d %+v, posts %d→%d", code, nv.SlackApp, posted, len(slack.posts))
+	}
+	// editing email recipients leaves the Slack app connected
+	if code := call("PUT", "/api/v1/notifications", "", map[string]any{"emails": []string{"sec@acme.io"}}, &nv); code != 200 || !nv.SlackApp.Connected || nv.SlackApp.Channel != "C0SECOPS" {
+		t.Fatalf("emails edit disconnected Slack: %d %+v", code, nv.SlackApp)
 	}
 	req, _ := http.NewRequest("GET", srv.URL+"/api/v1/notifications", nil)
 	req.Header.Set("Authorization", "Bearer t0ken")
@@ -357,8 +369,22 @@ func TestSlackApprover(t *testing.T) {
 	// a second click: already decided
 	before = slack.responseCount()
 	send(click{user: "U_ADMIN", action: "deny", value: value})
-	if r := slack.waitResponse(t, before+2); !strings.Contains(r, "already") {
+	if r := slack.waitResponse(t, before+2); !strings.Contains(r, "already approved (and used) by Sam Sec \\u0026lt;Sec@Acme.io\\u0026gt; (via Slack)") {
 		t.Fatalf("second click: %s", r)
+	}
+
+	// names from Slack profiles are escaped: "<!channel>" in a name pings nobody
+	r4 := ask(4)
+	tok4 := s.slackActions(store.Approval{ID: r4.ID, Tenant: tenant, ExpiresAt: r4.ExpiresAt}, "T1")[0].Value
+	before = slack.responseCount()
+	send(click{user: "U_EVE", action: "approve", value: tok4})
+	if r := slack.waitResponse(t, before+1); (strings.Contains(r, "<!channel>") || strings.Contains(r, `\u003c!channel`)) || !strings.Contains(r, "\\u0026lt;!channel\\u0026gt; Eve") {
+		t.Fatalf("unescaped name in the update: %s", r)
+	}
+	before = slack.responseCount()
+	send(click{user: "U_ADMIN", action: "approve", value: tok4})
+	if r := slack.waitResponse(t, before+2); (strings.Contains(r, "<!channel>") || strings.Contains(r, `\u003c!channel`)) || !strings.Contains(r, "already approved by \\u0026lt;!channel\\u0026gt; Eve") {
+		t.Fatalf("unescaped name in the ephemeral answer: %s", r)
 	}
 
 	// an expired request is refused
