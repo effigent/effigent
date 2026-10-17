@@ -2,11 +2,14 @@
 
 import { useEffect, useRef } from 'react';
 import { MergeView } from '@codemirror/merge';
-import { EditorState, type Extension } from '@codemirror/state';
+import { Annotation, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { yaml } from '@codemirror/lang-yaml';
+
+/** Marks the text we set from outside (publish, revert, Ask AI): not an edit to report back. */
+const external = Annotation.define<boolean>();
 
 const theme = EditorView.theme({
   '&': { fontSize: '12.5px', backgroundColor: 'var(--panel, #fff)', color: 'var(--txt, #111827)' },
@@ -56,7 +59,9 @@ export function PolicyDiff({ left, right, onChange, readOnlyRight = false, onlyC
       b: {
         doc: right,
         extensions: [...base, ...(readOnlyRight ? ro : [history(), keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab])]),
-          EditorView.updateListener.of((u) => { if (u.docChanged) change.current?.(u.state.doc.toString()); })],
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged && !u.transactions.some((tr) => tr.annotation(external))) change.current?.(u.state.doc.toString());
+          })],
       },
       parent: host.current,
       gutter: true,
@@ -72,7 +77,7 @@ export function PolicyDiff({ left, right, onChange, readOnlyRight = false, onlyC
   // the right side changed from outside (Ask AI, Revert, a newer version): replace it
   useEffect(() => {
     const b = view.current?.b;
-    if (b && b.state.doc.toString() !== right) b.dispatch({ changes: { from: 0, to: b.state.doc.length, insert: right } });
+    if (b && b.state.doc.toString() !== right) b.dispatch({ changes: { from: 0, to: b.state.doc.length, insert: right }, annotations: external.of(true) });
   }, [right]);
 
   return (
