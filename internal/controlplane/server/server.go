@@ -29,6 +29,11 @@ type Server struct {
 	// AIKey / AIModel: the Anthropic API key and model for the policy assistant (empty key = off).
 	AIKey, AIModel string
 	AIBaseURL      string // default https://api.anthropic.com (tests point it elsewhere)
+	// SecretsKey seals tenant secrets at rest (Slack app credentials); see SecretsKeyFrom.
+	SecretsKey []byte
+	// Directory maps a Slack approver's email to their console role (Clerk);
+	// nil = Slack clicks are refused unless the workspace allows any Slack member.
+	Directory Directory
 
 	limits       *limits
 	whOnce       sync.Once
@@ -36,6 +41,8 @@ type Server struct {
 	whClientOnce sync.Once
 	whClient     *http.Client
 	workerOnce   sync.Once
+	slackMu      sync.Mutex
+	slackUsers   map[string]slackUserEntry
 }
 
 func (s *Server) publicKey() ed25519.PublicKey { return s.Key.Public().(ed25519.PublicKey) }
@@ -74,6 +81,8 @@ func (s *Server) Handler() http.Handler {
 	// Approve / Deny buttons from emails and Slack (signed one-request links)
 	mux.HandleFunc("GET /a/{token}", s.approvalLink)
 	mux.HandleFunc("POST /a/{token}", s.approvalLink)
+	// clicks on Approve / Deny in messages from a workspace's own Slack app (signed by Slack)
+	mux.HandleFunc("POST /slack/interactions", s.slackInteractions)
 
 	// console API
 	mux.HandleFunc("GET /api/v1/me", s.console(read, s.me))
@@ -95,6 +104,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/notifications", s.console(read, s.getNotifications))
 	mux.HandleFunc("PUT /api/v1/notifications", s.console(write, s.putNotifications))
 	mux.HandleFunc("POST /api/v1/notifications/test", s.console(write, s.testNotifications))
+	mux.HandleFunc("PUT /api/v1/notifications/slack-app", s.console(write, s.putSlackApp))
+	mux.HandleFunc("DELETE /api/v1/notifications/slack-app", s.console(write, s.deleteSlackApp))
 	// per-machine exceptions to the company policy (each change publishes a version)
 	mux.HandleFunc("GET /api/v1/exceptions", s.console(read, s.listExceptions))
 	mux.HandleFunc("GET /api/v1/exceptions/options", s.console(read, s.exceptionOptions))

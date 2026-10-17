@@ -123,10 +123,8 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 	m := s.approvalMessage(a)
 	results := map[string]string{}
 	var ok []string
-	if set.SlackWebhook != "" {
-		sm := m
-		sm.Actions = s.approvalActions(a, "slack", "slack")
-		if err := s.Notify.Slack(ctx, set.SlackWebhook, sm); err != nil {
+	if set.SlackApp.Connected() || set.SlackWebhook != "" {
+		if err := s.postSlack(ctx, a.Tenant, set, m, &a); err != nil {
 			results["slack"] = "error: " + err.Error()
 		} else {
 			results["slack"] = "sent"
@@ -151,7 +149,7 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 		}
 	}
 	if len(results) == 0 {
-		results["none"] = "no Slack webhook or email recipients configured; the request waits in the console"
+		results["none"] = "no Slack or email recipients configured; the request waits in the console"
 	}
 	for ch, res := range results {
 		if strings.HasPrefix(res, "error") {
@@ -271,17 +269,18 @@ func (s *Server) getApproval(w http.ResponseWriter, r *http.Request, p Principal
 }
 
 type notificationView struct {
-	SlackWebhookSet  bool      `json:"slack_webhook_set"`
-	SlackWebhookHint string    `json:"slack_webhook_hint,omitempty"` // last characters, to recognise it
-	Emails           []string  `json:"emails"`
-	EmailAvailable   bool      `json:"email_available"` // this control plane can send email
-	UpdatedBy        string    `json:"updated_by,omitempty"`
-	UpdatedAt        time.Time `json:"updated_at,omitempty"`
+	SlackWebhookSet  bool         `json:"slack_webhook_set"`
+	SlackWebhookHint string       `json:"slack_webhook_hint,omitempty"` // last characters, to recognise it
+	Emails           []string     `json:"emails"`
+	EmailAvailable   bool         `json:"email_available"` // this control plane can send email
+	UpdatedBy        string       `json:"updated_by,omitempty"`
+	UpdatedAt        time.Time    `json:"updated_at,omitempty"`
+	SlackApp         slackAppView `json:"slack_app"`
 }
 
 func (s *Server) notificationView(n store.NotificationSettings) notificationView {
 	v := notificationView{SlackWebhookSet: n.SlackWebhook != "", Emails: n.Emails, EmailAvailable: s.Notify.EmailEnabled(),
-		UpdatedBy: n.UpdatedBy, UpdatedAt: n.UpdatedAt}
+		UpdatedBy: n.UpdatedBy, UpdatedAt: n.UpdatedAt, SlackApp: s.slackAppView(n.SlackApp)}
 	if v.SlackWebhookSet {
 		v.SlackWebhookHint = "…" + n.SlackWebhook[max(0, len(n.SlackWebhook)-4):]
 	}
@@ -383,13 +382,9 @@ func (s *Server) testNotifications(w http.ResponseWriter, r *http.Request, p Pri
 		m.Footer = "This is a sample from the Effigent console — nothing is waiting. " + m.Footer
 	}
 	res := map[string]string{}
-	if n.SlackWebhook != "" {
+	if n.SlackApp.Connected() || n.SlackWebhook != "" {
 		res["slack"] = "sent"
-		sm := m
-		if sample != nil {
-			sm.Actions = s.approvalActions(*sample, "slack", "slack")
-		}
-		if err := s.Notify.Slack(r.Context(), n.SlackWebhook, sm); err != nil {
+		if err := s.postSlack(r.Context(), p.Tenant, n, m, sample); err != nil {
 			res["slack"] = err.Error()
 		}
 	}

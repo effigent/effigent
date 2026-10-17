@@ -16,16 +16,17 @@ import (
 	"github.com/effigent/effigent/internal/controlplane/store"
 )
 
-// Approve / Deny buttons in emails and Slack open a signed link here. The
-// link names one request, one recipient and expires with the request.
+// Approve / Deny buttons in emails open a signed link here. The link names
+// one request, one recipient and expires with the request. (Slack buttons are
+// interactive and go to /slack/interactions instead: slackapp.go.)
 // Opening it (GET) only shows a confirmation page — mail scanners open every
 // link — and the decision is made by the button on that page (POST).
 
 type linkClaims struct {
 	Approval  string `json:"a"`
 	Tenant    string `json:"t"`
-	Recipient string `json:"r"` // email address, or "slack"
-	Channel   string `json:"c"` // email | slack
+	Recipient string `json:"r"` // email address, or the Slack team id (slack-app)
+	Channel   string `json:"c"` // email | slack-app (| slack: old webhook links, refused)
 	Expires   int64  `json:"e"`
 }
 
@@ -43,23 +44,29 @@ func (s *Server) signLink(c linkClaims) string {
 }
 
 func (s *Server) verifyLink(tok string) (linkClaims, error) {
-	var c linkClaims
+	c, expired, err := s.parseLink(tok)
+	if err == nil && expired {
+		err = errors.New("this link has expired")
+	}
+	return c, err
+}
+
+// parseLink checks a token's signature; expired is reported separately so a
+// late click can still be answered ("this request expired").
+func (s *Server) parseLink(tok string) (c linkClaims, expired bool, err error) {
 	body64, sig64, ok := strings.Cut(tok, ".")
 	enc := base64.RawURLEncoding
 	body, err1 := enc.DecodeString(body64)
 	sig, err2 := enc.DecodeString(sig64)
 	if !ok || err1 != nil || err2 != nil {
-		return c, errors.New("this link is not valid")
+		return c, false, errors.New("this link is not valid")
 	}
 	mac := hmac.New(sha256.New, s.linkKey())
 	mac.Write(body)
 	if !hmac.Equal(sig, mac.Sum(nil)) || json.Unmarshal(body, &c) != nil {
-		return c, errors.New("this link is not valid")
+		return linkClaims{}, false, errors.New("this link is not valid")
 	}
-	if time.Now().Unix() > c.Expires {
-		return c, errors.New("this link has expired")
-	}
-	return c, nil
+	return c, time.Now().Unix() > c.Expires, nil
 }
 
 // approvalActions are the Approve / Deny buttons for one recipient.
@@ -84,6 +91,18 @@ func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, page("Link not valid", `<p>`+html.EscapeString(err.Error())+`. Open the request in the Effigent console instead.</p>`))
 		return
 	}
+	if c.Channel != "email" {
+		// Slack: webhook messages carried these links until Slack decisions
+		// had to name the person (now the Slack app's interactive buttons);
+		// a link anyone in the channel could forward can't decide.
+		w.WriteHeader(http.StatusForbidden)
+		console := ""
+		if s.ConsoleOrigin != "" {
+			console = ` <a href="` + html.EscapeString(s.ConsoleOrigin+"/approvals?id="+c.Approval) + `">Open it in the Effigent console</a>.`
+		}
+		fmt.Fprint(w, page("Decide in Effigent", `<p>Decisions from Slack must show who made them, so this button no longer decides.`+console+`</p>`))
+		return
+	}
 	if c.Approval == "apr_sample" {
 		fmt.Fprint(w, page("This was a sample", `<p>Nothing is waiting: this button came from a sample message. Real requests open here with Approve and Deny.</p>`))
 		return
@@ -95,9 +114,6 @@ func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := c.Recipient + " (via " + c.Channel + ")"
-	if c.Channel == "slack" {
-		who = "Slack (via button)"
-	}
 	if r.Method == http.MethodPost {
 		_ = r.ParseForm()
 		d := r.PostForm.Get("decision")

@@ -229,14 +229,34 @@ type NotificationSettings struct {
 	Emails       []string  `json:"emails"`
 	UpdatedBy    string    `json:"updated_by"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	SlackApp     SlackApp  `json:"-"`
 }
+
+// SlackApp is a tenant's connected Slack app. The token and secret are sealed
+// by the server before they reach the store.
+type SlackApp struct {
+	BotTokenEnc      string
+	SigningSecretEnc string
+	Channel          string // channel id the bot posts to
+	TeamID, TeamName string
+	// Approvers: "members" (default) — the Slack user's email must belong to an
+	// Effigent admin / security_admin; "workspace" — anyone in the connected
+	// Slack workspace may decide (their identity is still recorded).
+	Approvers string
+}
+
+func (a SlackApp) Connected() bool { return a.BotTokenEnc != "" && a.SigningSecretEnc != "" && a.TeamID != "" }
 
 func (s *Store) GetNotificationSettings(ctx context.Context, tenant string) (NotificationSettings, error) {
 	var n NotificationSettings
-	err := s.db.QueryRow(ctx, `select slack_webhook, emails, updated_by, updated_at from cp.notification_settings where tenant_ref = $1`,
-		tenant).Scan(&n.SlackWebhook, &n.Emails, &n.UpdatedBy, &n.UpdatedAt)
+	a := &n.SlackApp
+	err := s.db.QueryRow(ctx, `select slack_webhook, emails, updated_by, updated_at,
+		slack_bot_token_enc, slack_signing_secret_enc, slack_channel, slack_team_id, slack_team_name, slack_approvers
+		from cp.notification_settings where tenant_ref = $1`,
+		tenant).Scan(&n.SlackWebhook, &n.Emails, &n.UpdatedBy, &n.UpdatedAt,
+		&a.BotTokenEnc, &a.SigningSecretEnc, &a.Channel, &a.TeamID, &a.TeamName, &a.Approvers)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return NotificationSettings{Emails: []string{}}, nil
+		return NotificationSettings{Emails: []string{}, SlackApp: SlackApp{Approvers: "members"}}, nil
 	}
 	return n, err
 }
@@ -245,9 +265,26 @@ func (s *Store) PutNotificationSettings(ctx context.Context, tenant string, n No
 	if n.Emails == nil {
 		n.Emails = []string{}
 	}
-	_, err := s.db.Exec(ctx, `insert into cp.notification_settings (tenant_ref, slack_webhook, emails, updated_by, updated_at)
-		values ($1, $2, $3, $4, now())
-		on conflict (tenant_ref) do update set slack_webhook = $2, emails = $3, updated_by = $4, updated_at = now()`,
-		tenant, n.SlackWebhook, n.Emails, n.UpdatedBy)
+	if n.SlackApp.Approvers == "" {
+		n.SlackApp.Approvers = "members"
+	}
+	a := n.SlackApp
+	_, err := s.db.Exec(ctx, `insert into cp.notification_settings (tenant_ref, slack_webhook, emails, updated_by, updated_at,
+			slack_bot_token_enc, slack_signing_secret_enc, slack_channel, slack_team_id, slack_team_name, slack_approvers)
+		values ($1, $2, $3, $4, now(), $5, $6, $7, $8, $9, $10)
+		on conflict (tenant_ref) do update set slack_webhook = $2, emails = $3, updated_by = $4, updated_at = now(),
+			slack_bot_token_enc = $5, slack_signing_secret_enc = $6, slack_channel = $7, slack_team_id = $8,
+			slack_team_name = $9, slack_approvers = $10`,
+		tenant, n.SlackWebhook, n.Emails, n.UpdatedBy, a.BotTokenEnc, a.SigningSecretEnc, a.Channel, a.TeamID, a.TeamName, a.Approvers)
 	return err
+}
+
+// TenantsForSlackTeam lists the tenants whose Slack app is installed in a
+// Slack workspace (normally one).
+func (s *Store) TenantsForSlackTeam(ctx context.Context, teamID string) ([]string, error) {
+	rows, err := s.db.Query(ctx, `select tenant_ref from cp.notification_settings where slack_team_id = $1 and slack_team_id <> ''`, teamID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }

@@ -41,7 +41,7 @@ func TestApprovalLinks(t *testing.T) {
 	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, Notify: &notify.Sender{HTTP: &http.Client{Transport: slack}}}
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
-	s.PublicBaseURL = srv.URL
+	s.PublicBaseURL, s.ConsoleOrigin = srv.URL, "https://app.example"
 
 	call := func(method, path, bearer string, body any, out any) int {
 		t.Helper()
@@ -100,11 +100,24 @@ func TestApprovalLinks(t *testing.T) {
 	if slack.count() != 1 {
 		t.Fatalf("slack posts: %d", slack.count())
 	}
-	links := regexp.MustCompile(`"url":"(http[^"]+/a/[^"?]+)\?d=(approve|deny)"`).FindAllStringSubmatch(slack.posts[0], -1)
-	if len(links) != 2 || links[0][2] != "approve" || links[1][2] != "deny" {
-		t.Fatalf("slack buttons: %s", slack.posts[0])
+	// a webhook message has no buttons that decide: nobody could tell who clicked
+	if strings.Contains(slack.posts[0], "/a/") || !strings.Contains(slack.posts[0], "Review in Effigent") {
+		t.Fatalf("webhook message must not carry decide links: %s", slack.posts[0])
 	}
-	link := links[0][1]
+	// links that webhook messages used to carry are refused
+	oldSlack := s.signLink(linkClaims{Approval: r1.ID, Tenant: tenant, Recipient: "slack", Channel: "slack", Expires: time.Now().Add(time.Hour).Unix()})
+	if code, body := page("POST", srv.URL+"/a/"+oldSlack, url.Values{"decision": {"approve"}}); code != 403 || !strings.Contains(body, "Decide in Effigent") {
+		t.Fatalf("old Slack link: %d %s", code, body)
+	}
+	var pending store.Approval
+	call("GET", "/api/v1/approvals/"+r1.ID, "", nil, &pending)
+	pending.Tenant = tenant // not in the API view
+	acts := s.approvalActions(pending, "dana@example.io", "email")
+	links := regexp.MustCompile(`^(http[^"]+/a/[^"?]+)\?d=(approve|deny)$`).FindStringSubmatch(acts[0].URL)
+	if len(acts) != 2 || links == nil || links[2] != "approve" {
+		t.Fatalf("email buttons: %+v", acts)
+	}
+	link := links[1]
 
 	// opening the link only shows the confirmation page
 	if code, body := page("GET", link+"?d=deny", nil); code != 200 || !strings.Contains(body, "Approve once") || !strings.Contains(body, "git push --force origin main") {
@@ -123,7 +136,7 @@ func TestApprovalLinks(t *testing.T) {
 	if code, body := page("POST", link, url.Values{"decision": {"deny"}, "note": {"use a PR"}}); code != 200 || !strings.Contains(body, "Denied") {
 		t.Fatalf("POST deny: %d %s", code, body)
 	}
-	if r := ask(); r.State != "denied" || r.Note != "use a PR" || r.DecidedByName != "Slack (via button)" {
+	if r := ask(); r.State != "denied" || r.Note != "use a PR" || r.DecidedByName != "dana@example.io (via email)" {
 		t.Fatalf("after link deny: %+v", r)
 	}
 	if code, body := page("POST", link, url.Values{"decision": {"approve"}}); code != 200 || !strings.Contains(body, "Already decided") {

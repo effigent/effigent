@@ -1,7 +1,9 @@
-// Package notify announces approval requests: a Slack incoming webhook per
-// tenant, and email through the Amazon SES API (the service's own AWS role) or
-// over SMTP (any provider: Resend, Postmark, Google Workspace…). Messages link to the console, where an approver signs in to
-// decide; nothing in a message can approve by itself.
+// Package notify announces approval requests: through the tenant's own Slack
+// app (chat.postMessage with interactive Approve / Deny buttons; clicks come
+// back to the control plane signed by Slack and name the Slack user) or a Slack
+// incoming webhook (no buttons that decide: they open the console), and email
+// through the Amazon SES API (the service's own AWS role) or over SMTP (any
+// provider). Email buttons open a signed confirmation page for that recipient.
 package notify
 
 import (
@@ -35,8 +37,11 @@ type Message struct {
 }
 
 // Action is one button. Style: "primary" (green), "danger" (red) or "".
+// In Slack, a button with an ActionID is interactive (the click is sent to the
+// app's request URL with Value) instead of opening URL.
 type Action struct {
 	Label, URL, Style string
+	ActionID, Value   string
 }
 
 // Sender delivers messages. The zero value sends Slack only.
@@ -49,6 +54,8 @@ type Sender struct {
 	SESRegion string
 	From      string // "Effigent <approvals@effigent.ai>"
 	HTTP      *http.Client
+	// SlackAPIBase is Slack's Web API (default https://slack.com/api; tests point it elsewhere).
+	SlackAPIBase string
 
 	sesOnce sync.Once
 	ses     *sesSender
@@ -78,11 +85,8 @@ func ValidEmail(a string) error {
 	return nil
 }
 
-// Slack posts the message to an incoming webhook.
-func (s *Sender) Slack(ctx context.Context, webhook string, m Message) error {
-	if err := ValidSlackWebhook(webhook); err != nil {
-		return err
-	}
+// SlackBlocks renders a message as Slack Block Kit blocks.
+func SlackBlocks(m Message) []map[string]any {
 	var fields []map[string]any
 	for _, f := range m.Fields {
 		fields = append(fields, map[string]any{"type": "mrkdwn", "text": "*" + slackEscape(f[0]) + "*\n" + slackEscape(f[1])})
@@ -95,14 +99,19 @@ func (s *Sender) Slack(ctx context.Context, webhook string, m Message) error {
 	}
 	var buttons []map[string]any
 	for _, a := range m.Actions {
-		b := map[string]any{"type": "button", "url": a.URL, "text": map[string]any{"type": "plain_text", "text": a.Label}}
+		b := map[string]any{"type": "button", "text": map[string]any{"type": "plain_text", "text": a.Label}}
+		if a.ActionID != "" {
+			b["action_id"], b["value"] = a.ActionID, a.Value
+		} else {
+			b["url"] = a.URL
+		}
 		if a.Style == "primary" || a.Style == "danger" {
 			b["style"] = a.Style
 		}
 		buttons = append(buttons, b)
 	}
 	if m.Link != "" {
-		b := map[string]any{"type": "button", "url": m.Link, "text": map[string]any{"type": "plain_text", "text": "Review in Effigent"}}
+		b := map[string]any{"type": "button", "action_id": "review", "url": m.Link, "text": map[string]any{"type": "plain_text", "text": "Review in Effigent"}}
 		if len(m.Actions) == 0 {
 			b["style"] = "primary"
 		}
@@ -114,6 +123,15 @@ func (s *Sender) Slack(ctx context.Context, webhook string, m Message) error {
 	if m.Footer != "" {
 		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": slackEscape(m.Footer)}}})
 	}
+	return blocks
+}
+
+// Slack posts the message to an incoming webhook.
+func (s *Sender) Slack(ctx context.Context, webhook string, m Message) error {
+	if err := ValidSlackWebhook(webhook); err != nil {
+		return err
+	}
+	blocks := SlackBlocks(m)
 	body, _ := json.Marshal(map[string]any{"text": m.Title, "blocks": blocks})
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

@@ -69,6 +69,15 @@ func main() {
 		// policy assistant (Anthropic); model default claude-haiku-5-5
 		AIKey: os.Getenv("EFFIGENT_ANTHROPIC_API_KEY"), AIModel: os.Getenv("EFFIGENT_AI_MODEL"),
 	}
+	// Slack app credentials are sealed with this key; without it Slack apps can't be connected.
+	if srv.SecretsKey, err = server.SecretsKeyFrom(os.Getenv("EFFIGENT_SECRETS_KEY")); err != nil {
+		logger.Fatalf("%v", err)
+	}
+	// Approvals decided in Slack must come from a console admin / security_admin
+	// (matched by email through Clerk's Backend API).
+	if k := os.Getenv("CLERK_SECRET_KEY"); k != "" {
+		srv.Directory = &server.ClerkDirectory{SecretKey: k}
+	}
 	if srv.AllowInsecureWebhooks {
 		logger.Printf("WARNING: EFFIGENT_DEV_INSECURE_WEBHOOKS=1: webhooks may target http:// and private addresses")
 	}
