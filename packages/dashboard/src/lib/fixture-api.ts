@@ -53,7 +53,9 @@ export function createFixtureApi(): Api {
   let webhooks: { id: string; name: string; url_hint: string; events: string[]; enabled: boolean; created_at: string; last_status: number | null; last_error: string; last_attempt_at: string | null; dropped: number }[] = [
     { id: 'wh-1', name: 'windmill approvals', url_hint: 'https://app.windmill.dev/…', events: ['approval.requested', 'approval.decided'], enabled: true, created_at: iso(60 * 24 * 3), last_status: 200, last_error: '', last_attempt_at: iso(4), dropped: 0 },
   ];
-  let notifications: ApiNotifications = { slack_webhook_set: true, slack_webhook_hint: '…demo', emails: ['security@acme.example'], email_available: true };
+  let notifications: ApiNotifications = { slack_webhook_set: false, emails: ['security@acme.example'], email_available: true,
+    slack_app: { connected: true, team_id: 'T0DEMO', team_name: 'Acme', channel: 'C0SECURITY', approvers: 'members',
+      interactions_url: 'https://api.effigent.ai/slack/interactions', available: true, directory_available: true } };
   let policy: ApiPolicyVersion = { version, body: DEMO_POLICY, comment: 'deny curl/wget/nc for every agent', created_by: me.user_id, created_at: iso(240) };
   const history: ApiPolicyVersion[] = [
     { version: 3, comment: policy.comment, created_by: me.user_id, created_at: iso(240) },
@@ -134,6 +136,14 @@ export function createFixtureApi(): Api {
         ep.revoked = true;
         log('endpoint.revoke', ep.id, null);
         return delay({ ok: true }) as Promise<T>;
+      }
+      if (path === '/notifications/slack-app' && (method === 'PUT' || method === 'DELETE')) {
+        const b = (body ?? {}) as { channel?: string; approvers?: 'members' | 'workspace' };
+        const cur = notifications.slack_app!;
+        notifications = { ...notifications, slack_app: method === 'DELETE'
+          ? { ...cur, connected: false, team_id: undefined, team_name: undefined, channel: undefined }
+          : { ...cur, connected: true, team_id: 'T0DEMO', team_name: 'Acme', channel: b.channel || cur.channel, approvers: b.approvers ?? cur.approvers } };
+        return delay(notifications) as Promise<T>;
       }
       if (method === 'PUT' && path === '/notifications') {
         const b = (body ?? {}) as { slack_webhook?: string; emails?: string[] };

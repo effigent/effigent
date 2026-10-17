@@ -135,6 +135,20 @@ export interface ApiNotifications {
   email_available: boolean; // the control plane has SMTP configured
   updated_by?: string;
   updated_at?: string;
+  /** the workspace's own Slack app (absent on control planes before it) */
+  slack_app?: ApiSlackApp;
+}
+
+/** server.slackAppView */
+export interface ApiSlackApp {
+  connected: boolean;
+  team_id?: string;
+  team_name?: string;
+  channel?: string;
+  approvers: 'members' | 'workspace';
+  interactions_url?: string;
+  available: boolean; // the control plane can store Slack credentials (EFFIGENT_SECRETS_KEY)
+  directory_available: boolean; // it can match Slack users to approvers (CLERK_SECRET_KEY)
 }
 
 /** Org admins and security admins may change policy, machines and tokens;

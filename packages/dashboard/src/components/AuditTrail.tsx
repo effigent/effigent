@@ -18,6 +18,8 @@ export const ACTION_LABEL: Record<string, string> = {
   'approval.approve': 'Approved a request',
   'approval.deny': 'Denied a request',
   'notifications.update': 'Changed approval notifications',
+  'notifications.slack_app.connect': 'Connected the Slack app',
+  'notifications.slack_app.disconnect': 'Disconnected the Slack app',
   'api_key.create': 'Created an API key',
   'api_key.revoke': 'Revoked an API key',
   'webhook.create': 'Added a webhook',
@@ -44,7 +46,8 @@ const ACTORS = [
   { id: 'clerk,admin-token', label: 'People' },
   { id: 'api-key', label: 'API keys' },
   { id: 'endpoint,enrollment-token', label: 'Machines' },
-  { id: 'approval-link', label: 'Slack / email buttons' },
+  { id: 'slack', label: 'Slack approvers' },
+  { id: 'approval-link', label: 'Email buttons' },
   { id: 'system', label: 'Effigent (automatic)' },
 ];
 const PERIODS = [
@@ -138,7 +141,7 @@ export function AuditTrail({ initialPeriod = 'all' }: { initialPeriod?: string }
   }, [api]);
 
   const actor = (a: ApiAuditEntry): [string, string] => {
-    const kind = a.actor_via === 'approval-link' ? 'Slack / email button' : a.actor_role || a.actor_via;
+    const kind = a.actor_via === 'approval-link' ? 'email button' : a.actor_role || a.actor_via;
     if (me && a.actor === me.user_id) return ['You', `${kind} · ${a.actor_via}`];
     if (a.actor.startsWith('apikey:')) {
       const name = keyNames.get(a.actor.slice(7));
@@ -147,6 +150,11 @@ export function AuditTrail({ initialPeriod = 'all' }: { initialPeriod?: string }
     if (a.actor.startsWith('endpoint:')) {
       const host = endpointRows.find((e) => e.id === a.actor.slice(9))?.hostname;
       return [host ?? a.actor, 'machine'];
+    }
+    if (a.actor.startsWith('slack:')) {
+      const d = a.details ?? {};
+      const name = typeof d.name === 'string' ? d.name : a.actor;
+      return [name, `${typeof d.email === 'string' ? d.email : ''} · ${a.actor_role || 'Slack'} · Slack`];
     }
     if (a.actor.startsWith('link:')) return [a.actor.split(':').slice(2).join(':') || a.actor, `${a.actor.split(':')[1]} button`];
     if (a.actor === 'system') return ['Effigent', 'automatic'];

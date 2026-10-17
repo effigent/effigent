@@ -86,16 +86,39 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
 - Control plane: `cp.approvals`, `cp.notification_settings` (migration 004). Console API
   `GET /api/v1/approvals`, `POST /api/v1/approvals/{id}/decision` (admin/security_admin),
   `GET|PUT /api/v1/notifications`, `POST /api/v1/notifications/test`. Notifications
-  (`internal/controlplane/notify`): Slack incoming webhook per tenant (only
-  `https://hooks.slack.com/services/…`, never returned by the API) and email over SMTP
+  (`internal/controlplane/notify`):
+  - **Slack app (preferred)** — `server/slackapp.go`. The workspace creates its own Slack app
+    from the manifest the Settings card builds (scopes `chat:write`, `chat:write.public`,
+    `users:read`, `users:read.email`; interactivity URL `<EFFIGENT_PUBLIC_URL>/slack/interactions`)
+    and pastes bot token + signing secret + channel ID (`PUT|DELETE /api/v1/notifications/slack-app`;
+    connect runs `auth.test` and posts a confirmation). Token and secret are sealed with
+    AES-GCM under `EFFIGENT_SECRETS_KEY` (`server/secrets.go`, AAD = tenant + field; changing
+    the key means reconnecting) and never returned. Requests go out via `chat.postMessage`
+    with interactive Approve/Deny whose `value` is a link token (channel `slack-app`,
+    recipient = Slack team id). `POST /slack/interactions`: HMAC token → that tenant's
+    signing secret checks `X-Slack-Signature` (5 min skew) → team must match → 200 at once;
+    then `users.info` (bots, deleted, guests, no visible email refused) and the approver rule:
+    `members` (default) = the Slack email must be a verified email of a console
+    admin/security_admin, via Clerk's Backend API (`CLERK_SECRET_KEY`, `server/directory.go`,
+    2 min cache; without the key every click is refused); `workspace` = anyone in the Slack
+    workspace. Decision: `decided_by = slack:<team>:<user>`, `decided_by_name = "Name <email>
+    (via Slack)"`, audit actor_via `slack` with `slack_user_id/team_id/username`, `email`,
+    `name`; the message is replaced via `response_url` (hooks.slack.com/actions only) with who
+    decided. Repeat clicks / expired requests get an ephemeral answer. With an app connected
+    the webhook isn't used.
+  - Slack incoming webhook (only `https://hooks.slack.com/services/…`, never returned): the
+    message's only button opens the console — a webhook can't tell who clicked, so it never
+    carries a link that decides; `/a/` refuses old Slack link tokens.
+  - Email over SMTP
   (`EFFIGENT_SMTP_URL=smtp://user:pass@host:587` or `smtps://…:465`), or — in production — the
   Amazon SES API with the instance role (`EFFIGENT_SES_REGION=us-east-1`; domain effigent.ai
   verified with Easy DKIM in Route 53), plus `EFFIGENT_EMAIL_FROM`.
-  Messages carry Approve/Reject buttons: signed single-request links `/a/{token}`
+  Email buttons: signed single-recipient links `/a/{token}`
   (`server/actionlinks.go`, HMAC keyed from the signing seed); GET shows a confirmation
-  page, POST decides (so link scanners can't approve). Plus a link to
+  page, POST decides (so link scanners can't approve), recorded as `<email> (via email)`.
+  Plus a link to
   `EFFIGENT_CONSOLE_ORIGIN/approvals?id=…`. Audit: `approval.request|approve|deny`,
-  `notifications.update`.
+  `notifications.update`, `notifications.slack_app.connect|disconnect`.
 
 ## 2c. Integrations (API keys, webhooks)
 
@@ -114,6 +137,8 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   30m, 2h, 6h; 4xx except 408/429 are final. `EFFIGENT_DEV_INSECURE_WEBHOOKS=1` (local
   only) allows http:// and private targets.
 - `GET /api/v1/approvals/{id}` lets automations re-check a request before acting.
+- Control plane env for Slack approvals: `EFFIGENT_SECRETS_KEY` (≥ 32 chars) and
+  `CLERK_SECRET_KEY`. Deploy order: control plane (migration 006) → console.
 - Audit trail: `GET /api/v1/audit?paged=1` → `{entries, total, next_before}`; filters
   `action` (comma-separated prefixes), `via` (actor kinds), `actor`, `q` (words, ILIKE over
   action/target/actor/details/ip), `since`/`until` (RFC 3339), cursor `before=<seq>`,
@@ -171,7 +196,8 @@ npm run -w @effigent/site build                     # site
   pauses them. If the daemon is down
   the hook denies. Approvers: any console admin /
   security_admin (central `approval.users/teams` are not enforced yet), from the console
-  or the signed Approve/Reject buttons in Slack/email.
+  in Slack via the workspace's Slack app (identity checked, see 2b), or from the signed
+  email buttons.
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
 - Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
   `--agents claude,codex,gemini`, `--remove`, `--exclusive`): each agent's calls are

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Ic } from '@/icons.tsx';
+import { SlackApp } from '@/components/SlackApp.tsx';
 import { useLive } from '@/live.tsx';
 import { API_BASE, ApiError, apiErrorText, type ApiNotifications } from '@/lib/api.ts';
 import { Integrations } from '@/components/Integrations.tsx';
@@ -151,7 +152,7 @@ function ApprovalNotifications() {
     try {
       const r = await api.send<Record<string, string>>('POST', '/notifications/test', sample ? { sample } : {});
       const parts = Object.entries(r).map(([ch, res]) => `${ch === 'slack' ? 'Slack' : 'Email'}: ${res}`);
-      setMsg({ ok: Object.values(r).every((v) => v.startsWith('sent')), text: parts.length ? parts.join(' · ') : 'Nothing to test yet — add a Slack webhook or an email first.' });
+      setMsg({ ok: Object.values(r).every((v) => v.startsWith('sent')), text: parts.length ? parts.join(' · ') : 'Nothing to test yet — connect Slack or add an email first.' });
     } catch (e) {
       setMsg({ ok: false, text: apiErrorText(e) });
     } finally {
@@ -161,8 +162,10 @@ function ApprovalNotifications() {
 
   return (
     <Card>
-      <CardHead title="Approvals" sub="When an agent pauses for approval, the request is posted here. Approvers open it in the console to decide." />
-      <Row title="Slack" desc="An incoming webhook posts each request to one channel, with a button to review it.">
+      <CardHead title="Approvals" sub="When an agent pauses for approval, the request is posted to Slack and email. Approvers decide in Slack (with the Effigent app), from the email, or in the console — every decision records who made it." />
+      {n && <SlackApp n={n} onChange={setN} />}
+      <Row title={n?.slack_app?.connected ? 'Slack webhook (not used while the app is connected)' : 'Slack webhook'}
+        desc="Simpler: an incoming webhook posts each request to one channel. Its buttons open the console to decide, since a webhook can’t tell who clicked.">
         {n?.slack_webhook_set
           ? <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <span className="badge b-green">Connected {n.slack_webhook_hint}</span>
