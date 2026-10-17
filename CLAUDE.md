@@ -91,8 +91,10 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   (`EFFIGENT_SMTP_URL=smtp://user:pass@host:587` or `smtps://…:465`), or — in production — the
   Amazon SES API with the instance role (`EFFIGENT_SES_REGION=us-east-1`; domain effigent.ai
   verified with Easy DKIM in Route 53), plus `EFFIGENT_EMAIL_FROM`.
-  Messages link to `EFFIGENT_CONSOLE_ORIGIN/approvals?id=…`; deciding needs a console
-  login (no one-click approve links). Audit: `approval.request|approve|deny`,
+  Messages carry Approve/Reject buttons: signed single-request links `/a/{token}`
+  (`server/actionlinks.go`, HMAC keyed from the signing seed); GET shows a confirmation
+  page, POST decides (so link scanners can't approve). Plus a link to
+  `EFFIGENT_CONSOLE_ORIGIN/approvals?id=…`. Audit: `approval.request|approve|deny`,
   `notifications.update`.
 
 ## 2c. Integrations (API keys, webhooks)
@@ -163,8 +165,8 @@ npm run -w @effigent/site build                     # site
   variables, aliases and tools that connect on their own aren't followed; MCP tools aren't
   checked against deny lists yet (`tool_approve` can pause them). If the daemon is down
   the hook denies. Approvers: any console admin /
-  security_admin (central `approval.users/teams` are not enforced yet); approve from
-  the console only (Slack/email link to it).
+  security_admin (central `approval.users/teams` are not enforced yet), from the console
+  or the signed Approve/Reject buttons in Slack/email.
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
 - Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
   `--agents claude,codex,gemini`, `--remove`, `--exclusive`): each agent's calls are
