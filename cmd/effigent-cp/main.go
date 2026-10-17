@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/effigent/effigent/internal/controlplane/archive"
 	"github.com/effigent/effigent/internal/controlplane/notify"
 	"github.com/effigent/effigent/internal/controlplane/server"
 	"github.com/effigent/effigent/internal/controlplane/store"
@@ -69,6 +71,16 @@ func main() {
 		// policy assistant (Anthropic); model default claude-haiku-5-5
 		AIKey: os.Getenv("EFFIGENT_ANTHROPIC_API_KEY"), AIModel: os.Getenv("EFFIGENT_AI_MODEL"),
 	}
+	// Agent events older than EFFIGENT_EVENT_RETENTION_DAYS (default and minimum 90)
+	// move to this S3 bucket; without a bucket nothing is ever deleted.
+	if b := os.Getenv("EFFIGENT_ARCHIVE_BUCKET"); b != "" {
+		a, err := archive.NewS3(ctx, b, envOr("EFFIGENT_ARCHIVE_REGION", "us-east-1"))
+		if err != nil {
+			logger.Fatalf("archive: %v", err)
+		}
+		srv.Archive = a
+	}
+	srv.RetentionDays, _ = strconv.Atoi(os.Getenv("EFFIGENT_EVENT_RETENTION_DAYS"))
 	// Slack approval messages: off until the shared (B2B) Slack app exists.
 	srv.SlackEnabled = os.Getenv("EFFIGENT_SLACK") == "1"
 	// Slack app credentials are sealed with this key; without it Slack apps can't be connected.

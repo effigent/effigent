@@ -10,6 +10,7 @@ import (
 
 	"github.com/effigent/effigent/internal/controlplane/store"
 	"github.com/effigent/effigent/internal/shared/sign"
+	"github.com/google/uuid"
 )
 
 // Endpoint protocol, under /ep/v1. Every route but enroll needs
@@ -116,7 +117,8 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endp
 // effigentd's HTTP sink posts).
 func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoint) {
 	var req struct {
-		Events []json.RawMessage `json:"events"`
+		BatchID string            `json:"batch_id"` // effigentd ≥ v0.5.4: retries and replays are stored once
+		Events  []json.RawMessage `json:"events"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "body must be {\"events\":[...]}")
@@ -138,9 +140,18 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 		}
 		evs = append(evs, store.Event{Time: head.Time, Type: head.Type, Severity: head.Severity, Agent: head.Agent, Body: raw})
 	}
+	batchID := strings.TrimSpace(req.BatchID)
+	if batchID == "" || len(batchID) > 64 {
+		batchID = "cp-" + uuid.NewString()
+	}
 	if len(evs) > 0 {
-		if err := s.Store.InsertEvents(r.Context(), ep.Tenant, ep.ID, evs); err != nil {
+		n, dup, err := s.Store.IngestBatch(r.Context(), ep.Tenant, ep.ID, batchID, evs)
+		if err != nil {
 			s.fail(w, err)
+			return
+		}
+		if dup {
+			writeJSON(w, http.StatusOK, map[string]any{"accepted": n, "duplicate": true})
 			return
 		}
 		for _, e := range evs {

@@ -308,15 +308,6 @@ type Event struct {
 	Body       json.RawMessage `json:"body"`
 }
 
-func (s *Store) InsertEvents(ctx context.Context, tenant, endpointID string, evs []Event) error {
-	batch := &pgx.Batch{}
-	for _, e := range evs {
-		batch.Queue(`insert into cp.events (tenant_ref, endpoint_id, event_time, type, severity, agent, body)
-			values ($1,$2,$3,$4,$5,$6,$7)`, tenant, endpointID, e.Time, e.Type, e.Severity, e.Agent, e.Body)
-	}
-	return s.db.SendBatch(ctx, batch).Close()
-}
-
 func (s *Store) ListEvents(ctx context.Context, tenant string, limit int, typ string) ([]Event, error) {
 	rows, err := s.db.Query(ctx, `select id, endpoint_id, event_time, type, severity, agent, body from cp.events
 		where tenant_ref = $1 and ($3 = '' or type = $3) order by event_time desc, id desc limit $2`, tenant, limit, typ)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/effigent/effigent/internal/controlplane/store"
@@ -157,17 +156,4 @@ func (s *Server) policyHistory(w http.ResponseWriter, r *http.Request, p Princip
 		return
 	}
 	writeJSON(w, http.StatusOK, h)
-}
-
-func (s *Server) listEvents(w http.ResponseWriter, r *http.Request, p Principal) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 1000 {
-		limit = 200
-	}
-	evs, err := s.Store.ListEvents(r.Context(), p.Tenant, limit, r.URL.Query().Get("type"))
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, evs)
 }

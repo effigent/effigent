@@ -29,6 +29,10 @@ type Server struct {
 	// AIKey / AIModel: the Anthropic API key and model for the policy assistant (empty key = off).
 	AIKey, AIModel string
 	AIBaseURL      string // default https://api.anthropic.com (tests point it elsewhere)
+	// Archive stores agent events past their retention (S3); nil = events are
+	// never deleted. RetentionDays: how long events stay in the database (min 90).
+	Archive       Archiver
+	RetentionDays int
 	// SlackEnabled turns Slack approval messages on (EFFIGENT_SLACK=1). Off:
 	// approvals go out by email only, and Slack can't be connected.
 	SlackEnabled bool
@@ -60,6 +64,12 @@ func (s *Server) Handler() http.Handler {
 			go func() { // exceptions whose time is up are republished away
 				for range time.Tick(time.Minute) {
 					s.expireExceptions(context.Background())
+				}
+			}()
+			go func() { // events past retention move to the archive
+				s.runRetention(context.Background())
+				for range time.Tick(time.Hour) {
+					s.runRetention(context.Background())
 				}
 			}()
 		})
@@ -99,6 +109,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))
 	mux.HandleFunc("POST /api/v1/policy/assist", s.scoped("policy", write, s.assistPolicy))
 	mux.HandleFunc("GET /api/v1/events", s.console(read, s.listEvents))
+	mux.HandleFunc("GET /api/v1/events/verify", s.console(read, s.verifyEvents))
+	mux.HandleFunc("GET /api/v1/events/archives", s.console(read, s.listEventArchives))
+	mux.HandleFunc("POST /api/v1/events/archives/{day}/link", s.console(read, s.eventArchiveLink))
 	mux.HandleFunc("GET /api/v1/audit", s.console(read, s.listAudit))
 	mux.HandleFunc("GET /api/v1/audit/verify", s.console(read, s.verifyAudit))
 	mux.HandleFunc("GET /api/v1/approvals", s.console(read, s.listApprovals))
