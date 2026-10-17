@@ -108,6 +108,20 @@ agents:
 		t.Fatalf("inherited: want a refusal, got %v", err)
 	}
 
+	// ...but emptying one agent's own list is fine when the defaults have nothing there
+	// (e.g. tool_deny: [mcp__claude-in-chrome__*] only for claude-code, lifted for one laptop)
+	chrome := strings.Replace(exBase, "    binary_names: [claude]\n", "    binary_names: [claude]\n    tool_deny: [\"mcp__claude-in-chrome__*\"]\n", 1)
+	out, err = CompileWith([]byte(chrome), nil, []Exception{{ID: "c", Endpoints: []string{"ep-web"}, Agents: []string{"claude-code"}, List: "tool_deny", Value: "mcp__claude-in-chrome__*"}}, web, now)
+	if err != nil {
+		t.Fatalf("emptying claude-code's own tool_deny: %v", err)
+	}
+	if td := out.Policy.RuleFor("claude-code").ToolDeny; len(td) != 0 {
+		t.Fatalf("claude-code tool_deny %v", td)
+	}
+	if other, _ := CompileWith([]byte(chrome), nil, nil, payments, now); !slices.Contains(other.Policy.RuleFor("claude-code").ToolDeny, "mcp__claude-in-chrome__*") {
+		t.Fatal("another machine lost the Chrome deny")
+	}
+
 	for _, x := range []Exception{
 		{List: "exec_deny", Value: "curl"},                            // nobody
 		{Endpoints: []string{"a"}, List: "mode", Value: "monitor"},    // unknown list

@@ -151,10 +151,16 @@ func applyExceptions(merged map[string]ep.Rule, bp *ep.Policy, exs []Exception, 
 				}
 			} else {
 				kept := slices.DeleteFunc(slices.Clone(*l), func(e string) bool { return matchEntry(x.List, x.Value, e) })
-				// An empty list can't be written for one agent: it would fall
-				// back to the defaults' list (which still has the entry).
-				if len(kept) == 0 && len(*l) > 0 && name != DefaultsAgent && (len(x.Agents) > 0 || hasOwnList(bp, name, x.List)) {
-					return nil, fmt.Errorf("exception %s would leave %s's %s empty; make it apply to every agent, or keep another entry in that list", x.ID, name, x.List)
+				// An empty list can't be written for one agent: it falls back to
+				// the defaults' list. That's only right when the defaults have
+				// nothing there either (after this exception, if it covers them).
+				d := merged[DefaultsAgent]
+				fallback := *listOf(&d, x.List)
+				if len(x.Agents) == 0 {
+					fallback = slices.DeleteFunc(slices.Clone(fallback), func(e string) bool { return matchEntry(x.List, x.Value, e) })
+				}
+				if len(kept) == 0 && len(*l) > 0 && name != DefaultsAgent && len(fallback) > 0 && (len(x.Agents) > 0 || hasOwnList(bp, name, x.List)) {
+					return nil, fmt.Errorf("exception %s would leave %s's %s empty, and an empty list falls back to the defaults' %s; make it apply to every agent, or keep another entry in that list", x.ID, name, x.List, x.List)
 				}
 				*l = kept
 			}
