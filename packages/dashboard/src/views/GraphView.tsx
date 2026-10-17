@@ -16,7 +16,7 @@ import {
 } from '@/components/LiveGraph.tsx';
 import { ago } from '@/lib/live-map.ts';
 import {
-  AgentCell, AgentGlyph, Card, CardHead, EnvTag, Loading, ModeTag, OutcomePill, PageHead, RiskyTag, Seg, StatusPill, UserCell, initials,
+  AgentCell, AgentGlyph, Card, CardHead, EnvTag, Loading, ModeTag, OutcomePill, PageGuide, PageHead, RiskyTag, Seg, StatusPill, UserCell, initials,
 } from '@/components/ui.tsx';
 
 type Focus = AgentType | 'all';
@@ -286,6 +286,7 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
         <RangeSelect />
         <Seg value={view} onChange={(v) => { setView(v); sync(agent, v); }} options={[{ id: 'graph', label: 'Graph' }, { id: 'list', label: 'List' }]} />
       </PageHead>
+      <PageGuide id="graph" steps={[<>Each agent&apos;s activity is grouped: blocked, risky, sensitive data, uploads, cloud…</>, <>Click a group to see what&apos;s inside, and an item for its recent events</>, <>Want to stop something? Block it or require approval in <Link href="/policies" className="view-all">Policies</Link></>]} />
 
       {(agents.length > 1 || agent) && (
         <div className="chips">

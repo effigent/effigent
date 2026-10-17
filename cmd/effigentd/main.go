@@ -152,7 +152,7 @@ func daemon() {
 	var client *cpclient.Client // nil when not enrolled
 	if cp != nil {
 		client = &cpclient.Client{
-			State: cp, Dir: *stateDir, Logf: logger.Printf,
+			State: cp, Dir: *stateDir, Logf: logger.Printf, AgentVersion: version,
 			Apply: func(ctx context.Context, body []byte) error {
 				_, err := eng.SetPolicy(ctx, body)
 				return err

@@ -397,17 +397,30 @@ export const LIST_ENTRIES: ListEntry[] = LIST_ROWS.map(([list, kind, value, scop
   id: `le-${i + 1}`, list, kind, value, scope, note, addedBy, addedAgo, hits24h,
 }));
 
-export const nav = [
-  { href: '/', label: 'Overview', icon: 'home' },
-  { href: '/graph', label: 'Agent Graph', icon: 'network' },
-  { href: '/policies', label: 'Policies', icon: 'shield' },
-  { href: '/approvals', label: 'Approvals', icon: 'shieldCheck' },
-  { href: '/lists', label: 'Allow/Deny Lists', icon: 'listCheck' },
-  { href: '/enforcement', label: 'Enforcement', icon: 'sliders' },
-  { href: '/identity', label: 'Identity & Access', icon: 'idcard' },
-  { href: '/audit', label: 'Audit & Compliance', icon: 'clipboard' },
-  { href: '/settings', label: 'Settings', icon: 'gear' },
-] as const;
+/** The sidebar: sections in the order an admin works, each item with a one-line
+ *  hint (its tooltip) that says what you do there. */
+export const navSections: { title: string; soon?: boolean; items: { href: string; label: string; icon: string; hint: string }[] }[] = [
+  { title: 'Monitor', items: [
+    { href: '/', label: 'Overview', icon: 'home', hint: 'Status at a glance, and your next setup step' },
+    { href: '/graph', label: 'Agent Graph', icon: 'network', hint: 'What each agent ran, opened and reached — grouped by risk' },
+    { href: '/audit', label: 'Activity & Audit', icon: 'clipboard', hint: 'Every agent event and every admin change, exportable' },
+  ] },
+  { title: 'Control', items: [
+    { href: '/policies', label: 'Policies', icon: 'shield', hint: 'Decide what agents may do: rules, exceptions, AI help' },
+    { href: '/approvals', label: 'Approvals', icon: 'shieldCheck', hint: 'Approve or deny actions agents paused for' },
+  ] },
+  { title: 'Machines', items: [
+    { href: '/enforcement', label: 'Machines', icon: 'laptop', hint: 'Install Effigent on laptops and servers, see their status' },
+  ] },
+  { title: 'Workspace', items: [
+    { href: '/settings', label: 'Settings', icon: 'gear', hint: 'Slack & email, API keys & webhooks, your role' },
+  ] },
+  { title: 'Coming soon', soon: true, items: [
+    { href: '/lists', label: 'Shared lists', icon: 'listCheck', hint: 'Org-wide lists every policy can reference (preview)' },
+    { href: '/identity', label: 'People', icon: 'idcard', hint: 'Who is behind each agent (preview)' },
+  ] },
+];
+export const nav = navSections.flatMap((s) => s.items);
 
 export const ACTION_CLASS_LABEL: Record<string, string> = {
   exec: 'Exec', file_read: 'File read', file_write: 'File write', network: 'Network', mcp_call: 'MCP call', tool_call: 'Tool call',

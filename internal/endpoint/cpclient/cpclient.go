@@ -113,6 +113,8 @@ type Client struct {
 	Apply   func(ctx context.Context, body []byte) error // hot-applies a policy body
 	OnApply func(version int64)
 	Logf    func(string, ...any)
+	// AgentVersion is this effigentd build, reported with each heartbeat.
+	AgentVersion string
 
 	pub     ed25519.PublicKey
 	current int64
@@ -216,7 +218,7 @@ func (c *Client) SyncOnce(ctx context.Context) error {
 		res.Body.Close()
 		return fmt.Errorf("policy: %s", res.Status)
 	}
-	hb, err := c.do(ctx, http.MethodPost, "/ep/v1/heartbeat", map[string]int64{"policy_version": c.current})
+	hb, err := c.do(ctx, http.MethodPost, "/ep/v1/heartbeat", map[string]any{"policy_version": c.current, "version": c.AgentVersion})
 	if err != nil {
 		return err
 	}

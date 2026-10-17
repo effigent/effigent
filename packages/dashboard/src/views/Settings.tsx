@@ -7,7 +7,7 @@ import { useLive } from '@/live.tsx';
 import { API_BASE, ApiError, apiErrorText, type ApiNotifications } from '@/lib/api.ts';
 import { Integrations } from '@/components/Integrations.tsx';
 import { Storage } from '@/components/Storage.tsx';
-import { Card, CardHead, DemoNote, PageHead, ReadOnlyNote, Switch, ThemeSelect } from '@/components/ui.tsx';
+import { Card, CardHead, DemoNote, PageGuide, PageHead, ReadOnlyNote, Switch, ThemeSelect } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
 const NOT_STORED = 'These preferences are not stored by the control plane yet — changes here are not saved';
@@ -32,9 +32,8 @@ export function Settings({ dev }: { dev: boolean }) {
 
   return (
     <div className="page">
-      <PageHead title="Settings" sub="Workspace defaults for approvals, enforcement, data and endpoint enrollment.">
-        <button className="btn primary" disabled title={NOT_STORED}><Ic n="check" /> Save changes</button>
-      </PageHead>
+      <PageHead title="Settings" sub="Notifications, integrations and workspace options. Each card saves on its own." />
+      <PageGuide id="settings" steps={[<><b>Approvals</b>: connect Slack and email so approvers can decide from the message</>, <><b>Integrations</b>: API keys and webhooks for Windmill, Tines or scripts</>, <><b>Workspace</b>: your role, and the control plane you are connected to</>]} />
 
       <div className="grid-2">
         <div id="approvals" style={{ scrollMarginTop: 88 }}><ApprovalNotifications /></div>

@@ -9,7 +9,7 @@ import type { Action, AgentType, Approval, ApprovalState } from '@/types.ts';
 import { useLive } from '@/live.tsx';
 import { apiErrorText, type ApiApproval } from '@/lib/api.ts';
 import { ago } from '@/lib/live-map.ts';
-import { AgentGlyph, ApprovalPill, Card, CardHead, Empty, EnvTag, Loading, PageHead, ReadOnlyNote, RiskTag } from '@/components/ui.tsx';
+import { AgentGlyph, ApprovalPill, Card, CardHead, Empty, EnvTag, Loading, PageGuide, PageHead, ReadOnlyNote, RiskTag } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
 export function actionText(a: Action): string {
@@ -214,10 +214,15 @@ function LiveApprovalQueue({ initialId }: { initialId?: string }) {
       <PageHead title="Approvals" sub={SUB}>
         <Link className="btn sm" href="/settings#approvals"><Ic n="bell" /> Slack & email</Link>
       </PageHead>
+      <PageGuide id="approvals" steps={[<>Add approval rules in <Link href="/policies" className="view-all">Policies</Link> (e.g. <code>git push*</code>)</>, <>When an agent hits one it pauses, and approvers get Slack or email</>, <>Approve once or deny — here, or from the message</>]} />
       {!loaded ? <Card><Loading /></Card> : approvals.length === 0 ? (
         <Card>
           <Empty icon="shield" title="No approval requests yet"
-            sub="Add approval lists to your policy — e.g. command_approve: [&quot;git push*&quot;] or tool_approve: [&quot;mcp__github__*&quot;]. On macOS and Windows the agent pauses and asks; requests show up here and in Slack or email." />
+            sub="Nothing has asked yet. Add an approval rule — e.g. ask before any git push, or before GitHub MCP tools — and agents pause here until someone decides." />
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', padding: '0 0 24px' }}>
+            <Link className="btn primary sm" href="/policies"><Ic n="plus" /> Add an approval rule</Link>
+            <Link className="btn sm" href="/settings#approvals"><Ic n="bell" /> Connect Slack & email</Link>
+          </div>
         </Card>
       ) : (
         <div className="appr-layout">

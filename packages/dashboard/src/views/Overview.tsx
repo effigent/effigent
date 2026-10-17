@@ -11,6 +11,7 @@ import { useDemoMode } from '@/demo.tsx';
 import type { ConsoleEvent, Mode } from '@/types.ts';
 import { GraphCard } from '@/components/GraphCard.tsx';
 import { RangeSelect } from '@/components/RangeSelect.tsx';
+import { GetStarted } from '@/components/GetStarted.tsx';
 import { AgentCell, AgentGlyph, Card, CardHead, Empty, Loading, ModeTag, OutcomePill, PageHead, RiskyTag, StatusPill } from '@/components/ui.tsx';
 
 export const EVENT_ICON: Record<ConsoleEvent['outcome'], { icon: string; cls: string }> = {
@@ -67,7 +68,8 @@ function RowMenu({ agent }: { agent: SeenAgent }) {
 export function Overview() {
   const { env, range, pending, decide } = useStore();
   const { demo } = useDemoMode();
-  const { consoleEvents, endpointRows, policy, latestPolicy, updatedAt, now, loaded } = useLive();
+  const { consoleEvents, endpointRows, policy, latestPolicy, updatedAt, now, loaded, approvals } = useLive();
+  const livePending = approvals.filter((a) => a.state === 'pending' && Date.parse(a.expires_at) > now);
 
   const since = now - RANGE_MS[range];
   const evs = consoleEvents.filter((e) => (e.at ?? 0) >= since);
@@ -118,6 +120,7 @@ export function Overview() {
         <span className="updated"><span className="dot" /> {updatedAt ? `Last updated ${ago(updatedAt, now)}` : 'Connecting…'}</span>
         <RangeSelect />
       </PageHead>
+      <GetStarted />
 
       <div className="ov-grid">
         <div className="ov-main">
@@ -202,9 +205,9 @@ export function Overview() {
           </Card>
 
           <Card>
-            <CardHead title="Recent Approval Requests" href="/approvals" />
-            {pending.length === 0 ? (
-              <div className="rail-empty"><Ic n={demo ? 'checkCircle' : 'clock'} size={18} /> {demo ? 'All caught up — nothing waiting.' : 'No approval requests yet — coming soon.'}</div>
+            <CardHead title="Waiting for approval" href="/approvals" />
+            {demo ? (pending.length === 0 ? (
+              <div className="rail-empty"><Ic n="checkCircle" size={18} /> All caught up — nothing waiting.</div>
             ) : (
               <ul className="feed">
                 {pending.slice(0, 3).map((a) => (
@@ -221,6 +224,20 @@ export function Overview() {
                       <button className="btn-approve" onClick={() => decide(a.id, 'approved')}>Approve</button>
                       <button className="btn-deny" onClick={() => decide(a.id, 'approval_denied')}>Deny</button>
                     </div>
+                  </li>
+                ))}
+              </ul>
+            )) : livePending.length === 0 ? (
+              <div className="rail-empty"><Ic n="checkCircle" size={18} /> Nothing waiting. Agents pause here when a policy rule asks for approval.</div>
+            ) : (
+              <ul className="feed">
+                {livePending.slice(0, 3).map((a) => (
+                  <li key={a.id} className="feed-row">
+                    <span className="feed-ic ic-gold"><Ic n="clock" size={16} /></span>
+                    <Link href={`/approvals?id=${a.id}`} className="feed-body">
+                      <div className="feed-title mono-sm">{a.summary}</div>
+                      <div className="feed-meta">{agentMeta(a.agent).label} <i className="sep">•</i> {a.os_user || a.hostname} <i className="sep">•</i> {ago(Date.parse(a.requested_at), now)}</div>
+                    </Link>
                   </li>
                 ))}
               </ul>

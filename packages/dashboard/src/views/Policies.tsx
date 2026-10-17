@@ -11,7 +11,7 @@ import { useStore } from '@/store.tsx';
 import { ApiError, apiErrorText } from '@/lib/api.ts';
 import { ago, dateTime, ms, summarizePolicy } from '@/lib/live-map.ts';
 import type { Mode } from '@/types.ts';
-import { Card, CardHead, Empty, Loading, ModeTag, PageHead, ReadOnlyNote } from '@/components/ui.tsx';
+import { Card, CardHead, Empty, Loading, ModeTag, PageGuide, PageHead, ReadOnlyNote } from '@/components/ui.tsx';
 
 /**
  * The control plane keeps one endpoint policy per workspace: an effigentd
@@ -62,6 +62,7 @@ export function Policies() {
       <PageHead title="Policies" sub="What agents may run, open and reach — one signed policy per workspace, enforced on every endpoint by effigentd." >
         {me && !canWrite && <ReadOnlyNote what="publish policy" />}
       </PageHead>
+      <PageGuide id="policies" steps={[<>Describe a change to <b>Ask AI</b>, or edit the policy text below</>, <>Add <b>exceptions</b> for machines that need something the company blocks</>, <><b>Publish</b> — every machine applies it within seconds</>]} />
 
       <div className="grid-4">
         <Card className="mini-stat">
@@ -73,6 +74,8 @@ export function Policies() {
         <Card className="mini-stat"><div className="k">Rules</div><div className="v">{lists.reduce((n, [, v]) => n + v, 0)}</div><div className="s">{summary.lists.exec_deny ?? 0} exec deny · {summary.lists.file_deny ?? 0} file deny · {summary.lists.file_alert ?? 0} alert</div></Card>
         <Card className="mini-stat"><div className="k">Endpoints on latest</div><div className="v">{onLatest}/{eps.length}</div><div className="s">{latestPolicy > 0 ? `v${latestPolicy}` : 'nothing published'}</div></Card>
       </div>
+
+      <PolicyAssist current={text} onLoad={(y) => { setDraft(y); setErr(null); setComment((c) => c || 'Changed with the policy assistant'); }} />
 
       <Card>
         <CardHead
@@ -115,8 +118,6 @@ export function Policies() {
           </>
         )}
       </Card>
-
-      <PolicyAssist current={text} onLoad={(y) => { setDraft(y); setErr(null); setComment((c) => c || 'Changed with the policy assistant'); }} />
 
       <Exceptions />
 

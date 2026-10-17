@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { AGENTS, ENVS, nav } from '@/data.ts';
+import { AGENTS, ENVS, navSections } from '@/data.ts';
 import { BrandMark, Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
@@ -31,15 +31,20 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       </div>
 
       <nav className="nav">
-        {nav.map((item) => (
-          <Link key={item.href} href={item.href} className={`nav-item ${isActive(item.href) ? 'active' : ''}`} onClick={onClose}
-            aria-current={isActive(item.href) ? 'page' : undefined}>
-            <Ic n={item.icon} />
-            <span>{item.label}</span>
-            {item.href === '/approvals' && (demo ? pending.length : pendingApprovals) > 0 && (
-              <span className="nav-count" title={`${demo ? pending.length : pendingApprovals} pending`}>{demo ? pending.length : pendingApprovals}</span>
-            )}
-          </Link>
+        {navSections.map((sec) => (
+          <div key={sec.title} className={`nav-section ${sec.soon ? 'soon' : ''}`}>
+            <div className="nav-group">{sec.title}</div>
+            {sec.items.map((item) => (
+              <Link key={item.href} href={item.href} title={item.hint} className={`nav-item ${isActive(item.href) ? 'active' : ''} ${sec.soon ? 'muted' : ''}`} onClick={onClose}
+                aria-current={isActive(item.href) ? 'page' : undefined}>
+                <Ic n={item.icon} />
+                <span>{item.label}</span>
+                {item.href === '/approvals' && (demo ? pending.length : pendingApprovals) > 0 && (
+                  <span className="nav-count" title={`${demo ? pending.length : pendingApprovals} pending`}>{demo ? pending.length : pendingApprovals}</span>
+                )}
+              </Link>
+            ))}
+          </div>
         ))}
       </nav>
 

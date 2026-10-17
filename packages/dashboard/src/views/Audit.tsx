@@ -8,7 +8,7 @@ import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiAuditEntry, type ApiAuditVerification } from '@/lib/api.ts';
 import { ago, dateTime, ms } from '@/lib/live-map.ts';
 import type { ConsoleEvent, EventType, Outcome } from '@/types.ts';
-import { AgentGlyph, Card, CardHead, Empty, Loading, OutcomePill, PageHead, RiskyTag, Seg } from '@/components/ui.tsx';
+import { AgentGlyph, Card, CardHead, Empty, Loading, OutcomePill, PageGuide, PageHead, RiskyTag, Seg } from '@/components/ui.tsx';
 import { RangeSelect } from '@/components/RangeSelect.tsx';
 
 const TYPE_LABEL: Record<Exclude<EventType, 'approval'>, string> = {
@@ -135,10 +135,11 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events', ini
 
   return (
     <div className="page">
-      <PageHead title="Audit & Compliance" sub="Every agent action effigentd reported, and every change made in this console — attributable and tamper-evident.">
+      <PageHead title="Activity & Audit" sub="Every agent action effigentd reported, and every change made in this console — attributable and tamper-evident.">
         <RangeSelect />
         <button className="btn" onClick={download}><Ic n="download" /> Export CSV</button>
       </PageHead>
+      <PageGuide id="audit" steps={[<><b>Agent events</b>: everything agents ran, opened and reached, with what policy did</>, <><b>Admin trail</b>: every policy, approval and setting change — tamper-evident</>, <>Filter by time and result, then <b>Export CSV</b> for compliance</>]} />
 
       <div className="grid-4">
         <Card className="mini-stat"><div className="k">Agent events</div><div className="v">{all.length}</div><div className="s">in the selected range (latest {consoleEvents.length} fetched)</div></Card>

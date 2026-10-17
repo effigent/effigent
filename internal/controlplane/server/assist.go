@@ -102,7 +102,16 @@ func (s *Server) assistPolicy(w http.ResponseWriter, r *http.Request, p Principa
 		text, err := s.callClaude(r.Context(), msgs)
 		if err != nil {
 			s.Logf("policy assist: %v", err)
-			writeErr(w, http.StatusBadGateway, "the policy assistant could not answer; try again")
+			msg := "the policy assistant could not answer; try again"
+			switch e := err.Error(); {
+			case strings.Contains(e, "credit balance"):
+				msg = "the policy assistant's Anthropic account is out of credit — add credit in the Anthropic console (Plans & Billing)"
+			case strings.Contains(e, "anthropic 401"), strings.Contains(e, "invalid x-api-key"):
+				msg = "the policy assistant's Anthropic API key was rejected — replace effigent/cp/anthropic-api-key"
+			case strings.Contains(e, "anthropic 429"), strings.Contains(e, "anthropic 529"):
+				msg = "the policy assistant is busy (Anthropic rate limit); try again in a minute"
+			}
+			writeErr(w, http.StatusBadGateway, msg)
 			return
 		}
 		summary, proposal = "", ""

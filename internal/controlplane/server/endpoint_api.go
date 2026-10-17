@@ -101,10 +101,11 @@ func (s *Server) endpointPolicy(w http.ResponseWriter, r *http.Request, ep store
 
 func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endpoint) {
 	var req struct {
-		PolicyVersion int64 `json:"policy_version"`
+		PolicyVersion int64  `json:"policy_version"`
+		Version       string `json:"version"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req)
-	if err := s.Store.Heartbeat(r.Context(), ep.ID, req.PolicyVersion); err != nil {
+	if err := s.Store.Heartbeat(r.Context(), ep.ID, req.PolicyVersion, clip(req.Version, 64)); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -149,6 +150,6 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 			}
 		}
 	}
-	_ = s.Store.Heartbeat(r.Context(), ep.ID, ep.PolicyVersion)
+	_ = s.Store.Heartbeat(r.Context(), ep.ID, ep.PolicyVersion, "")
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": len(evs)})
 }

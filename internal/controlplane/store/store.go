@@ -190,8 +190,10 @@ func (s *Store) AuthEndpoint(ctx context.Context, secret string) (Endpoint, erro
 	return e, err
 }
 
-func (s *Store) Heartbeat(ctx context.Context, id string, policyVersion int64) error {
-	_, err := s.db.Exec(ctx, `update cp.endpoints set last_seen = now(), policy_version = $2 where id = $1`, id, policyVersion)
+func (s *Store) Heartbeat(ctx context.Context, id string, policyVersion int64, version string) error {
+	// version: the effigentd build now running (enrollment recorded the first one)
+	_, err := s.db.Exec(ctx, `update cp.endpoints set last_seen = now(), policy_version = $2,
+		version = case when $3 = '' then version else $3 end where id = $1`, id, policyVersion, version)
 	return err
 }
 

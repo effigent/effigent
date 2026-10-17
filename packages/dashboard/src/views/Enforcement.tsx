@@ -8,7 +8,7 @@ import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiEnrollment } from '@/lib/api.ts';
 import { ago, dateTime, type EndpointRow } from '@/lib/live-map.ts';
 import type { AgentType } from '@/types.ts';
-import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
+import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageGuide, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
 
 /** How each agent is recognised (policy/default.yaml) and which layers enforce it. */
 const INTEGRATIONS: { type: AgentType; detect: string; hooks: string | null }[] = [
@@ -239,7 +239,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
 
   return (
     <div className="page">
-      <PageHead title="Enforcement" sub="effigentd on every endpoint: what it sees, what it can stop, and whether it has the latest policy." />
+      <PageHead title="Machines" sub="Every laptop and server running Effigent: what it can stop, and whether it has your latest policy." />
+      <PageGuide id="machines" steps={[<>Create an enrollment token below (one per machine, or multi-use for a fleet)</>, <>Run the one-line install on the machine, or deploy it with your MDM</>, <>It shows up here and starts following your published policy</>]} action={<a className="btn primary sm" href="#enroll"><Ic n="plus" /> Add a machine</a>} />
 
       <div className="grid-4">
         <Card className="mini-stat"><div className="k">Endpoints online</div><div className="v">{online.length}/{eps.length}</div><div className="s">{eps.length - online.length} need attention</div></Card>

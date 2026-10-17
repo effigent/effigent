@@ -902,3 +902,27 @@ tr.revoked td { opacity: 0.55; }
 /* React Flow attribution: kept (MIT, unpaid) but toned to the palette. */
 .graph-canvas .react-flow__attribution { background: transparent; }
 .graph-canvas .react-flow__attribution a { color: var(--txt-4); font-size: 9px; }
+
+/* sidebar sections */
+.nav-section .nav-group { margin: 12px 0 4px; font-size: 11px; }
+.nav-section:first-child .nav-group { margin-top: 2px; }
+.nav-section.soon .nav-item { opacity: 0.6; }
+
+/* "how this page works" strip */
+.page-guide { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 18px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2, var(--panel)); }
+.page-guide ol { display: flex; gap: 18px; flex-wrap: wrap; margin: 0; padding: 0; list-style: none; flex: 1 1 420px; counter-reset: step; }
+.page-guide li { counter-increment: step; display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--txt-2); max-width: 340px; }
+.page-guide li::before { content: counter(step); flex: none; width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--accent, #6d7cff); border: 1px solid var(--accent, #6d7cff); }
+.page-guide .guide-close { background: none; border: 0; color: var(--txt-3); cursor: pointer; padding: 4px; }
+
+/* get-started checklist */
+.setup { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; padding: 0 20px 18px; }
+.setup-step { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--border); border-radius: 10px; text-decoration: none; color: inherit; }
+.setup-step:hover { border-color: var(--accent, #6d7cff); }
+.setup-step.done { opacity: 0.6; }
+.setup-step .n { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; border: 1px solid var(--border); color: var(--txt-2); }
+.setup-step.done .n { background: var(--green); border-color: var(--green); color: #fff; }
+.setup-step .t { font-size: 14px; font-weight: 600; }
+.setup-step .d { font-size: 12px; color: var(--txt-3); margin-top: 2px; }
+.setup-bar { height: 6px; border-radius: 3px; background: var(--border); margin: 0 20px 14px; overflow: hidden; }
+.setup-bar > i { display: block; height: 100%; background: var(--green); }

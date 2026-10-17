@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useDemoMode } from '@/demo.tsx';
 import { THEME_OPTIONS, useTheme, type ThemePref } from '@/theme.tsx';
@@ -126,6 +126,23 @@ export function CardHead({ title, sub, href, children }: { title: ReactNode; sub
         {children}
         {href && <Link className="view-all" href={href}>View all <Ic n="arrowRight" size={13} /></Link>}
       </div>
+    </div>
+  );
+}
+
+/** "How this page works": up to three numbered steps and the page's main
+ *  action, shown under the title. Hidden per page once dismissed (this browser). */
+export function PageGuide({ id, steps, action }: { id: string; steps: ReactNode[]; action?: ReactNode }) {
+  const key = `effigent.guide.${id}`;
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => { try { setHidden(localStorage.getItem(key) === '1'); } catch { /* storage blocked */ } }, [key]);
+  if (hidden) return null;
+  return (
+    <div className="page-guide" role="note" aria-label="How this page works">
+      <ol>{steps.map((s, i) => <li key={i}><span>{s}</span></li>)}</ol>
+      {action}
+      <button className="guide-close" title="Hide these steps" aria-label="Hide these steps"
+        onClick={() => { setHidden(true); try { localStorage.setItem(key, '1'); } catch { /* storage blocked */ } }}><Ic n="x" size={14} /></button>
     </div>
   );
 }
