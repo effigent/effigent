@@ -26,12 +26,12 @@ export function GetStarted() {
   const mode = summarizePolicy(body).mode;
   const machines = endpointRows.filter((e) => !e.revoked).length;
   const steps = [
-    { done: machines > 0, title: 'Install on a machine', desc: machines ? `${machines} machine${machines === 1 ? '' : 's'} reporting` : 'One command per laptop or server', href: '/enforcement#enroll' },
+    { done: machines > 0, title: 'Install on a machine', desc: machines ? `${machines} machine${machines === 1 ? '' : 's'} reporting` : 'One command per machine', href: '/enforcement#enroll' },
     { done: latestPolicy > 0, title: 'Publish your policy', desc: latestPolicy ? `v${latestPolicy} is live` : 'Start from the built-in default', href: '/policies' },
-    { done: mode === 'denylist' || mode === 'allowlist', title: 'Turn on blocking', desc: mode ? `Mode: ${mode}` : 'Monitor first, then denylist', href: '/policies' },
-    { done: /_approve\s*:/.test(body), title: 'Ask before risky actions', desc: 'e.g. approval before git push --force', href: '/policies' },
-    { done: !!notify && (notify.slack_webhook_set || notify.emails.length > 0), title: 'Get approvals in Slack or email', desc: 'Approve or deny from the message', href: '/settings#approvals' },
-    { done: tools === true, title: 'Connect your tools', desc: 'Optional: API keys & webhooks (Windmill, Tines)', href: '/settings#integrations', optional: true },
+    { done: mode === 'denylist' || mode === 'allowlist', title: 'Turn on blocking', desc: mode ? `Now: ${mode}` : 'Monitor, then denylist', href: '/policies' },
+    { done: /_approve\s*:/.test(body), title: 'Ask before risky actions', desc: 'e.g. before a force push', href: '/policies' },
+    { done: !!notify && (notify.slack_webhook_set || notify.emails.length > 0), title: 'Approvals in Slack / email', desc: 'Decide from the message', href: '/settings#approvals' },
+    { done: tools === true, title: 'Connect your tools', desc: 'Optional: Windmill, Tines', href: '/settings#integrations', optional: true },
   ];
   const required = steps.filter((s) => !s.optional);
   const done = required.filter((s) => s.done).length;
