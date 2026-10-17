@@ -43,6 +43,10 @@ export function createFixtureApi(): Api {
   const iso = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString();
   const me: ApiMe = { user_id: 'user_demo', tenant: 'org:demo', role: 'admin', via: 'clerk' };
   let version = 3;
+  let exceptions: { id: string; endpoints: string[]; agents: string[]; list: string; value: string; reason?: string; expires_at: string | null; created_at: string; active: boolean; machines: string[] }[] = [
+    { id: 'exc_demo1', endpoints: ['jane-mbp'], agents: ['claude-code'], list: 'exec_deny', value: 'curl', reason: 'API debugging this sprint',
+      expires_at: new Date(now + 5 * 86_400_000).toISOString(), created_at: iso(60 * 20), active: true, machines: ['jane-mbp'] },
+  ];
   let apiKeys: { id: string; name: string; prefix: string; scopes: string[]; created_by: string; created_at: string; expires_at: null; last_used_at: string | null; revoked: boolean }[] = [
     { id: 'key-1', name: 'windmill', prefix: 'efk_3f9a1c2e', scopes: ['approvals', 'read'], created_by: me.user_id, created_at: iso(60 * 24 * 3), expires_at: null, last_used_at: iso(4), revoked: false },
   ];
@@ -91,6 +95,10 @@ export function createFixtureApi(): Api {
       if (p === '/approvals') return delay([]) as Promise<T>; // the demo queue reads the sample store
       if (p === '/notifications') return delay(notifications) as Promise<T>;
       if (p === '/api-keys') return delay(apiKeys) as Promise<T>;
+      if (p === '/exceptions') return delay(exceptions) as Promise<T>;
+      if (p === '/exceptions/options') return delay({ agents: ['claude-code', 'codex', 'gemini-cli'], mode: 'denylist', options: [
+        { list: 'exec_deny', value: '/usr/bin/curl', agents: [''] }, { list: 'exec_deny', value: '/usr/bin/nc', agents: [''] },
+        { list: 'domain_deny', value: 'pastebin.com', agents: [''] }, { list: 'command_approve', value: 'git push*', agents: [''] }] }) as Promise<T>;
       if (p === '/webhooks') return delay(webhooks) as Promise<T>;
       if (/^\/webhooks\/[^/]+\/deliveries$/.test(p)) return delay([]) as Promise<T>;
       return Promise.reject(new ApiError(404, 'not found'));
@@ -123,6 +131,20 @@ export function createFixtureApi(): Api {
         if (b.emails) notifications = { ...notifications, emails: b.emails };
         log('notifications.update', 'approvals', { slack_webhook_set: notifications.slack_webhook_set, emails: notifications.emails });
         return delay(notifications) as Promise<T>;
+      }
+      if (method === 'POST' && path === '/exceptions') {
+        const b = (body ?? {}) as { endpoints?: string[]; agents?: string[]; list: string; value: string; reason?: string; expires_hours?: number };
+        const at = new Date();
+        const x = { id: `exc_demo${exceptions.length + 1}`, endpoints: b.endpoints ?? [], agents: b.agents ?? [], list: b.list, value: b.value, reason: b.reason,
+          expires_at: b.expires_hours ? new Date(at.getTime() + b.expires_hours * 3600_000).toISOString() : null, created_at: at.toISOString(),
+          active: true, machines: b.endpoints ?? [] };
+        exceptions = [...exceptions, x];
+        log('exception.create', x.id, x);
+        return delay({ exception: x }) as Promise<T>;
+      }
+      if (method === 'DELETE' && path.startsWith('/exceptions/')) {
+        exceptions = exceptions.filter((x) => x.id !== path.slice(12));
+        return delay({ ok: true }) as Promise<T>;
       }
       if (method === 'POST' && path === '/api-keys') {
         const b = (body ?? {}) as { name?: string; scopes?: string[] };

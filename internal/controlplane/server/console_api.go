@@ -98,21 +98,28 @@ func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, p Principal) 
 		writeErr(w, http.StatusBadRequest, "body must be {\"body\": \"<policy yaml>\", \"comment\": \"…\", \"policies\": [optional central policies]}")
 		return
 	}
-	if req.Policies == nil {
-		prev, err := s.Store.LatestPolicy(r.Context(), p.Tenant)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			s.fail(w, err)
-			return
-		}
-		req.Policies = prev.Source
-	}
-	ps, err := decodePolicies(req.Policies)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+	// Omitted policies keep the published ones; exceptions are always kept
+	// (they are managed under /api/v1/exceptions).
+	prev, err := s.Store.LatestPolicy(r.Context(), p.Tenant)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.fail(w, err)
 		return
 	}
-	if len(ps) > 0 {
-		v, rep, code, err := s.publishCentral(r, p, req.Body, ps, req.Comment)
+	prevSrc, err := decodeSource(prev.Source)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	src := source{Policies: prevSrc.Policies, Exceptions: prevSrc.Exceptions}
+	if req.Policies != nil {
+		if src.Policies, err = decodePolicies(req.Policies); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	ps := src.Policies
+	if !src.empty() {
+		v, rep, code, err := s.publishCentral(r, p, req.Body, src, req.Comment)
 		if code == http.StatusInternalServerError {
 			s.fail(w, err)
 			return

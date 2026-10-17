@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -328,6 +329,29 @@ func (s *Store) ListEvents(ctx context.Context, tenant string, limit int, typ st
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// LatestSources returns each tenant's newest policy version whose source
+// mentions exceptions (the exception-expiry job republishes them).
+func (s *Store) LatestSources(ctx context.Context) (map[string]PolicyVersion, error) {
+	rows, err := s.db.Query(ctx, `select distinct on (tenant_ref) tenant_ref, version, body, source, comment, created_by, created_at
+		from cp.policy_versions order by tenant_ref, version desc`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]PolicyVersion{}
+	for rows.Next() {
+		var t string
+		var p PolicyVersion
+		if err := rows.Scan(&t, &p.Version, &p.Body, &p.Source, &p.Comment, &p.CreatedBy, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		if strings.Contains(string(p.Source), `"exceptions"`) {
+			out[t] = p
+		}
 	}
 	return out, rows.Err()
 }

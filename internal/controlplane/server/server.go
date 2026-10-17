@@ -42,7 +42,14 @@ func (s *Server) Handler() http.Handler {
 		s.limits = newLimits()
 	}
 	if s.Store != nil {
-		s.workerOnce.Do(func() { go s.runWebhooks(context.Background()) })
+		s.workerOnce.Do(func() {
+			go s.runWebhooks(context.Background())
+			go func() { // exceptions whose time is up are republished away
+				for range time.Tick(time.Minute) {
+					s.expireExceptions(context.Background())
+				}
+			}()
+		})
 		if s.Auth != nil && s.Auth.APIKeys == nil {
 			s.Auth.APIKeys = func(ctx context.Context, secret string) (string, string, []string, error) {
 				k, err := s.Store.AuthAPIKey(ctx, secret)
@@ -81,6 +88,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/notifications", s.console(read, s.getNotifications))
 	mux.HandleFunc("PUT /api/v1/notifications", s.console(write, s.putNotifications))
 	mux.HandleFunc("POST /api/v1/notifications/test", s.console(write, s.testNotifications))
+	// per-machine exceptions to the company policy (each change publishes a version)
+	mux.HandleFunc("GET /api/v1/exceptions", s.console(read, s.listExceptions))
+	mux.HandleFunc("GET /api/v1/exceptions/options", s.console(read, s.exceptionOptions))
+	mux.HandleFunc("POST /api/v1/exceptions", s.scoped("policy", write, s.createException))
+	mux.HandleFunc("DELETE /api/v1/exceptions/{id}", s.scoped("policy", write, s.deleteException))
 	// integrations: API keys and webhooks are managed by people only
 	mux.HandleFunc("GET /api/v1/api-keys", s.console(read, s.listAPIKeys))
 	mux.HandleFunc("POST /api/v1/api-keys", s.console(write, s.createAPIKey))

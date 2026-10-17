@@ -89,6 +89,8 @@ type Output struct {
 	YAML     []byte            `json:"-"`
 	Added    map[string]Kernel `json:"added"` // by agent name; "" is defaults
 	Findings []Finding         `json:"findings"`
+	// Exceptions that applied to this machine.
+	Exceptions []Exception `json:"exceptions,omitempty"`
 }
 
 // DefaultsAgent is the key for the `defaults` rule (unknown agents, orphan MCP
@@ -104,6 +106,12 @@ const (
 // enforceable rule that applies to this machine merged in. A base deny is a
 // floor: a central allow can't lift it (reported).
 func Compile(base []byte, policies []policy.Policy, m Machine, now time.Time) (*Output, error) {
+	return CompileWith(base, policies, nil, m, now)
+}
+
+// CompileWith is Compile plus exceptions (Exception) for this machine,
+// applied after the central rules.
+func CompileWith(base []byte, policies []policy.Policy, exs []Exception, m Machine, now time.Time) (*Output, error) {
 	bp, err := ep.Parse(base)
 	if err != nil {
 		return nil, fmt.Errorf("base policy: %w", err)
@@ -141,6 +149,10 @@ func Compile(base []byte, policies []policy.Policy, m Machine, now time.Time) (*
 		if len(k.ExecDeny)+len(k.FileDeny)+len(k.NetDeny)+len(k.ExecRemove)+len(k.ExecApprove)+len(k.FileApprove)+len(k.NetApprove) > 0 {
 			out.Added[name] = k
 		}
+	}
+
+	if out.Exceptions, err = applyExceptions(merged, bp, exs, m, now); err != nil {
+		return nil, err
 	}
 
 	// Defaults carry the defaults' result; an agent only overrides what differs.

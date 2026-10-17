@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { Exceptions } from '@/components/Exceptions.tsx';
 import { useEffect, useState } from 'react';
 import { MODES } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
@@ -113,6 +114,8 @@ export function Policies() {
           </>
         )}
       </Card>
+
+      <Exceptions />
 
       <div className="grid-2">
         <Card>

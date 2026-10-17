@@ -32,6 +32,9 @@ const ACTION_LABEL: Record<string, string> = {
   'webhook.create': 'Added a webhook',
   'webhook.delete': 'Deleted a webhook',
   'webhook.test': 'Sent a webhook test',
+  'exception.create': 'Added a policy exception',
+  'exception.delete': 'Removed a policy exception',
+  'exception.expire': 'A policy exception expired',
 };
 const actionLabel = (a: string) => ACTION_LABEL[a] ?? (a.startsWith('denied.') ? `Denied: ${a.slice(7)}` : a);
 

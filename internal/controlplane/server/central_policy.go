@@ -25,17 +25,51 @@ func machineOf(e store.Endpoint) compile.Machine {
 	return compile.Machine{EndpointID: e.ID, Hostname: e.Hostname, Owner: e.Owner, Teams: e.Teams}
 }
 
-func decodePolicies(raw json.RawMessage) ([]policy.Policy, error) {
-	var ps []policy.Policy
+// source is what a policy version compiles from besides its base body:
+// central policies and per-machine exceptions. Stored as
+// {"policies": [...], "exceptions": [...]}; versions from before exceptions
+// stored the policies array alone.
+type source struct {
+	Policies   []policy.Policy     `json:"policies"`
+	Exceptions []compile.Exception `json:"exceptions,omitempty"`
+}
+
+func (src source) empty() bool { return len(src.Policies) == 0 && len(src.Exceptions) == 0 }
+
+func decodeSource(raw json.RawMessage) (source, error) {
+	var src source
+	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
+		return src, nil
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&ps); err != nil {
-		return nil, fmt.Errorf("policies: %w", err)
+	if raw[0] == '[' {
+		if err := dec.Decode(&src.Policies); err != nil {
+			return src, fmt.Errorf("policies: %w", err)
+		}
+		return src, nil
 	}
-	return ps, nil
+	if err := dec.Decode(&src); err != nil {
+		return src, fmt.Errorf("source: %w", err)
+	}
+	return src, nil
+}
+
+func decodePolicies(raw json.RawMessage) ([]policy.Policy, error) {
+	src, err := decodeSource(raw)
+	return src.Policies, err
+}
+
+func encodeSource(src source) json.RawMessage {
+	if src.empty() {
+		return nil
+	}
+	if src.Policies == nil {
+		src.Policies = []policy.Policy{}
+	}
+	b, _ := json.Marshal(src)
+	return b
 }
 
 func validatePolicies(ps []policy.Policy) error {
@@ -65,11 +99,11 @@ func compiledBody(pv store.PolicyVersion, e store.Endpoint) (string, *compile.Ou
 	if pv.Source == nil {
 		return pv.Body, nil, nil
 	}
-	ps, err := decodePolicies(pv.Source)
+	src, err := decodeSource(pv.Source)
 	if err != nil {
 		return "", nil, err
 	}
-	out, err := compile.Compile([]byte(pv.Body), ps, machineOf(e), pv.CreatedAt)
+	out, err := compile.CompileWith([]byte(pv.Body), src.Policies, src.Exceptions, machineOf(e), pv.CreatedAt)
 	if err != nil {
 		return "", nil, err
 	}
@@ -99,7 +133,8 @@ type unsupported struct {
 
 // compileAll compiles a version for every live endpoint of the tenant. Any
 // compile error fails the publish: an endpoint would refuse the result.
-func compileAll(base []byte, ps []policy.Policy, eps []store.Endpoint, at time.Time) (*publishReport, error) {
+func compileAll(base []byte, src source, eps []store.Endpoint, at time.Time) (*publishReport, error) {
+	ps := src.Policies
 	bp, err := ep.Parse(base)
 	if err != nil {
 		return nil, err
@@ -113,7 +148,7 @@ func compileAll(base []byte, ps []policy.Policy, eps []store.Endpoint, at time.T
 		if e.Revoked {
 			continue
 		}
-		out, err := compile.Compile(base, ps, machineOf(e), at)
+		out, err := compile.CompileWith(base, ps, src.Exceptions, machineOf(e), at)
 		if err != nil {
 			return nil, fmt.Errorf("compiling for %s (%s): %w", e.Hostname, e.ID, err)
 		}
@@ -134,7 +169,8 @@ func compileAll(base []byte, ps []policy.Policy, eps []store.Endpoint, at time.T
 
 // publishCentral validates and compiles a base + central policies for every
 // machine, stores the version, and returns it with the compile report.
-func (s *Server) publishCentral(r *http.Request, p Principal, base string, ps []policy.Policy, comment string) (int64, *publishReport, int, error) {
+func (s *Server) publishCentral(r *http.Request, p Principal, base string, src source, comment string) (int64, *publishReport, int, error) {
+	ps := src.Policies
 	if base == "" {
 		base = string(ep.DefaultYAML)
 	}
@@ -149,12 +185,16 @@ func (s *Server) publishCentral(r *http.Request, p Principal, base string, ps []
 		return 0, nil, http.StatusInternalServerError, err
 	}
 	at := time.Now().UTC().Truncate(time.Microsecond) // what Postgres stores
-	rep, err := compileAll([]byte(base), ps, eps, at)
+	for _, x := range src.Exceptions {
+		if err := x.Validate(); err != nil {
+			return 0, nil, http.StatusBadRequest, fmt.Errorf("exception %s: %w", x.ID, err)
+		}
+	}
+	rep, err := compileAll([]byte(base), src, eps, at)
 	if err != nil {
 		return 0, nil, http.StatusBadRequest, err
 	}
-	src, _ := json.Marshal(ps)
-	v, err := s.Store.PutPolicy(r.Context(), p.Tenant, base, src, comment, p.UserID, at)
+	v, err := s.Store.PutPolicy(r.Context(), p.Tenant, base, encodeSource(src), comment, p.UserID, at)
 	if err != nil {
 		return 0, nil, http.StatusInternalServerError, err
 	}
@@ -194,13 +234,13 @@ func (s *Server) setEndpointOwner(w http.ResponseWriter, r *http.Request, p Prin
 	resp := map[string]any{"endpoint": e}
 	pv, err := s.Store.LatestPolicy(r.Context(), p.Tenant)
 	if err == nil && pv.Source != nil {
-		ps, err := decodePolicies(pv.Source)
+		src, err := decodeSource(pv.Source)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		comment := fmt.Sprintf("recompiled: %s owner %q teams %v", e.Hostname, e.Owner, e.Teams)
-		v, rep, code, err := s.publishCentral(r, p, pv.Body, ps, comment)
+		v, rep, code, err := s.publishCentral(r, p, pv.Body, src, comment)
 		if err != nil {
 			if code == http.StatusInternalServerError {
 				s.fail(w, err)
