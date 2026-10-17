@@ -8,7 +8,7 @@ import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
-export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function Sidebar({ open, onClose, collapsed = false, onToggle }: { open: boolean; onClose: () => void; collapsed?: boolean; onToggle?: () => void }) {
   const pathname = usePathname();
   const { pending, env, dispatch } = useStore();
   const { endpointRows, loaded, fixture, pendingApprovals } = useLive();
@@ -35,7 +35,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <div key={sec.title} className={`nav-section ${sec.soon ? 'soon' : ''}`}>
             <div className="nav-group">{sec.title}</div>
             {sec.items.map((item) => (
-              <Link key={item.href} href={item.href} title={item.hint} className={`nav-item ${isActive(item.href) ? 'active' : ''} ${sec.soon ? 'muted' : ''}`} onClick={onClose}
+              <Link key={item.href} href={item.href} title={collapsed ? item.label : item.hint} className={`nav-item ${isActive(item.href) ? 'active' : ''} ${sec.soon ? 'muted' : ''}`} onClick={onClose}
                 aria-current={isActive(item.href) ? 'page' : undefined}>
                 <Ic n={item.icon} />
                 <span>{item.label}</span>
@@ -82,6 +82,15 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
         <Link href="/enforcement" className="deploy-link" onClick={onClose}>Manage deployment <Ic n="arrowRight" size={13} /></Link>
       </div>
+      <Link href="/enforcement" className="deploy-mini" onClick={onClose} title={loaded ? `${online}/${eps.length} endpoints online · Manage deployment` : 'Connecting…'}>
+        <Ic n="hex" /><span className="dot" style={online ? undefined : { background: 'var(--txt-4)', boxShadow: 'none' }} />
+      </Link>
+      {onToggle && (
+        <button className="sidebar-toggle" onClick={onToggle} aria-label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'} title={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
+          aria-expanded={!collapsed}>
+          <Ic n="chevronRight" /><span>Collapse</span>
+        </button>
+      )}
     </aside>
   );
 }

@@ -56,6 +56,8 @@ export function Policies() {
   const leftText = bodyOf(leftSel);
   const rightText = rightSel === null ? text : bodyOf(rightSel);
   const editing = rightSel === null;
+  const comparing = leftSel !== null || rightSel !== null;
+  const split = dirty || comparing; // one column while just viewing
   const stats = useMemo(() => (leftText !== undefined && rightText !== undefined ? lineStats(leftText, rightText) : null), [leftText, rightText]);
   const liveLabel = latestPolicy > 0 ? `v${latestPolicy} (live)` : 'Built-in default';
   const compare = (from: number, to: number | null) => {
@@ -123,7 +125,18 @@ export function Policies() {
         {!loaded && !policy ? <Loading /> : (
           <>
             <div ref={editorRef} style={{ padding: '0 20px', scrollMarginTop: 88 }}>
-              <div className="toolbar" style={{ margin: '0 0 8px', fontSize: 13 }}>
+              {!split ? (
+                <div className="toolbar" style={{ margin: '0 0 8px', fontSize: 13 }}>
+                  <span className="muted">{canWrite ? 'Edit the policy below — as soon as you change something, the live version appears on the left to compare.' : 'The live policy.'}</span>
+                  <span className="grow" />
+                  {history.length > 1 && (
+                    <button className="btn sm" onClick={() => { const prev = history.find((h) => h.version < latestPolicy); if (prev) { setLeftSel(prev.version); setRightSel(latestPolicy); } }}>
+                      <Ic n="layers" size={14} /> Compare versions
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="toolbar" style={{ margin: '0 0 8px', fontSize: 13 }}>
                 <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Left
                   <select className="select" style={{ width: 210 }} value={leftSel ?? 'live'} aria-label="Left side"
                     onChange={(e) => setLeftSel(e.target.value === 'live' ? null : Number(e.target.value))}>
@@ -144,15 +157,16 @@ export function Policies() {
                   : <span className="muted">no differences</span>}
                 <span className="grow" />
                 <button className={`chip ${onlyChanges ? 'on' : ''}`} aria-pressed={onlyChanges} onClick={() => setOnlyChanges((v) => !v)}>Only changes</button>
-                {!editing && <button className="btn sm" onClick={() => setRightSel(null)}><Ic n="pencil" size={14} /> Back to editing</button>}
+                {comparing && <button className="btn sm" onClick={() => { setLeftSel(null); setRightSel(null); }}><Ic n="pencil" size={14} /> Back to editing</button>}
               </div>
+              )}
               {verErr && <div className="callout bad" style={{ margin: '0 0 8px' }}><Ic n="alert" size={16} /><span>{verErr}</span></div>}
               {leftText === undefined || rightText === undefined ? <Loading label="Loading version…" /> : (
-                <PolicyDiff left={leftText} right={rightText} readOnlyRight={!editing || !canWrite} onlyChanges={onlyChanges}
+                <PolicyDiff left={leftText} right={rightText} readOnlyRight={!editing || !canWrite} onlyChanges={onlyChanges && split} split={split}
                   onChange={(v) => { if (editing) { setDraft(v); setErr(null); } }} />
               )}
               <div className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
-                {editing ? 'Edit on the right; red is what you removed, green what you added. The arrows copy a block back from the left.' : 'Comparing two published versions (read-only).'}
+                {!split ? null : editing ? 'Edit on the right; red is what you removed, green what you added. The arrows copy a block back from the left.' : 'Comparing two published versions (read-only).'}
               </div>
             </div>
             {stale && (

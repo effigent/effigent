@@ -60,13 +60,19 @@ function ApiBanner({ dev }: { dev: boolean }) {
 
 function Frame({ dev, userMenu, children }: { dev: boolean; userMenu: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
   const { ready } = useDemoMode();
   useEffect(() => setOpen(false), [pathname]);
+  useEffect(() => { try { setCollapsed(localStorage.getItem('effigent.sidebar') === 'collapsed'); } catch { /* storage blocked */ } }, []);
+  const toggle = () => setCollapsed((c) => {
+    try { localStorage.setItem('effigent.sidebar', c ? 'open' : 'collapsed'); } catch { /* storage blocked */ }
+    return !c;
+  });
   return (
-    <div className="app">
+    <div className={`app ${collapsed ? 'collapsed' : ''}`}>
       {open && <div className="sidebar-backdrop" onClick={() => setOpen(false)} />}
-      <Sidebar open={open} onClose={() => setOpen(false)} />
+      <Sidebar open={open} onClose={() => setOpen(false)} collapsed={collapsed} onToggle={toggle} />
       <div className="main">
         <TopBar dev={dev} userMenu={userMenu} onMenu={() => setOpen(true)} />
         <DemoBanner />

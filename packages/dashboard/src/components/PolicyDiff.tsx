@@ -36,8 +36,10 @@ export function lineStats(a: string, b: string): { added: number; removed: numbe
  * lines are red on the left, added lines green on the right, aligned. Arrows
  * in the middle copy a chunk from the left back into the right.
  */
-export function PolicyDiff({ left, right, onChange, readOnlyRight = false, onlyChanges = false, height = 560 }: {
-  left: string; right: string; onChange?: (v: string) => void; readOnlyRight?: boolean; onlyChanges?: boolean; height?: number;
+export function PolicyDiff({ left, right, onChange, readOnlyRight = false, onlyChanges = false, split = true, height = 560 }: {
+  left: string; right: string; onChange?: (v: string) => void; readOnlyRight?: boolean; onlyChanges?: boolean;
+  /** false: only the right (editable) side, as a plain editor — the same editor, so typing keeps focus when it splits */
+  split?: boolean; height?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<MergeView | null>(null);
@@ -74,8 +76,8 @@ export function PolicyDiff({ left, right, onChange, readOnlyRight = false, onlyC
   }, [right]);
 
   return (
-    <div className="policy-diff" style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'auto', maxHeight: height }}>
-      <div ref={host} style={{ minWidth: 760 }} />
+    <div className={`policy-diff ${split ? '' : 'single'}`} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'auto', maxHeight: height }}>
+      <div ref={host} style={{ minWidth: split ? 760 : undefined }} />
     </div>
   );
 }
