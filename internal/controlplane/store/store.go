@@ -278,6 +278,17 @@ func (s *Store) LatestPolicy(ctx context.Context, tenant string) (PolicyVersion,
 	return p, err
 }
 
+// PolicyAt returns one published version.
+func (s *Store) PolicyAt(ctx context.Context, tenant string, version int) (PolicyVersion, error) {
+	var p PolicyVersion
+	err := s.db.QueryRow(ctx, `select version, body, source, comment, created_by, created_at from cp.policy_versions
+		where tenant_ref = $1 and version = $2`, tenant, version).Scan(&p.Version, &p.Body, &p.Source, &p.Comment, &p.CreatedBy, &p.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return p, ErrNotFound
+	}
+	return p, err
+}
+
 func (s *Store) PolicyHistory(ctx context.Context, tenant string) ([]PolicyVersion, error) {
 	rows, err := s.db.Query(ctx, `select version, comment, created_by, created_at from cp.policy_versions
 		where tenant_ref = $1 order by version desc limit 100`, tenant)

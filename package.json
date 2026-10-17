@@ -2,7 +2,7 @@
   "name": "effigent",
   "private": true,
   "version": "0.1.0",
-  "description": "Effigent \u2014 the compiler for AI agents. Graph-based determinism detection that compiles repetitive LLM reasoning into deterministic code.",
+  "description": "Effigent — the compiler for AI agents. Graph-based determinism detection that compiles repetitive LLM reasoning into deterministic code.",
   "workspaces": [
     "packages/*"
   ],
@@ -18,5 +18,8 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.1"
+  },
+  "dependencies": {
+    "@lezer/lr": "1.4.10"
   }
 }

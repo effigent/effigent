@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/effigent/effigent/internal/controlplane/store"
@@ -72,6 +73,24 @@ func (s *Server) getPolicy(w http.ResponseWriter, r *http.Request, p Principal) 
 		return
 	}
 	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pv)
+}
+
+// getPolicyVersion returns one published version (to compare versions).
+func (s *Server) getPolicyVersion(w http.ResponseWriter, r *http.Request, p Principal) {
+	v, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil || v < 1 {
+		writeErr(w, http.StatusBadRequest, "version must be a number")
+		return
+	}
+	pv, err := s.Store.PolicyAt(r.Context(), p.Tenant, v)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "no such version")
+		return
+	} else if err != nil {
 		s.fail(w, err)
 		return
 	}

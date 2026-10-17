@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { Exceptions } from '@/components/Exceptions.tsx';
 import { PolicyAssist } from '@/components/PolicyAssist.tsx';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { PolicyDiff, lineStats } from '@/components/PolicyDiff.tsx';
 import { MODES } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
@@ -35,6 +36,39 @@ export function Policies() {
   const [base, setBase] = useState<number | null>(null);
   useEffect(() => { if (draft === null) setBase(policy?.version ?? null); }, [draft, policy?.version]);
   const stale = dirty && base !== null && policy !== null && policy.version !== base;
+
+  // Side by side: the left is what's live (or any version), the right is your edit (or any version).
+  const [leftSel, setLeftSel] = useState<number | null>(null); // null = the live version
+  const [rightSel, setRightSel] = useState<number | null>(null); // null = your edit
+  const [onlyChanges, setOnlyChanges] = useState(false);
+  const [bodies, setBodies] = useState<Record<number, string>>({});
+  const [verErr, setVerErr] = useState<string | null>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const bodyOf = (v: number | null): string | undefined => (v === null || v === policy?.version ? server : bodies[v]);
+  useEffect(() => {
+    for (const v of [leftSel, rightSel]) {
+      if (v === null || v === policy?.version || bodies[v] !== undefined) continue;
+      api.get<{ body: string }>(`/policy/versions/${v}`)
+        .then((r) => setBodies((b) => ({ ...b, [v]: r.body ?? '' })))
+        .catch((e) => setVerErr(apiErrorText(e)));
+    }
+  }, [leftSel, rightSel, policy?.version, bodies, api]);
+  const leftText = bodyOf(leftSel);
+  const rightText = rightSel === null ? text : bodyOf(rightSel);
+  const editing = rightSel === null;
+  const stats = useMemo(() => (leftText !== undefined && rightText !== undefined ? lineStats(leftText, rightText) : null), [leftText, rightText]);
+  const liveLabel = latestPolicy > 0 ? `v${latestPolicy} (live)` : 'Built-in default';
+  const compare = (from: number, to: number | null) => {
+    setLeftSel(from === latestPolicy ? null : from); setRightSel(to === latestPolicy ? null : to);
+    if (to === latestPolicy && !dirty) setRightSel(null);
+    editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const restore = (v: number) => {
+    const b = bodyOf(v);
+    const load = (body: string) => { setDraft(body); setRightSel(null); setLeftSel(null); setComment((c) => c || `Restore v${v}`); setErr(null); editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+    if (b !== undefined) load(b);
+    else api.get<{ body: string }>(`/policy/versions/${v}`).then((r) => load(r.body ?? '')).catch((e) => setVerErr(apiErrorText(e)));
+  };
 
   const eps = endpointRows.filter((e) => !e.revoked);
   const onLatest = eps.filter((e) => latestPolicy > 0 && e.policyVersion === latestPolicy).length;
@@ -88,9 +122,38 @@ export function Policies() {
         </CardHead>
         {!loaded && !policy ? <Loading /> : (
           <>
-            <div style={{ padding: '0 20px' }}>
-              <textarea className="textarea policy-editor" spellCheck={false} aria-label="Policy YAML" value={text} readOnly={!canWrite}
-                onChange={(e) => { setDraft(e.target.value); setErr(null); }} />
+            <div ref={editorRef} style={{ padding: '0 20px', scrollMarginTop: 88 }}>
+              <div className="toolbar" style={{ margin: '0 0 8px', fontSize: 13 }}>
+                <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Left
+                  <select className="select" style={{ width: 210 }} value={leftSel ?? 'live'} aria-label="Left side"
+                    onChange={(e) => setLeftSel(e.target.value === 'live' ? null : Number(e.target.value))}>
+                    <option value="live">{liveLabel}</option>
+                    {history.filter((h) => h.version !== latestPolicy).map((h) => <option key={h.version} value={h.version}>v{h.version} — {h.comment || 'no comment'}</option>)}
+                  </select>
+                </label>
+                <Ic n="chevronRight" size={14} />
+                <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Right
+                  <select className="select" style={{ width: 210 }} value={rightSel ?? 'edit'} aria-label="Right side"
+                    onChange={(e) => setRightSel(e.target.value === 'edit' ? null : Number(e.target.value))}>
+                    <option value="edit">{canWrite ? 'Your edit (editable)' : 'Current text'}</option>
+                    {history.map((h) => <option key={h.version} value={h.version}>v{h.version}{h.version === latestPolicy ? ' (live)' : ''} — {h.comment || 'no comment'}</option>)}
+                  </select>
+                </label>
+                {stats && (stats.added || stats.removed)
+                  ? <span className="tnum"><b style={{ color: 'var(--green, #16a34a)' }}>+{stats.added}</b> <b style={{ color: 'var(--red)' }}>−{stats.removed}</b> lines</span>
+                  : <span className="muted">no differences</span>}
+                <span className="grow" />
+                <button className={`chip ${onlyChanges ? 'on' : ''}`} aria-pressed={onlyChanges} onClick={() => setOnlyChanges((v) => !v)}>Only changes</button>
+                {!editing && <button className="btn sm" onClick={() => setRightSel(null)}><Ic n="pencil" size={14} /> Back to editing</button>}
+              </div>
+              {verErr && <div className="callout bad" style={{ margin: '0 0 8px' }}><Ic n="alert" size={16} /><span>{verErr}</span></div>}
+              {leftText === undefined || rightText === undefined ? <Loading label="Loading version…" /> : (
+                <PolicyDiff left={leftText} right={rightText} readOnlyRight={!editing || !canWrite} onlyChanges={onlyChanges}
+                  onChange={(v) => { if (editing) { setDraft(v); setErr(null); } }} />
+              )}
+              <div className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+                {editing ? 'Edit on the right; red is what you removed, green what you added. The arrows copy a block back from the left.' : 'Comparing two published versions (read-only).'}
+              </div>
             </div>
             {stale && (
               <div className="callout warn"><Ic n="alert" size={16} /><span>
@@ -110,7 +173,7 @@ export function Policies() {
                   disabled={!canWrite} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && canWrite && (dirty || latestPolicy === 0) && !busy && publish()} />
               </div>
               <button className="btn" onClick={() => { setDraft(null); setErr(null); }} disabled={!dirty || busy}><Ic n="rotate" /> Revert</button>
-              <button className="btn primary" onClick={publish} disabled={!canWrite || busy || (!dirty && latestPolicy > 0) || !text.trim()}
+              <button className="btn primary" onClick={publish} disabled={!canWrite || busy || !editing || (!dirty && latestPolicy > 0) || !text.trim()}
                 title={!canWrite ? 'Org admins and security admins can publish' : undefined}>
                 <Ic n="upload" /> {busy ? 'Publishing…' : latestPolicy > 0 ? `Publish v${latestPolicy + 1}` : 'Publish v1'}
               </button>
@@ -127,7 +190,7 @@ export function Policies() {
           {history.length === 0 ? <Empty icon="clock" title="No versions yet" sub="The first publish becomes v1." /> : (
             <div className="tbl-wrap">
               <table className="tbl">
-                <thead><tr><th>Version</th><th>Comment</th><th>By</th><th>When</th><th className="num">Endpoints</th></tr></thead>
+                <thead><tr><th>Version</th><th>Comment</th><th>By</th><th>When</th><th className="num">Endpoints</th><th /></tr></thead>
                 <tbody>
                   {history.map((h) => (
                     <tr key={h.version}>
@@ -136,6 +199,13 @@ export function Policies() {
                       <td className="mono-sm muted">{h.created_by}</td>
                       <td className="muted" title={dateTime(ms(h.created_at))}>{ago(ms(h.created_at), now)}</td>
                       <td className="num tnum">{eps.filter((e) => e.policyVersion === h.version).length}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {h.version !== latestPolicy && <>
+                          <button className="btn sm" onClick={() => compare(h.version, latestPolicy)} title={`v${h.version} on the left, the live v${latestPolicy} on the right`}>Compare</button>{' '}
+                          {canWrite && <button className="btn sm" onClick={() => restore(h.version)} title={`Load v${h.version} as your edit (publish to make it live)`}>Restore</button>}
+                        </>}
+                        {h.version === latestPolicy && h.version > 1 && <button className="btn sm" onClick={() => { setLeftSel(h.version - 1); setRightSel(h.version); editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} title={`What v${h.version} changed`}>What changed</button>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

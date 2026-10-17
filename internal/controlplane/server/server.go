@@ -111,6 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/policy", s.console(read, s.getPolicy))
 	mux.HandleFunc("PUT /api/v1/policy", s.scoped("policy", write, s.putPolicy))
 	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))
+	mux.HandleFunc("GET /api/v1/policy/versions/{version}", s.console(read, s.getPolicyVersion))
 	mux.HandleFunc("POST /api/v1/policy/assist", s.scoped("policy", write, s.assistPolicy))
 	mux.HandleFunc("GET /api/v1/events", s.console(read, s.listEvents))
 	mux.HandleFunc("GET /api/v1/events/verify", s.console(read, s.verifyEvents))
