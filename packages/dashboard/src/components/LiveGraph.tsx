@@ -17,7 +17,7 @@ import type { ConsoleEvent, Outcome as EventOutcome } from '@/types.ts';
 import { EDGE_COLOR, GraphCanvas, type GEdge, type GNode, type GNodeData } from './AgentGraph.tsx';
 import { Empty, OutcomePill, RiskyTag } from './ui.tsx';
 
-export const RANGE_LABEL: Record<Range, string> = { '1h': 'last hour', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' };
+export const RANGE_LABEL: Record<Range, string> = { '1h': 'last hour', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days', '90d': 'last 90 days' };
 
 export interface LiveGraphData {
   graph: LiveGraph;

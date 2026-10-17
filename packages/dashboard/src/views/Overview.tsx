@@ -109,7 +109,7 @@ export function Overview() {
   const mode = summary?.mode && summary.mode in MODES ? (summary.mode as Mode) : null;
   const n = (k: string) => summary?.lists[k] ?? 0;
   const onLatest = eps.filter((e) => latestPolicy > 0 && e.policyVersion === latestPolicy).length;
-  const rangeLabel = { '1h': 'last hour', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' }[range];
+  const rangeLabel = { '1h': 'last hour', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days', '90d': 'last 90 days' }[range];
 
   const activeAgents = [...agents].sort((a, b) => b.lastAt - a.lastAt).slice(0, 5);
   const activity = notable.filter((e) => e.agentType).slice(0, 5);

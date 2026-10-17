@@ -15,12 +15,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useReducer,
 import { APPROVALS, LIST_ENTRIES, POLICIES } from './data.ts';
 import type { Approval, Env, ListEntry, Policy, PolicyRule } from './types.ts';
 
-export type Range = '1h' | '24h' | '7d' | '30d';
+export type Range = '1h' | '24h' | '7d' | '30d' | '90d';
 export const RANGES: { id: Range; label: string }[] = [
   { id: '1h', label: 'Last hour' },
   { id: '24h', label: 'Last 24 hours' },
   { id: '7d', label: 'Last 7 days' },
   { id: '30d', label: 'Last 30 days' },
+  { id: '90d', label: 'Last 90 days' },
 ];
 
 export interface Viewer { name: string; role: string; initials: string }

@@ -91,7 +91,24 @@ export function createFixtureApi(): Api {
       if (p === '/endpoints') return delay(endpoints) as Promise<T>;
       if (p === '/policy') return delay(policy) as Promise<T>;
       if (p === '/policy/history') return delay(history) as Promise<T>;
-      if (p === '/events') return delay(events) as Promise<T>;
+      if (p === '/events') {
+        const qs = new URLSearchParams(path.split('?')[1] ?? '');
+        if (qs.get('paged') !== '1') return delay(events) as Promise<T>;
+        // the server's filters and cursor, over the sample events
+        const types = (qs.get('type') ?? '').split(',').filter(Boolean);
+        const since = qs.get('since') ? Date.parse(qs.get('since')!) : 0;
+        const words = (qs.get('q') ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+        const before = qs.get('before') ? Number(qs.get('before')!.split('_')[1]) : Infinity;
+        const limit = Number(qs.get('limit')) || 200;
+        const match = events.filter((e) => (!types.length || types.includes(e.type)) && Date.parse(e.time) >= since
+          && (!qs.get('agent') || e.agent === qs.get('agent')) && (!qs.get('endpoint') || e.endpoint_id === qs.get('endpoint'))
+          && words.every((w) => `${e.type} ${e.agent} ${JSON.stringify(e.body)}`.toLowerCase().includes(w)) && e.id < before);
+        const page = match.slice(0, limit);
+        const last = page[page.length - 1];
+        return delay({ events: page, next_before: match.length > limit && last ? `${Date.parse(last.time) * 1e6}_${last.id}` : '', retention_days: 90 }) as Promise<T>;
+      }
+      if (p === '/events/verify') return delay({ ok: true, batches: 42, events: events.length, archived_batches: 0, endpoints: endpoints.length, legacy_events: 0, unbatched_events: 0, problems: [] }) as Promise<T>;
+      if (p === '/events/archives') return delay({ retention_days: 90, archive_enabled: true, archives: [] }) as Promise<T>;
       if (p === '/audit') {
         const qs = new URLSearchParams(path.split('?')[1] ?? '');
         if (qs.get('paged') !== '1') return delay(audit.slice().reverse()) as Promise<T>;

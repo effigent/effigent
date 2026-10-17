@@ -143,6 +143,19 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   B2B Slack app (one Effigent app, "Add to Slack" OAuth per customer workspace) instead of
   each customer creating their own app. Control plane env for Slack approvals:
   `EFFIGENT_SLACK=1`, `EFFIGENT_SECRETS_KEY` (≥ 32 chars) and `CLERK_SECRET_KEY`. Deploy order: control plane (migration 006) → console.
+- **Agent events** (migration 007): `GET /api/v1/events?paged=1` → `{events, next_before,
+  retention_days}`, cursor `before=<unixnanos>_<id>` over `(event_time desc, id desc)`, filters
+  `since/until`, `type` (comma list), `agent`, `endpoint`, `q`. Each ingested batch is a row in
+  `cp.event_batches` chained **per endpoint**; content/batch hashes are computed by Postgres
+  (`cp.event_batch_content`, `cp.event_batch_hash`) at ingest and at `GET /api/v1/events/verify`.
+  `cp.events` is append-only (trigger); deletes only with `set local effigent.retention='on'`
+  and rows > 90 days old. effigentd ≥ v0.5.4 sends `batch_id` (unique per endpoint → replays
+  stored once) and spools failed batches to `<state>/spool` (256 MB cap). Retention: hourly,
+  advisory-locked, `EFFIGENT_EVENT_RETENTION_DAYS` (min 90) → one gzip'd JSON-lines object per
+  tenant-day in `EFFIGENT_ARCHIVE_BUCKET` (`events/<tenant>/<yyyy>/<mm>/<dd>.jsonl.gz`, size
+  checked) → delete in one tx; batch rows stay (`archived_at`), `cp.event_archives` lists days,
+  console audit `events.archive`; no bucket or failed upload = nothing deleted. Archived days
+  download via `POST /api/v1/events/archives/{day}/link` (10-min presigned URL, audited).
 - Audit trail: `GET /api/v1/audit?paged=1` → `{entries, total, next_before}`; filters
   `action` (comma-separated prefixes), `via` (actor kinds), `actor`, `q` (words, ILIKE over
   action/target/actor/details/ip), `since`/`until` (RFC 3339), cursor `before=<seq>`,

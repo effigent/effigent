@@ -180,6 +180,7 @@ const devEmptyApi: Api = {
     if (p === '/endpoints' || p === '/events' || p === '/policy/history' || p === '/audit' || p === '/approvals' || p === '/api-keys' || p === '/webhooks') return Promise.resolve([] as T);
     if (p === '/me' || p === '/policy') return Promise.resolve(null as T);
     if (p === '/exceptions') return Promise.resolve([] as T);
+    if (p === '/events/archives') return Promise.resolve({ retention_days: 90, archive_enabled: false, archives: [] } as T);
     if (p === '/exceptions/options') return Promise.resolve({ options: [], agents: [], mode: '' } as T);
     return Promise.reject(new ApiError(503, NO_CONTROL_PLANE));
   },
@@ -213,4 +214,4 @@ export function useLive(): Live {
 }
 
 /** Range filter for live events (the API has no time filter; we filter the fetched window). */
-export const RANGE_MS = { '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 } as const;
+export const RANGE_MS = { '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000, '90d': 90 * 86_400_000 } as const;
