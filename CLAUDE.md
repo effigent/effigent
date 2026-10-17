@@ -162,8 +162,9 @@ npm run -w @effigent/site build                     # site
   them against `file_deny`/`file_alert`, and hosts/IPs named in commands or WebFetch
   against `domain_deny` (name + subdomains), `network_deny`, `network_allow` (IPs only).
   Limits: it reads the command, not what runs — scripts, interpreters (`python -c`),
-  variables, aliases and tools that connect on their own aren't followed; MCP tools aren't
-  checked against deny lists yet (`tool_approve` can pause them). If the daemon is down
+  variables, aliases and tools that connect on their own aren't followed. Agent and MCP
+  tools are matched by name: `tool_deny` refuses them (checked first), `tool_approve`
+  pauses them. If the daemon is down
   the hook denies. Approvers: any console admin /
   security_admin (central `approval.users/teams` are not enforced yet), from the console
   or the signed Approve/Reject buttons in Slack/email.
