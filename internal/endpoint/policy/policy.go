@@ -79,7 +79,9 @@ type Rule struct {
 // Approvals tunes the approval flow for the whole machine.
 type Approvals struct {
 	// WaitSeconds is how long a paused tool call waits for a decision before
-	// the agent is told the request is still pending (default 45, max 90).
+	// the agent is told the request is still pending (default 45, max 90). The
+	// agent's own hook timeout caps it in practice (effigent hook: ~18s); an
+	// approval given later is used when the agent retries the same call.
 	WaitSeconds int `yaml:"wait_seconds,omitempty" json:"wait_seconds"`
 	// TTLMinutes is how long a request stays open for approvers (default 60).
 	TTLMinutes int `yaml:"ttl_minutes,omitempty" json:"ttl_minutes"`

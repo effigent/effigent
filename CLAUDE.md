@@ -76,9 +76,11 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   `wait_seconds` (≤90s). Approved → the call runs and the approval is used (single-use).
   Pending / denied / expired → deny with a message telling the agent what to do. Not
   enrolled or control plane unreachable → deny.
-- Timeouts line up: daemon wait ≤ hook budget − 10s; `effigentd hook` waits 100s and sends
-  `X-Effigent-Hook-Budget` (older hook binaries get 8s → no wait); `install-hooks` sets
-  Claude Code's hook `timeout: 120`.
+- Timeouts line up: daemon wait ≤ hook budget − 10s; `effigentd hook` sends
+  `X-Effigent-Hook-Budget: 28` (so ≤18s of waiting; older hook binaries get 8s → no wait).
+  Claude Code applies the hook `timeout` it read when the session started (install-hooks
+  writes 120, but sessions started under v0.4.0 still use 30s) and a timeout blocks the
+  call; an approval given later is used when the agent retries (verified 2026-10-17).
 - Kernel (Linux): `Rule.Kernel()` turns the exec/file/domain/network approve lists into
   denies; command/tool lists are invisible to it.
 - Control plane: `cp.approvals`, `cp.notification_settings` (migration 004). Console API

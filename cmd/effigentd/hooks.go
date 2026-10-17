@@ -305,9 +305,12 @@ func hookCmd(args []string) {
 	if addr == "" {
 		addr = "127.0.0.1:7777"
 	}
-	// Long enough for an approval wait (policy approvals.wait_seconds, max
-	// 90s); install-hooks gives the hook more than this.
-	const budget = 100 * time.Second
+	// How long the agent lets this hook run is the agent's setting, not ours:
+	// Claude Code reads it when a session starts (older installs set 30s) and
+	// treats a timeout as a block. Stay well inside the smallest common limit;
+	// the daemon waits at most budget-10s for an approver, and a later
+	// retry of the same call picks up an approval given after that.
+	const budget = 28 * time.Second
 	c := &http.Client{Timeout: budget}
 	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/hook/"+args[0], bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
