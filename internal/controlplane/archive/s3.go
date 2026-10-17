@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -53,6 +54,20 @@ func (a *S3) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
 		return 0, fmt.Errorf("s3 head %s: %w", key, err)
 	}
 	return aws.ToInt64(h.ContentLength), nil
+}
+
+// Check proves the role can write to the bucket (a tiny object under
+// events/_health/, kept like every archive) so a missing permission shows up
+// at start, not 90 days later.
+func (a *S3) Check(ctx context.Context) error {
+	key := "events/_health/probe.txt"
+	_, err := a.client.PutObject(ctx, &s3.PutObjectInput{Bucket: &a.Bucket, Key: &key,
+		Body:              strings.NewReader("effigent control plane write check " + time.Now().UTC().Format(time.RFC3339) + "\n"),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32, ServerSideEncryption: types.ServerSideEncryptionAes256})
+	if err != nil {
+		return fmt.Errorf("s3 write check on %s: %w", a.Bucket, err)
+	}
+	return nil
 }
 
 // PresignGet returns a short-lived download link.

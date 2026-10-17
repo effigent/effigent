@@ -44,6 +44,8 @@ func (m *memArchive) Put(_ context.Context, key string, r io.Reader) (int64, err
 	return int64(len(b)), nil
 }
 
+func (m *memArchive) Check(context.Context) error { return nil }
+
 func (m *memArchive) PresignGet(_ context.Context, key, filename string, _ time.Duration) (string, error) {
 	return "https://s3.example/" + key + "?name=" + filename, nil
 }

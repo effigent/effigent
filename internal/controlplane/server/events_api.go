@@ -29,6 +29,23 @@ type Archiver interface {
 	// Put stores r at key and returns the stored size as the store reports it.
 	Put(ctx context.Context, key string, r io.Reader) (int64, error)
 	PresignGet(ctx context.Context, key, filename string, ttl time.Duration) (string, error)
+	// Check proves the archive can be written (run at start).
+	Check(ctx context.Context) error
+}
+
+// checkArchive runs once at start; its result is shown with the archive list.
+func (s *Server) checkArchive(ctx context.Context) {
+	if s.Archive == nil {
+		return
+	}
+	err := s.Archive.Check(ctx)
+	s.archiveMu.Lock()
+	s.archiveErr, s.archiveChecked = "", true
+	if err != nil {
+		s.archiveErr = err.Error()
+		s.Logf("event archive: %v", err)
+	}
+	s.archiveMu.Unlock()
 }
 
 func (s *Server) retentionDays() int { return max(s.RetentionDays, MinRetentionDays) }
@@ -90,7 +107,11 @@ func (s *Server) listEventArchives(w http.ResponseWriter, r *http.Request, p Pri
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"retention_days": s.retentionDays(), "archive_enabled": s.Archive != nil, "archives": as})
+	s.archiveMu.Lock()
+	status := map[string]any{"retention_days": s.retentionDays(), "archive_enabled": s.Archive != nil, "archives": as,
+		"archive_checked": s.archiveChecked, "archive_error": s.archiveErr}
+	s.archiveMu.Unlock()
+	writeJSON(w, http.StatusOK, status)
 }
 
 // eventArchiveLink returns a 10-minute download link for one archived day.

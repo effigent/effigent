@@ -42,14 +42,17 @@ type Server struct {
 	// nil = Slack clicks are refused unless the workspace allows any Slack member.
 	Directory Directory
 
-	limits       *limits
-	whOnce       sync.Once
-	whCap        *capLimiter
-	whClientOnce sync.Once
-	whClient     *http.Client
-	workerOnce   sync.Once
-	slackMu      sync.Mutex
-	slackUsers   map[string]slackUserEntry
+	limits         *limits
+	whOnce         sync.Once
+	whCap          *capLimiter
+	whClientOnce   sync.Once
+	whClient       *http.Client
+	workerOnce     sync.Once
+	archiveMu      sync.Mutex
+	archiveErr     string
+	archiveChecked bool
+	slackMu        sync.Mutex
+	slackUsers     map[string]slackUserEntry
 }
 
 func (s *Server) publicKey() ed25519.PublicKey { return s.Key.Public().(ed25519.PublicKey) }
@@ -67,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 				}
 			}()
 			go func() { // events past retention move to the archive
+				s.checkArchive(context.Background())
 				s.runRetention(context.Background())
 				for range time.Tick(time.Hour) {
 					s.runRetention(context.Background())

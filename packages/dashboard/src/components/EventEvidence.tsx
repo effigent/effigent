@@ -13,7 +13,7 @@ interface Verification {
   protected_since?: string;
 }
 interface Archive { day: string; key: string; sha256: string; size: number; batches: number; events: number; legacy_events: number; archived_at: string }
-interface Archives { retention_days: number; archive_enabled: boolean; archives: Archive[] }
+interface Archives { retention_days: number; archive_enabled: boolean; archives: Archive[]; archive_checked?: boolean; archive_error?: string }
 
 const mb = (b: number) => (b < 1 << 20 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / (1 << 20)).toFixed(1)} MB`);
 
@@ -67,6 +67,7 @@ export function EventEvidence() {
       <div style={{ padding: '0 20px 16px' }}>
         <div className="section-label" style={{ margin: '0 0 6px' }}>Archive</div>
         {aerr && <div className="callout bad" style={{ margin: '0 0 10px' }}><Ic n="alert" size={16} /><span>{aerr}</span></div>}
+        {arch?.archive_error && <div className="callout bad" style={{ margin: '0 0 10px' }}><Ic n="alert" size={16} /><span>The control plane can't write to the archive bucket, so nothing will be archived or deleted until this is fixed: {arch.archive_error}</span></div>}
         {!arch ? <div className="muted" style={{ fontSize: 13 }}>—</div>
           : !arch.archive_enabled ? <div className="muted" style={{ fontSize: 13 }}>Archiving isn't set up on this control plane yet, so events are kept in the database and nothing is deleted.</div>
           : arch.archives.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>Nothing archived yet: every event is still in the database (the oldest move out after {arch.retention_days} days).</div>
