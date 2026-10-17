@@ -56,12 +56,25 @@ export function PolicyAssist({ current, onLoad }: { current: string; onLoad: (ya
     <Card>
       <CardHead title={<><Ic n="spark" size={16} /> Ask AI to change the policy</>} sub="Describe what you want in plain words. The assistant proposes a policy, checked with effigentd’s own parser — you review it and publish." />
       <div style={{ padding: '0 20px 16px' }}>
-        <textarea className="textarea" rows={2} style={{ width: "100%", boxSizing: "border-box" }} value={prompt} disabled={!canWrite || busy} onChange={(e) => setPrompt(e.target.value)}
-          placeholder={EXAMPLES[0]} aria-label="What to change" onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && prompt.trim()) void ask(); }} />
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-          <button className="btn primary sm" disabled={!canWrite || busy || !prompt.trim()} onClick={ask}><Ic n="spark" /> {busy ? 'Thinking…' : 'Propose a change'}</button>
-          {!p && !busy && EXAMPLES.map((x) => <button key={x} className="btn sm" disabled={!canWrite} onClick={() => setPrompt(x)} style={{ opacity: 0.8 }}>{x}</button>)}
+        <div style={{ position: 'relative' }}>
+          <textarea className="textarea" rows={3} style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', paddingRight: 150, fontSize: 14 }}
+            value={prompt} disabled={!canWrite || busy} onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Describe the change, e.g. “Ask for approval before any git push or terraform apply”" aria-label="What to change"
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && prompt.trim()) void ask(); }} />
+          <button className="btn primary sm" style={{ position: 'absolute', right: 10, bottom: 12 }} disabled={!canWrite || busy || !prompt.trim()} onClick={ask}>
+            <Ic n="spark" /> {busy ? 'Thinking…' : 'Propose change'}
+          </button>
         </div>
+        {!p && !busy && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 8, fontSize: 12 }}>
+            <span className="muted">Try:</span>
+            {EXAMPLES.map((x) => (
+              <button key={x} type="button" disabled={!canWrite} onClick={() => setPrompt(x)}
+                style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 999, padding: '3px 10px', color: 'var(--txt-2)', cursor: 'pointer', fontSize: 12 }}>{x}</button>
+            ))}
+            <span className="muted" style={{ marginLeft: 'auto' }}>⌘↵ to send</span>
+          </div>
+        )}
         {err && <div className="callout bad" style={{ margin: '10px 0 0' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
         {p && (
           <div style={{ marginTop: 12 }}>
