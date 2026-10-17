@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -117,7 +118,9 @@ func daemon() {
 	cp, _ := cpclient.LoadState(*stateDir)
 	if cp != nil {
 		// Enrolled: ship every event to the control plane too.
-		sinks = append(sinks, sink.NewHTTP(sink.HTTPConfig{URL: cp.Server + "/ep/v1/events", Token: cp.Secret, Interval: 2 * time.Second}))
+		// Batches the control plane can't take wait on disk (up to 256 MB) and are sent when it's back.
+		sinks = append(sinks, sink.NewHTTP(sink.HTTPConfig{URL: cp.Server + "/ep/v1/events", Token: cp.Secret, Interval: 2 * time.Second,
+			SpoolDir: filepath.Join(*stateDir, "spool")}))
 		logger.Printf("enrolled as %s with %s", cp.EndpointID, cp.Server)
 	}
 	defer sinks.Close()

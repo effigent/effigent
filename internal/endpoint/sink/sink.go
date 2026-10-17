@@ -3,18 +3,12 @@
 package sink
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/event"
 )
@@ -125,134 +119,4 @@ func trunc(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
-}
-
-// ---- HTTP backend ----
-
-type HTTPConfig struct {
-	URL         string
-	Token       string        // sent as "Authorization: Bearer <token>"
-	BatchSize   int           // flush when this many events are buffered
-	Interval    time.Duration // ...or this often
-	QueueSize   int           // events buffered in memory before dropping
-	MinSeverity string        // drop events below this severity ("" = send all)
-}
-
-// HTTP POSTs {"events":[...]} batches. It never blocks the engine: when the
-// backend is down and the queue is full, events are dropped and counted.
-type HTTP struct {
-	cfg     HTTPConfig
-	q       chan event.Event
-	done    chan struct{}
-	client  *http.Client
-	dropped atomic.Uint64
-	sent    atomic.Uint64
-}
-
-func NewHTTP(cfg HTTPConfig) *HTTP {
-	if cfg.BatchSize <= 0 {
-		cfg.BatchSize = 200
-	}
-	if cfg.Interval <= 0 {
-		cfg.Interval = 5 * time.Second
-	}
-	if cfg.QueueSize <= 0 {
-		cfg.QueueSize = 10000
-	}
-	h := &HTTP{cfg: cfg, q: make(chan event.Event, cfg.QueueSize), done: make(chan struct{}),
-		client: &http.Client{Timeout: 10 * time.Second}}
-	go h.loop()
-	return h
-}
-
-var sevRank = map[string]int{"": 0, "info": 0, "medium": 1, "high": 2}
-
-func (h *HTTP) Write(e event.Event) {
-	if sevRank[e.Severity] < sevRank[h.cfg.MinSeverity] {
-		return
-	}
-	select {
-	case h.q <- e:
-	default:
-		h.dropped.Add(1)
-	}
-}
-
-func (h *HTTP) Stats() (sent, dropped uint64) { return h.sent.Load(), h.dropped.Load() }
-
-func (h *HTTP) loop() {
-	defer close(h.done)
-	t := time.NewTicker(h.cfg.Interval)
-	defer t.Stop()
-	batch := make([]event.Event, 0, h.cfg.BatchSize)
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		if err := h.post(batch); err != nil {
-			h.dropped.Add(uint64(len(batch)))
-			log.Printf("http sink: dropped %d events: %v", len(batch), err)
-		} else {
-			h.sent.Add(uint64(len(batch)))
-		}
-		batch = batch[:0]
-	}
-	for {
-		select {
-		case e, ok := <-h.q:
-			if !ok {
-				flush()
-				return
-			}
-			batch = append(batch, e)
-			if len(batch) >= h.cfg.BatchSize {
-				flush()
-			}
-		case <-t.C:
-			flush()
-		}
-	}
-}
-
-func (h *HTTP) post(batch []event.Event) error {
-	body, err := json.Marshal(map[string]any{"events": batch})
-	if err != nil {
-		return err
-	}
-	var last error
-	for attempt, wait := 0, 500*time.Millisecond; attempt < 4; attempt, wait = attempt+1, wait*2 {
-		if attempt > 0 {
-			time.Sleep(wait)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.URL, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "effigentd")
-		if h.cfg.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
-		}
-		res, err := h.client.Do(req)
-		cancel()
-		if err != nil {
-			last = err
-			continue
-		}
-		_, _ = io.Copy(io.Discard, res.Body)
-		res.Body.Close()
-		if res.StatusCode < 300 {
-			return nil
-		}
-		last = fmt.Errorf("backend returned %s", res.Status)
-		if res.StatusCode < 500 && res.StatusCode != http.StatusTooManyRequests {
-			return last // client errors won't fix themselves
-		}
-	}
-	return last
-}
-
-// Close flushes what is queued (best effort, bounded by post's retries).
-func (h *HTTP) Close() error {
-	close(h.q)
-	<-h.done
-	return nil
 }
