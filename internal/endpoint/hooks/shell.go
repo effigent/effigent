@@ -15,8 +15,10 @@ type simpleCmd struct {
 // splitShell splits a shell command line into its simple commands. It is a
 // deliberately small reading of shell syntax: quotes, backslashes, the usual
 // separators (; & | && || newlines, subshells), redirections, $( ) and
-// backticks, also inside double quotes. Commands passed to `sh -c` / `eval`
-// are read too. Anything it can't follow (variables, aliases, functions,
+// backticks, also inside double quotes, and heredocs (a body is a script only
+// when a shell reads it; otherwise it is data, and only its substitutions run
+// when the delimiter is unquoted). Commands passed to `sh -c` / `eval` are
+// read too. Anything it can't follow (variables, aliases, functions,
 // scripts) it leaves alone.
 func splitShell(s string) []simpleCmd { return splitDepth(s, 0) }
 
@@ -30,6 +32,7 @@ func splitDepth(s string, depth int) []simpleCmd {
 		w        strings.Builder
 		inWord   bool
 		redirect bool
+		pending  []heredoc // heredocs whose bodies start after this line
 	)
 	flushWord := func() {
 		if !inWord {
@@ -55,6 +58,43 @@ func splitDepth(s string, depth int) []simpleCmd {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
+		case c == '\n' && len(pending) > 0:
+			flushCmd()
+			for _, h := range pending {
+				body, next := heredocBody(s, i+1, h)
+				out = append(out, h.commands(body, out, depth)...)
+				i = next - 1
+			}
+			pending = nil
+		case c == '<' && strings.HasPrefix(s[i:], "<<") && !strings.HasPrefix(s[i:], "<<<"):
+			flushWord()
+			h := heredoc{owner: len(out)}
+			i += 2
+			if i < len(s) && s[i] == '-' {
+				h.stripTabs = true
+				i++
+			}
+			for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+				i++
+			}
+			var d strings.Builder
+			for ; i < len(s) && strings.IndexByte(" \t\n;&|<>()", s[i]) < 0; i++ {
+				switch s[i] {
+				case '\'', '"', '\\':
+					h.quoted = true
+				default:
+					d.WriteByte(s[i])
+				}
+			}
+			h.delim = d.String()
+			i-- // the separator after the delimiter is read as usual
+			if h.delim != "" {
+				pending = append(pending, h)
+			}
+		case c == '<' && strings.HasPrefix(s[i:], "<<<"):
+			// a here-string: its word is not a redirect target (it is still read as an argument)
+			flushWord()
+			i += 2
 		case c == '\\' && i+1 < len(s):
 			if s[i+1] != '\n' {
 				w.WriteByte(s[i+1])
@@ -148,6 +188,72 @@ func splitDepth(s string, depth int) []simpleCmd {
 		}
 	}
 	return out
+}
+
+// heredoc is one `<<DELIM` waiting for its body (the lines after the command).
+type heredoc struct {
+	delim     string
+	quoted    bool // <<'EOF' / <<"EOF" / <<\EOF: the body is taken literally
+	stripTabs bool // <<-EOF
+	owner     int  // index in the command list of the command that reads it
+}
+
+// heredocBody returns the body starting at s[start:] and the index just past
+// its terminator line (or the end of s).
+func heredocBody(s string, start int, h heredoc) (string, int) {
+	var body strings.Builder
+	for i := start; i < len(s); {
+		end := strings.IndexByte(s[i:], '\n')
+		next := len(s)
+		if end >= 0 {
+			next = i + end + 1
+		} else {
+			end = len(s) - i
+		}
+		line := s[i : i+end]
+		if h.stripTabs {
+			line = strings.TrimLeft(line, "\t")
+		}
+		if strings.TrimRight(line, "\r") == h.delim {
+			return body.String(), next
+		}
+		body.WriteString(line)
+		body.WriteByte('\n')
+		i = next
+	}
+	return body.String(), len(s)
+}
+
+// commands are what a heredoc body runs: all of it when a shell reads it as
+// its script, else only the substitutions of an unquoted body.
+func (h heredoc) commands(body string, cmds []simpleCmd, depth int) []simpleCmd {
+	if h.owner < len(cmds) {
+		if args := program(cmds[h.owner].args); len(args) > 0 {
+			switch progName(args[0]) {
+			case "sh", "bash", "zsh", "dash", "ksh", "fish", "eval", "source", ".":
+				if !slicesHasDashC(args) {
+					return splitDepth(body, depth+1)
+				}
+			}
+		}
+	}
+	if h.quoted {
+		return nil
+	}
+	var out []simpleCmd
+	for _, sub := range substitutions(body) {
+		out = append(out, splitDepth(sub, depth+1)...)
+	}
+	return out
+}
+
+func slicesHasDashC(args []string) bool {
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "c") {
+			return true
+		}
+	}
+	return false
 }
 
 // substitutions returns the bodies of $( ) and backtick substitutions in s.
