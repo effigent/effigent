@@ -11,6 +11,9 @@ import (
 // audit appends to the tenant's tamper-evident trail. Failures are logged,
 // never shown to the caller.
 func (s *Server) audit(r *http.Request, p Principal, action, target string, details any) {
+	if s.Store == nil { // tests without a database
+		return
+	}
 	var raw json.RawMessage
 	if details != nil {
 		raw, _ = json.Marshal(details)

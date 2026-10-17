@@ -30,6 +30,13 @@ type Message struct {
 	Fields [][2]string
 	Link   string // console page to review the request
 	Footer string
+	// Actions are buttons (Approve / Deny); each opens a confirmation page.
+	Actions []Action
+}
+
+// Action is one button. Style: "primary" (green), "danger" (red) or "".
+type Action struct {
+	Label, URL, Style string
 }
 
 // Sender delivers messages. The zero value sends Slack only.
@@ -86,11 +93,23 @@ func (s *Sender) Slack(ctx context.Context, webhook string, m Message) error {
 	for i := 0; i < len(fields); i += 10 { // Slack allows 10 fields per section
 		blocks = append(blocks, map[string]any{"type": "section", "fields": fields[i:min(i+10, len(fields))]})
 	}
+	var buttons []map[string]any
+	for _, a := range m.Actions {
+		b := map[string]any{"type": "button", "url": a.URL, "text": map[string]any{"type": "plain_text", "text": a.Label}}
+		if a.Style == "primary" || a.Style == "danger" {
+			b["style"] = a.Style
+		}
+		buttons = append(buttons, b)
+	}
 	if m.Link != "" {
-		blocks = append(blocks, map[string]any{"type": "actions", "elements": []map[string]any{{
-			"type": "button", "style": "primary", "url": m.Link,
-			"text": map[string]any{"type": "plain_text", "text": "Review in Effigent"},
-		}}})
+		b := map[string]any{"type": "button", "url": m.Link, "text": map[string]any{"type": "plain_text", "text": "Review in Effigent"}}
+		if len(m.Actions) == 0 {
+			b["style"] = "primary"
+		}
+		buttons = append(buttons, b)
+	}
+	if len(buttons) > 0 {
+		blocks = append(blocks, map[string]any{"type": "actions", "elements": buttons})
 	}
 	if m.Footer != "" {
 		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": slackEscape(m.Footer)}}})
@@ -229,23 +248,33 @@ func render(from *mail.Address, to []string, m Message) []byte {
 	id := make([]byte, 12)
 	_, _ = rand.Read(id)
 	domain := from.Address[strings.LastIndexByte(from.Address, '@')+1:]
+	boundary := "effigent-" + hex.EncodeToString(id)
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from.String())
 	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(to, ", "))
 	fmt.Fprintf(&b, "Subject: %s\r\n", mimeHeader(oneLine(m.Title)))
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	fmt.Fprintf(&b, "Message-ID: <%s@%s>\r\n", hex.EncodeToString(id), domain)
-	b.WriteString("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
+	fmt.Fprintf(&b, "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
+
+	// plain text, for clients that don't show HTML
+	fmt.Fprintf(&b, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n", boundary)
 	b.WriteString(oneLine(m.Title) + "\r\n\r\n")
 	for _, f := range m.Fields {
 		fmt.Fprintf(&b, "%s: %s\r\n", f[0], f[1])
 	}
+	for _, a := range m.Actions {
+		fmt.Fprintf(&b, "\r\n%s: %s\r\n", a.Label, a.URL)
+	}
 	if m.Link != "" {
-		fmt.Fprintf(&b, "\r\nReview and decide: %s\r\n", m.Link)
+		fmt.Fprintf(&b, "\r\nReview in Effigent: %s\r\n", m.Link)
 	}
 	if m.Footer != "" {
 		fmt.Fprintf(&b, "\r\n-- \r\n%s\r\n", m.Footer)
 	}
+	fmt.Fprintf(&b, "\r\n--%s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n", boundary)
+	b.WriteString(htmlBody(m))
+	fmt.Fprintf(&b, "\r\n--%s--\r\n", boundary)
 	return []byte(strings.ReplaceAll(strings.ReplaceAll(b.String(), "\r\n", "\n"), "\n", "\r\n"))
 }
 

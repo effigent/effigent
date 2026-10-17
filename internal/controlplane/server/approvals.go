@@ -124,7 +124,9 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 	results := map[string]string{}
 	var ok []string
 	if set.SlackWebhook != "" {
-		if err := s.Notify.Slack(ctx, set.SlackWebhook, m); err != nil {
+		sm := m
+		sm.Actions = s.approvalActions(a, "slack", "slack")
+		if err := s.Notify.Slack(ctx, set.SlackWebhook, sm); err != nil {
 			results["slack"] = "error: " + err.Error()
 		} else {
 			results["slack"] = "sent"
@@ -132,11 +134,20 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 		}
 	}
 	if len(set.Emails) > 0 {
-		if err := s.Notify.Email(ctx, set.Emails, m); err != nil {
-			results["email"] = "error: " + err.Error()
-		} else {
+		// one message per recipient: each carries buttons signed for that address
+		var failed []string
+		for _, rcpt := range set.Emails {
+			em := m
+			em.Actions = s.approvalActions(a, rcpt, "email")
+			if err := s.Notify.Email(ctx, []string{rcpt}, em); err != nil {
+				failed = append(failed, rcpt+": "+err.Error())
+			}
+		}
+		if len(failed) == 0 {
 			results["email"] = "sent"
 			ok = append(ok, "email")
+		} else {
+			results["email"] = "error: " + strings.Join(failed, "; ")
 		}
 	}
 	if len(results) == 0 {
@@ -175,7 +186,7 @@ func (s *Server) approvalMessage(a store.Approval) notify.Message {
 			{"Expires", a.ExpiresAt.UTC().Format("Jan 2 15:04 MST")},
 			{"Request", a.ID},
 		},
-		Footer: "The agent is paused. Approving lets this one action run once.",
+		Footer: "The agent is paused. Approve or Deny opens a confirmation page; approving lets this one action run once.",
 	}
 	if s.ConsoleOrigin != "" {
 		m.Link = s.ConsoleOrigin + "/approvals?id=" + a.ID
@@ -362,24 +373,36 @@ func (s *Server) testNotifications(w http.ResponseWriter, r *http.Request, p Pri
 	if s.ConsoleOrigin != "" {
 		m.Link = s.ConsoleOrigin + "/approvals"
 	}
+	var sample *store.Approval
 	if req.Sample == "approval" {
-		m = s.approvalMessage(store.Approval{ID: "apr_sample", Agent: "claude-code", Hostname: "dana-mbp", OSUser: "dana",
+		sample = &store.Approval{ID: "apr_sample", Tenant: p.Tenant, Agent: "claude-code", Hostname: "dana-mbp", OSUser: "dana",
 			Summary: "Bash: git push --force origin main", Reason: "`git push --force origin main` needs approval",
-			Rule: "command_approve", ExpiresAt: time.Now().Add(time.Hour)})
+			Rule: "command_approve", ExpiresAt: time.Now().Add(time.Hour)}
+		m = s.approvalMessage(*sample)
 		m.Title = "[Sample] " + m.Title
 		m.Footer = "This is a sample from the Effigent console — nothing is waiting. " + m.Footer
 	}
 	res := map[string]string{}
 	if n.SlackWebhook != "" {
 		res["slack"] = "sent"
-		if err := s.Notify.Slack(r.Context(), n.SlackWebhook, m); err != nil {
+		sm := m
+		if sample != nil {
+			sm.Actions = s.approvalActions(*sample, "slack", "slack")
+		}
+		if err := s.Notify.Slack(r.Context(), n.SlackWebhook, sm); err != nil {
 			res["slack"] = err.Error()
 		}
 	}
 	if len(n.Emails) > 0 {
 		res["email"] = "sent"
-		if err := s.Notify.Email(r.Context(), n.Emails, m); err != nil {
-			res["email"] = err.Error()
+		for _, rcpt := range n.Emails {
+			em := m
+			if sample != nil {
+				em.Actions = s.approvalActions(*sample, rcpt, "email")
+			}
+			if err := s.Notify.Email(r.Context(), []string{rcpt}, em); err != nil {
+				res["email"] = err.Error()
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, res)

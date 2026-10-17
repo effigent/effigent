@@ -66,6 +66,8 @@ func main() {
 		// Local development only (e.g. a Windmill on localhost): http:// and private
 		// webhook targets. Never set in production — it reopens SSRF.
 		AllowInsecureWebhooks: os.Getenv("EFFIGENT_DEV_INSECURE_WEBHOOKS") == "1",
+		// policy assistant (Anthropic); model default claude-haiku-5-5
+		AIKey: os.Getenv("EFFIGENT_ANTHROPIC_API_KEY"), AIModel: os.Getenv("EFFIGENT_AI_MODEL"),
 	}
 	if srv.AllowInsecureWebhooks {
 		logger.Printf("WARNING: EFFIGENT_DEV_INSECURE_WEBHOOKS=1: webhooks may target http:// and private addresses")

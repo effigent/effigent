@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Exceptions } from '@/components/Exceptions.tsx';
+import { PolicyAssist } from '@/components/PolicyAssist.tsx';
 import { useEffect, useState } from 'react';
 import { MODES } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
@@ -114,6 +115,8 @@ export function Policies() {
           </>
         )}
       </Card>
+
+      <PolicyAssist current={text} onLoad={(y) => { setDraft(y); setErr(null); setComment((c) => c || 'Changed with the policy assistant'); }} />
 
       <Exceptions />
 

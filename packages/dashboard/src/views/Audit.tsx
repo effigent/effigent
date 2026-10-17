@@ -33,6 +33,7 @@ const ACTION_LABEL: Record<string, string> = {
   'webhook.delete': 'Deleted a webhook',
   'webhook.test': 'Sent a webhook test',
   'exception.create': 'Added a policy exception',
+  'policy.assist': 'Asked the policy assistant',
   'exception.delete': 'Removed a policy exception',
   'exception.expire': 'A policy exception expired',
 };

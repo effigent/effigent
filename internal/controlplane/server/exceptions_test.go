@@ -103,7 +103,9 @@ func TestExceptionsAPI(t *testing.T) {
 		}
 		return pol, d
 	}
-	hasCurl := func(p *ep.Policy, agent string) bool { return slices.Contains(p.RuleFor(agent).ExecDeny, "/usr/bin/curl") }
+	hasCurl := func(p *ep.Policy, agent string) bool {
+		return slices.Contains(p.RuleFor(agent).ExecDeny, "/usr/bin/curl")
+	}
 
 	if code, body := call("PUT", "/api/v1/policy", "", map[string]any{"body": exceptionBase, "comment": "base"}, nil); code != 200 {
 		t.Fatalf("publish: %d %s", code, body)

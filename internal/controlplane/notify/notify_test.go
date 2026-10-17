@@ -67,8 +67,10 @@ func TestEmail(t *testing.T) {
 	s := &Sender{SMTPURL: "smtp://user:pw@" + addr, From: "Effigent <approvals@effigent.ai>"}
 	err := s.Email(context.Background(), []string{"sec@acme.io"}, Message{
 		Title:  "Approval needed: Claude Code on dana-mbp\r\nBcc: evil@x.io", // header injection attempt
-		Fields: [][2]string{{"Action", "Bash: git push --force"}},
+		Fields: [][2]string{{"Action", "Bash: git push --force <script>x</script>"}},
 		Link:   "https://app.effigent.ai/approvals?id=apr_1",
+		Actions: []Action{{Label: "Approve", URL: "https://api.effigent.ai/a/tok?d=approve", Style: "primary"},
+			{Label: "Deny", URL: "https://api.effigent.ai/a/tok?d=deny", Style: "danger"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,10 +78,14 @@ func TestEmail(t *testing.T) {
 	msg := <-got
 	for _, want := range []string{"From: \"Effigent\" <approvals@effigent.ai>", "To: sec@acme.io",
 		"Subject: Approval needed: Claude Code on dana-mbp Bcc: evil@x.io\r\n", "Action: Bash: git push --force",
-		"Review and decide: https://app.effigent.ai/approvals?id=apr_1"} {
+		"Review in Effigent: https://app.effigent.ai/approvals?id=apr_1", "Approve: https://api.effigent.ai/a/tok?d=approve",
+		"Content-Type: text/html", `href="https://api.effigent.ai/a/tok?d=deny"`, "&lt;script&gt;"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("missing %q in:\n%s", want, msg)
 		}
+	}
+	if strings.Contains(msg, "<script>x") && strings.Count(msg, "<script>x") > 1 {
+		t.Fatalf("HTML not escaped:\n%s", msg)
 	}
 	if strings.Contains(msg, "\r\nBcc:") {
 		t.Fatalf("header injected:\n%s", msg)

@@ -26,6 +26,9 @@ type Server struct {
 	// AllowInsecureWebhooks lets webhooks use http:// and private addresses (tests, local dev).
 	AllowInsecureWebhooks bool
 	WebhookPoll           time.Duration // how often the delivery worker looks for due events (default 2s)
+	// AIKey / AIModel: the Anthropic API key and model for the policy assistant (empty key = off).
+	AIKey, AIModel string
+	AIBaseURL      string // default https://api.anthropic.com (tests point it elsewhere)
 
 	limits       *limits
 	whOnce       sync.Once
@@ -68,6 +71,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /ep/v1/heartbeat", s.endpointAuth(s.heartbeat))
 	mux.HandleFunc("POST /ep/v1/events", s.endpointAuth(s.ingest))
 	mux.HandleFunc("POST /ep/v1/approvals", s.endpointAuth(s.requestApproval))
+	// Approve / Deny buttons from emails and Slack (signed one-request links)
+	mux.HandleFunc("GET /a/{token}", s.approvalLink)
+	mux.HandleFunc("POST /a/{token}", s.approvalLink)
 
 	// console API
 	mux.HandleFunc("GET /api/v1/me", s.console(read, s.me))
@@ -79,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/policy", s.console(read, s.getPolicy))
 	mux.HandleFunc("PUT /api/v1/policy", s.scoped("policy", write, s.putPolicy))
 	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))
+	mux.HandleFunc("POST /api/v1/policy/assist", s.scoped("policy", write, s.assistPolicy))
 	mux.HandleFunc("GET /api/v1/events", s.console(read, s.listEvents))
 	mux.HandleFunc("GET /api/v1/audit", s.console(read, s.listAudit))
 	mux.HandleFunc("GET /api/v1/audit/verify", s.console(read, s.verifyAudit))
