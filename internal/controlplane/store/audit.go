@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -99,6 +100,72 @@ func (s *Store) ListAudit(ctx context.Context, tenant string, limit int, actionP
 		return nil, err
 	}
 	return scanAudit(rows)
+}
+
+// AuditQuery filters and pages the trail. Zero values mean "no filter".
+type AuditQuery struct {
+	Limit   int
+	Before  int64    // only entries with seq < Before (the cursor for the next, older page)
+	Actions []string // action prefixes ("policy.", "approval.", "denied.")
+	Vias    []string // actor_via values ("clerk", "api-key", "endpoint", …)
+	Actor   string   // exact actor
+	Q       string   // every word must appear in action, target, actor, details or ip
+	Since   time.Time
+	Until   time.Time
+}
+
+// likeEscape makes s a literal inside an ILIKE pattern.
+func likeEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// QueryAudit returns one page of the trail, newest first, the number of
+// entries matching the filters in total, and the cursor for the next page
+// (0 when this is the last one).
+func (s *Store) QueryAudit(ctx context.Context, tenant string, q AuditQuery) ([]AuditEntry, int, int64, error) {
+	where := []string{"tenant_ref = $1"}
+	args := []any{tenant}
+	arg := func(v any) string { args = append(args, v); return fmt.Sprintf("$%d", len(args)) }
+	if len(q.Actions) > 0 {
+		where = append(where, "exists (select 1 from unnest("+arg(q.Actions)+"::text[]) p where starts_with(action, p))")
+	}
+	if len(q.Vias) > 0 {
+		where = append(where, "actor_via = any("+arg(q.Vias)+"::text[])")
+	}
+	if q.Actor != "" {
+		where = append(where, "actor = "+arg(q.Actor))
+	}
+	for _, w := range strings.Fields(q.Q) {
+		where = append(where, "concat_ws(' ', action, target, actor, details::text, ip) ilike '%' || "+arg(likeEscape(w))+" || '%'")
+	}
+	if !q.Since.IsZero() {
+		where = append(where, "at >= "+arg(q.Since))
+	}
+	if !q.Until.IsZero() {
+		where = append(where, "at < "+arg(q.Until))
+	}
+	cond := strings.Join(where, " and ")
+	var total int
+	if err := s.db.QueryRow(ctx, `select count(*) from cp.audit_log where `+cond, args...).Scan(&total); err != nil {
+		return nil, 0, 0, err
+	}
+	if q.Before > 0 {
+		cond += " and seq < " + arg(q.Before)
+	}
+	rows, err := s.db.Query(ctx, `select `+auditCols+` from cp.audit_log where `+cond+` order by seq desc limit `+arg(q.Limit+1), args...)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	out, err := scanAudit(rows)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	var next int64
+	if len(out) > q.Limit {
+		out = out[:q.Limit]
+		next = out[len(out)-1].Seq
+	}
+	return out, total, next, nil
 }
 
 type AuditVerification struct {

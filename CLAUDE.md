@@ -114,6 +114,10 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   30m, 2h, 6h; 4xx except 408/429 are final. `EFFIGENT_DEV_INSECURE_WEBHOOKS=1` (local
   only) allows http:// and private targets.
 - `GET /api/v1/approvals/{id}` lets automations re-check a request before acting.
+- Audit trail: `GET /api/v1/audit?paged=1` → `{entries, total, next_before}`; filters
+  `action` (comma-separated prefixes), `via` (actor kinds), `actor`, `q` (words, ILIKE over
+  action/target/actor/details/ip), `since`/`until` (RFC 3339), cursor `before=<seq>`,
+  `limit` ≤ 500. Without `paged` it still returns the newest `limit` entries as an array.
 - `integrations/windmill/`: resource type, scripts, and the Slack/Teams approval flow
   (tested against Windmill CE v1.837 locally; Slack/Teams buttons not exercised).
 

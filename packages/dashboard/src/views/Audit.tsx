@@ -5,11 +5,11 @@ import { agentMeta } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { RANGE_MS, useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
-import { apiErrorText, type ApiAuditEntry, type ApiAuditVerification } from '@/lib/api.ts';
-import { ago, dateTime, ms } from '@/lib/live-map.ts';
+import { dateTime, ms } from '@/lib/live-map.ts';
 import type { ConsoleEvent, EventType, Outcome } from '@/types.ts';
 import { AgentGlyph, Card, CardHead, Empty, Loading, OutcomePill, PageGuide, PageHead, RiskyTag, Seg } from '@/components/ui.tsx';
 import { RangeSelect } from '@/components/RangeSelect.tsx';
+import { AuditTrail } from '@/components/AuditTrail.tsx';
 
 const TYPE_LABEL: Record<Exclude<EventType, 'approval'>, string> = {
   agent_start: 'Agent start', agent_exit: 'Agent exit', exec: 'Exec', exit: 'Exit', file_open: 'File open', connect: 'Connect',
@@ -19,26 +19,6 @@ const typeLabel = (t: EventType) => (t === 'approval' ? 'Approval' : TYPE_LABEL[
 
 const OUTCOMES: (Outcome | 'all')[] = ['all', 'blocked', 'would_block', 'pending', 'allowed', 'system'];
 
-const ACTION_LABEL: Record<string, string> = {
-  'policy.publish': 'Published policy',
-  'endpoint.revoke': 'Revoked endpoint',
-  'enrollment_token.create': 'Created enrollment token',
-  'approval.request': 'Agent asked for approval',
-  'approval.approve': 'Approved a request',
-  'approval.deny': 'Denied a request',
-  'notifications.update': 'Changed approval notifications',
-  'api_key.create': 'Created an API key',
-  'api_key.revoke': 'Revoked an API key',
-  'webhook.create': 'Added a webhook',
-  'webhook.delete': 'Deleted a webhook',
-  'webhook.test': 'Sent a webhook test',
-  'exception.create': 'Added a policy exception',
-  'policy.assist': 'Asked the policy assistant',
-  'exception.delete': 'Removed a policy exception',
-  'exception.expire': 'A policy exception expired',
-};
-const actionLabel = (a: string) => ACTION_LABEL[a] ?? (a.startsWith('denied.') ? `Denied: ${a.slice(7)}` : a);
-
 const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 function eventsCsv(rows: ConsoleEvent[]): string {
@@ -47,43 +27,6 @@ function eventsCsv(rows: ConsoleEvent[]): string {
     e.id, e.at ? new Date(e.at).toISOString() : e.time, e.type, e.severity, e.outcome, e.agentType ?? '', e.endpointName ?? e.endpoint ?? '',
     e.summary, e.target ?? '', e.rule ?? '', e.via ?? '', e.mode ?? '', e.risk ?? '',
   ].map(esc).join(','))].join('\n');
-}
-
-function trailCsv(rows: ApiAuditEntry[]): string {
-  const head = ['seq', 'at', 'actor', 'actor_role', 'actor_via', 'action', 'target', 'details', 'ip', 'prev_hash', 'hash'];
-  return [head.join(','), ...rows.map((a) => [
-    a.seq, a.at, a.actor, a.actor_role, a.actor_via, a.action, a.target, a.details ? JSON.stringify(a.details) : '', a.ip, a.prev_hash, a.hash,
-  ].map(esc).join(','))].join('\n');
-}
-
-function details(d: Record<string, unknown> | null): string {
-  if (!d) return '—';
-  return Object.entries(d).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' · ');
-}
-
-/** The Verify button (for the card header) and its result (for below it). */
-function useVerify(): [React.ReactNode, React.ReactNode] {
-  const { api } = useLive();
-  const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState<ApiAuditVerification | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const run = async () => {
-    setBusy(true); setErr(null);
-    try { setRes(await api.get<ApiAuditVerification>('/audit/verify')); } catch (e) { setErr(apiErrorText(e)); } finally { setBusy(false); }
-  };
-  return [
-    <button key="b" className="btn sm" onClick={run} disabled={busy}><Ic n="shieldCheck" size={14} /> {busy ? 'Verifying…' : 'Verify chain'}</button>,
-    (res || err) && (
-        <div key="r" className={`callout ${err || !res?.ok ? 'bad' : ''}`} style={{ margin: '0 20px 14px' }} role="status">
-          <Ic n={err || !res?.ok ? 'alert' : 'checkCircle'} size={16} />
-          <span>
-            {err ?? (res!.ok
-              ? <>Hash chain intact — {res!.entries} entr{res!.entries === 1 ? 'y' : 'ies'}{res!.head && <> · head <code>{res!.head.slice(0, 16)}…</code></>}</>
-              : <>Chain broken at entry #{res!.broken_at}: {res!.reason}. Entries from that point may have been altered.</>)}
-          </span>
-        </div>
-    ),
-  ];
 }
 
 export function Audit({ initialQuery, initialOutcome, initialTab = 'events', initialRisky = false }: {
@@ -97,7 +40,6 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events', ini
   const [type, setType] = useState<EventType | 'all'>('all');
   const [riskyOnly, setRiskyOnly] = useState(initialRisky);
   const [showRoutine, setShowRoutine] = useState(false);
-  const [verifyBtn, verifyResult] = useVerify();
 
   const since = now - RANGE_MS[range];
   const all = useMemo(() => consoleEvents.filter((e) => (e.at ?? 0) >= since), [consoleEvents, since]);
@@ -118,17 +60,11 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events', ini
   const routineTotal = useMemo(() => matched.filter((e) => e.risk === 'routine').length, [matched]);
   const riskyCount = all.filter((e) => e.risk === 'risky').length;
 
-  const trailRows = useMemo(() => trail.filter((a) => {
-    if (!needle) return true;
-    const hay = `${a.actor} ${a.actor_role} ${a.action} ${actionLabel(a.action)} ${a.target} ${details(a.details)} ${a.ip}`;
-    return needle.split(/\s+/).every((w) => hay.toLowerCase().includes(w));
-  }), [trail, needle]);
-
   const download = () => {
-    const blob = new Blob([tab === 'events' ? eventsCsv(rows) : trailCsv(trailRows)], { type: 'text/csv' });
+    const blob = new Blob([eventsCsv(rows)], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = tab === 'events' ? 'effigent-events.csv' : 'effigent-audit-trail.csv';
+    a.download = 'effigent-events.csv';
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -136,8 +72,8 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events', ini
   return (
     <div className="page">
       <PageHead title="Activity & Audit" sub="Every agent action effigentd reported, and every change made in this console — attributable and tamper-evident.">
-        <RangeSelect />
-        <button className="btn" onClick={download}><Ic n="download" /> Export CSV</button>
+        {tab === 'events' && <RangeSelect />}
+        {tab === 'events' && <button className="btn" onClick={download}><Ic n="download" /> Export CSV</button>}
       </PageHead>
       <PageGuide id="audit" steps={[<><b>Agent events</b>: everything agents ran, opened and reached, with what policy did</>, <><b>Admin trail</b>: every policy, approval and setting change — tamper-evident</>, <>Filter by time and result, then <b>Export CSV</b> for compliance</>]} />
 
@@ -169,8 +105,10 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events', ini
             {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         )}
-        <input className="input" style={{ width: 260, maxWidth: '100%' }} placeholder={tab === 'events' ? 'Search agents, targets, rules, hosts…' : 'Search actors, actions, targets…'}
-          value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
+        {tab === 'events' && (
+          <input className="input" style={{ width: 260, maxWidth: '100%' }} placeholder="Search agents, targets, rules, hosts…"
+            value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
+        )}
       </div>
 
       {tab === 'events' ? (
@@ -208,34 +146,7 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events', ini
           )}
         </Card>
       ) : (
-        <Card>
-          <CardHead title="Console audit trail" sub="Append-only and hash-chained per workspace: each entry commits to the one before it, so edits or deletions break the chain.">
-            {verifyBtn}
-          </CardHead>
-          {verifyResult}
-          {!loaded ? <Loading /> : trailRows.length === 0 ? (
-            <Empty icon="clipboard" title={trail.length ? 'No matching entries' : 'No console changes in this range'} sub="Policy publishes, endpoint revocations, enrollment tokens and denied attempts are recorded here." />
-          ) : (
-            <div className="tbl-wrap">
-              <table className="tbl">
-                <thead><tr><th>#</th><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
-                <tbody>
-                  {trailRows.map((a) => (
-                    <tr key={a.seq}>
-                      <td className="tnum muted">{a.seq}</td>
-                      <td className="muted" title={a.at}>{dateTime(ms(a.at))}<span className="cell-sub">{ago(ms(a.at), now)}</span></td>
-                      <td><span className="cell-main mono-sm" style={{ display: 'block' }}>{a.actor}</span><span className="cell-sub">{a.actor_role || '—'} · {a.actor_via}</span></td>
-                      <td>{a.action.startsWith('denied.') ? <span className="badge b-red">{actionLabel(a.action)}</span> : <span className="cell-main">{actionLabel(a.action)}</span>}</td>
-                      <td className="mono-sm" style={{ wordBreak: 'break-all' }}>{a.target || '—'}</td>
-                      <td className="muted" style={{ maxWidth: 320, fontSize: 12.5 }}>{details(a.details)}</td>
-                      <td className="mono-sm muted">{a.ip || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
+        <AuditTrail />
       )}
 
       <div className="grid-3">

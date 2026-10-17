@@ -90,7 +90,22 @@ export function createFixtureApi(): Api {
       if (p === '/policy') return delay(policy) as Promise<T>;
       if (p === '/policy/history') return delay(history) as Promise<T>;
       if (p === '/events') return delay(events) as Promise<T>;
-      if (p === '/audit') return delay(audit.slice().reverse()) as Promise<T>;
+      if (p === '/audit') {
+        const qs = new URLSearchParams(path.split('?')[1] ?? '');
+        if (qs.get('paged') !== '1') return delay(audit.slice().reverse()) as Promise<T>;
+        // the server's paging and filters, over the sample trail
+        const list = (k: string) => (qs.get(k) ?? '').split(',').filter(Boolean);
+        const [actions, vias, words] = [list('action'), list('via'), (qs.get('q') ?? '').toLowerCase().split(/\s+/).filter(Boolean)];
+        const since = qs.get('since') ? Date.parse(qs.get('since')!) : 0;
+        const match = audit.slice().reverse().filter((a) => (!actions.length || actions.some((x) => a.action.startsWith(x)))
+          && (!vias.length || vias.includes(a.actor_via)) && Date.parse(a.at) >= since
+          && words.every((w) => `${a.action} ${a.target} ${a.actor} ${JSON.stringify(a.details)} ${a.ip}`.toLowerCase().includes(w)));
+        const limit = Number(qs.get('limit')) || 50;
+        const before = Number(qs.get('before')) || Infinity;
+        const rest = match.filter((a) => a.seq < before);
+        const entries = rest.slice(0, limit);
+        return delay({ entries, total: match.length, next_before: rest.length > limit ? entries[entries.length - 1].seq : 0 }) as Promise<T>;
+      }
       if (p === '/audit/verify') return delay({ ok: true, entries: audit.length, head: audit[audit.length - 1]?.hash }) as Promise<T>;
       if (p === '/approvals') return delay([]) as Promise<T>; // the demo queue reads the sample store
       if (p === '/notifications') return delay(notifications) as Promise<T>;
