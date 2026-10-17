@@ -32,7 +32,7 @@ type Exception struct {
 // ExceptionLists are the lists an exception can change. exec_allow adds;
 // every other list removes.
 var ExceptionLists = []string{
-	"exec_deny", "file_deny", "domain_deny", "network_deny", "file_alert",
+	"exec_deny", "file_deny", "domain_deny", "network_deny", "file_alert", "tool_deny",
 	"exec_approve", "file_approve", "domain_approve", "network_approve", "command_approve", "tool_approve",
 	"exec_allow",
 }
@@ -102,6 +102,8 @@ func listOf(r *ep.Rule, name string) *[]string {
 		return &r.CommandApprove
 	case "tool_approve":
 		return &r.ToolApprove
+	case "tool_deny":
+		return &r.ToolDeny
 	}
 	return nil
 }

@@ -729,6 +729,7 @@ func overrides(def, r ep.Rule) ep.Rule {
 	o.NetApprove = list(def.NetApprove, r.NetApprove)
 	o.CommandApprove = list(def.CommandApprove, r.CommandApprove)
 	o.ToolApprove = list(def.ToolApprove, r.ToolApprove)
+	o.ToolDeny = list(def.ToolDeny, r.ToolDeny)
 	if !eqBool(def.Network, r.Network) {
 		o.Network = r.Network
 	}
@@ -744,7 +745,8 @@ func sameRule(a, b ep.Rule) bool {
 		l(a.FileDeny, b.FileDeny) && l(a.NetDeny, b.NetDeny) && l(a.NetAllow, b.NetAllow) && l(a.DomainDeny, b.DomainDeny) &&
 		eqBool(a.Network, b.Network) && eqBool(a.RequireLauncher, b.RequireLauncher) &&
 		l(a.ExecApprove, b.ExecApprove) && l(a.FileApprove, b.FileApprove) && l(a.DomainApprove, b.DomainApprove) &&
-		l(a.NetApprove, b.NetApprove) && l(a.CommandApprove, b.CommandApprove) && l(a.ToolApprove, b.ToolApprove)
+		l(a.NetApprove, b.NetApprove) && l(a.CommandApprove, b.CommandApprove) && l(a.ToolApprove, b.ToolApprove) &&
+		l(a.ToolDeny, b.ToolDeny)
 }
 
 func eqBool(a, b *bool) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }

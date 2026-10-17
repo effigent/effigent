@@ -25,7 +25,7 @@ TOK=$(curl -s "${A[@]}" -X POST "http://$CP/api/v1/enrollment-tokens" -d '{}' | 
   -sync-interval 1s 2>"$W/ep.err" & EPID=$!
 
 # denylist (curl denied) + approvals for `git push*` and GitHub MCP tools; short waits for the test
-sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]|' \
+sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]\n  tool_deny: ["mcp__claude-in-chrome__*"]|' \
   internal/endpoint/policy/default.yaml > "$W/policy.yaml"
 printf 'approvals:\n  wait_seconds: 4\n  ttl_minutes: 10\n' >> "$W/policy.yaml"
 python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"comment":"approvals test"}))' "$W/policy.yaml" |
@@ -84,6 +84,7 @@ decide "$ID3" deny 'not from an agent' >/dev/null
 out=$(hook mcp__github__create_issue "$MCP")
 echo "$out" | grep -q 'denied this action' && echo "$out" | grep -q 'not from an agent' && ok "denial reaches the agent with the note" || bad "deny: $out"
 [ "$(hook mcp__linear__create_issue '{}')" = "{}" ] && ok "other MCP servers untouched" || bad "linear"
+hook mcp__claude-in-chrome__navigate '{"url":"https://x"}' | grep -q '"permissionDecision":"deny".*claude-in-chrome__navigate tool is not allowed' && ok "Chrome MCP tool denied (tool_deny)" || bad "tool_deny"
 
 echo "== Codex (PreToolUse) and Gemini CLI (BeforeTool)"
 codex() { printf '{"session_id":"cx-1","turn_id":"t1","transcript_path":null,"cwd":"/work","hook_event_name":"PreToolUse","model":"gpt-5","permission_mode":"default","tool_name":"%s","tool_use_id":"u1","tool_input":%s}' "$1" "$2" |

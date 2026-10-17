@@ -54,7 +54,14 @@ var pathTools = map[string]bool{
 // returns Approve in the enforcing modes: the daemon asks an approver.
 func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
 	var f finding
+	for _, p := range rule.ToolDeny {
+		if textMatch(p, in.ToolName) {
+			f = finding{reason: "the " + in.ToolName + " tool is not allowed", kind: "tool", target: Summary(in), rule: "tool_deny"}
+			break
+		}
+	}
 	switch {
+	case f.reason != "":
 	case in.ToolName == "Bash":
 		f = checkCommand(rule, str(in.ToolInput, "command"), in.Cwd)
 	case pathTools[in.ToolName]:

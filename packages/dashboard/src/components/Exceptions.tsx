@@ -20,7 +20,7 @@ const VERB: Record<string, string> = {
   exec_deny: 'Run', file_deny: 'Open', domain_deny: 'Reach', network_deny: 'Connect to', file_alert: 'No alert for',
   exec_approve: 'Run without approval', file_approve: 'Open without approval', domain_approve: 'Reach without approval',
   network_approve: 'Connect without approval', command_approve: 'Run without approval', tool_approve: 'Use without approval',
-  exec_allow: 'Also run (allowlist)',
+  exec_allow: 'Also run (allowlist)', tool_deny: 'Use tool',
 };
 const describe = (list: string, value: string) => `${VERB[list] ?? list} ${value}`;
 

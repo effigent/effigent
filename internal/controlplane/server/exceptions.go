@@ -136,6 +136,8 @@ func ruleList(r *ep.Rule, name string) *[]string {
 		return &r.CommandApprove
 	case "tool_approve":
 		return &r.ToolApprove
+	case "tool_deny":
+		return &r.ToolDeny
 	}
 	return &r.ExecAllow
 }

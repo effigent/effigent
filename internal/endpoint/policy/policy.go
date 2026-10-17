@@ -58,6 +58,11 @@ type Rule struct {
 	// (which guarantees enforcement from the agent's first instruction).
 	RequireLauncher *bool `yaml:"require_launcher,omitempty" json:"require_launcher"`
 
+	// ToolDeny refuses agent tools by name, exact or prefix with a trailing *
+	// (e.g. "mcp__claude-in-chrome__*", "WebFetch"). Agent hooks only: the
+	// kernel can't see tool calls.
+	ToolDeny []string `yaml:"tool_deny,omitempty" json:"tool_deny"`
+
 	// Approval lists: a match pauses the agent's tool call and asks an
 	// approver (Slack / email / console) instead of denying outright. Only an
 	// agent hook can pause (macOS, Windows); in the kernel (Linux) the
@@ -246,10 +251,10 @@ func (r Rule) check() error {
 			return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), "domain_deny", "domain_approve"))
 		}
 	}
-	for _, list := range [][]string{r.CommandApprove, r.ToolApprove} {
+	for _, list := range [][]string{r.CommandApprove, r.ToolApprove, r.ToolDeny} {
 		for _, pat := range list {
 			if strings.TrimSpace(pat) == "" || pat == "*" {
-				return fmt.Errorf("command_approve / tool_approve entry %q would match everything; name a command or tool", pat)
+				return fmt.Errorf("command_approve / tool_approve / tool_deny entry %q would match everything; name a command or tool", pat)
 			}
 		}
 	}
@@ -389,6 +394,9 @@ func (p *Policy) RuleFor(agent string) Rule {
 		}
 		if a.ToolApprove != nil {
 			r.ToolApprove = a.ToolApprove
+		}
+		if a.ToolDeny != nil {
+			r.ToolDeny = a.ToolDeny
 		}
 		if a.Network != nil {
 			r.Network = a.Network

@@ -23,6 +23,7 @@ func testRule(mode policy.Mode) policy.Rule {
 		NetApprove:     []string{"192.0.2.0/24"},
 		CommandApprove: []string{"git push*", "npm publish"},
 		ToolApprove:    []string{"mcp__github__*", "WebSearch"},
+		ToolDeny:       []string{"mcp__claude-in-chrome__*"},
 	}
 }
 
@@ -119,6 +120,9 @@ func TestEvaluateClaude(t *testing.T) {
 		{"approve tool", policy.Allowlist, ClaudeInput{ToolName: "WebSearch", ToolInput: map[string]any{"query": "x"}}, "approval", "tool_approve"},
 		{"monitor only reports approval", policy.Monitor, bash("git push"), "would_block", "command_approve"},
 		{"allowlist still denies first", policy.Allowlist, bash("scp f h:/"), "deny", "exec_allow"},
+		{"tool denied", policy.Denylist, ClaudeInput{ToolName: "mcp__claude-in-chrome__navigate", ToolInput: map[string]any{"url": "https://x"}}, "deny", "tool_deny"},
+		{"tool deny in monitor", policy.Monitor, ClaudeInput{ToolName: "mcp__claude-in-chrome__computer", ToolInput: map[string]any{}}, "would_block", "tool_deny"},
+		{"other mcp not denied", policy.Denylist, ClaudeInput{ToolName: "mcp__chrome-devtools__click", ToolInput: map[string]any{}}, "", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

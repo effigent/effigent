@@ -30,6 +30,8 @@ The policy is YAML. Its format, with comments, is the reference policy below. Ru
 - domain_deny / domain_approve: exact hostnames (no scheme, no wildcards; www. separately).
 - network_deny / network_allow / network_approve: IPs or CIDRs only.
 - command_approve: command lines, exact or prefix with a trailing * (e.g. "git push*"); tool_approve: agent tool names, e.g. "mcp__github__*" or "WebFetch".
+- tool_deny: agent tool names to refuse outright (same patterns, e.g. "mcp__claude-in-chrome__*"); MCP tools are named mcp__<server>__<tool>.
+- Deny and allow lists only block in denylist/allowlist mode; to enforce for one agent only, set that agent's mode under "agents".
 - Approval lists pause the agent and ask an approver; they only pause in denylist or allowlist mode. The "approvals" block (wait_seconds ≤ 90, ttl_minutes) is top-level.
 - Keep everything in the current policy that the request doesn't change, including comments, agents and mcp_servers.
 Answer with exactly two parts:

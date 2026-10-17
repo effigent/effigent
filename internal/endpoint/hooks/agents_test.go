@@ -56,6 +56,7 @@ func TestCodexAndGemini(t *testing.T) {
 		{"gemini search approval", gemini("google_web_search", `{"query":"x"}`, ""), "approval", "tool_approve"},
 		{"gemini mcp approval", gemini("mcp_github_create_issue", `{"title":"x"}`, `{"server_name":"github","tool_name":"create_issue"}`), "approval", "tool_approve"},
 		{"gemini other mcp", gemini("mcp_linear_create_issue", `{}`, `{"server_name":"linear","tool_name":"create_issue"}`), "", ""},
+		{"gemini chrome mcp denied", gemini("mcp_claude-in-chrome_navigate", `{}`, `{"server_name":"claude-in-chrome","tool_name":"navigate"}`), "deny", "tool_deny"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
