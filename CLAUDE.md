@@ -251,6 +251,7 @@ npm run -w @effigent/site build                     # site
     `GEMINI_CLI_SYSTEM_SETTINGS_PATH` can point elsewhere. Gemini's admin policy TOML
     (`…/gemini-cli/policies`) is the harder backstop — not written by effigentd yet.
   - Cursor and the others: detection only (no hook).
+- `effigentd run --agent NAME -- cmd` trusts NAME (it picks the policy rule; it is not checked against cmd). A launch inside an already-tracked agent tree stays under the outer agent (no relabel escape). The console marks a root whose command isn't NAME's program as "name set by effigentd run" (`launchedAs` in `lib/live-graph.ts`; e.g. the Grok-VM test 2026-10-18 ran `--agent codex -- sh -c …`).
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8–1.1s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
 

@@ -3,7 +3,7 @@
  * mapping rules — status thresholds, outcome per event type — live in one place.
  */
 import type { ApiEndpoint, ApiEvent } from './api.ts';
-import { classify, type Classified } from './live-graph.ts';
+import { classify, launchedAs, type Classified } from './live-graph.ts';
 import type { ConsoleEvent, EventType, Outcome, Severity } from '@/types.ts';
 
 /** effigentd syncs every 5s by default (-sync-interval), so a minute of silence
@@ -119,7 +119,13 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
       summary = `${e.type === 'blocked' ? 'blocked' : 'would block'}: ${mcp ?? (c?.kind === 'command' ? c.label : b.target ? (b.target.startsWith('/') ? base(b.target) : b.target) : '?')}`; break;
     case 'approval_pending': case 'approved': case 'approval_denied':
       summary = `${e.type === 'approved' ? 'approved' : e.type === 'approval_denied' ? 'denied' : 'awaiting approval'}: ${mcp ?? (c?.kind === 'command' ? c.label : b.target ?? '?')}`; break;
-    case 'agent_start': case 'agent_exit': summary = `${e.type}${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`; break;
+    case 'agent_start': case 'agent_exit': {
+      const la = launchedAs(e);
+      summary = la
+        ? `${la.declared ? `named “${la.name}” by effigentd run — the command is not ${la.name}` : `started with effigentd run`}: ${la.command}`
+        : `${e.type}${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`;
+      break;
+    }
     default: summary = b.message || e.type;
   }
   const severity: Severity = e.severity === 'high' || e.severity === 'medium' ? e.severity : 'info';

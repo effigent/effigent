@@ -21,6 +21,31 @@ export type TargetKind = 'command' | 'file' | 'network' | 'tool' | 'routine' | '
 export type LiveNodeKind = 'machine' | 'agent' | 'mcp' | 'target';
 export type LiveOutcome = 'allowed' | 'blocked' | 'would_block' | 'flow';
 
+/** The binaries each built-in agent runs as (what `effigentd run --agent NAME` should launch). */
+const AGENT_BINARIES: Record<string, string[]> = {
+  'claude-code': ['claude', 'claude-code'], codex: ['codex'], 'gemini-cli': ['gemini'], 'cursor-agent': ['cursor-agent', 'cursor'],
+  aider: ['aider'], opencode: ['opencode'], goose: ['goose'],
+};
+
+/**
+ * `effigentd run --agent NAME -- command`: the launcher names the agent; it
+ * doesn't check that the command is that agent. Returns the name and the
+ * command, and whether the name is only declared (the command isn't the
+ * agent's own program — e.g. `--agent codex -- sh -c …`).
+ */
+export function launchedAs(e: ApiEvent): { name: string; command: string; declared: boolean } | null {
+  if (e.type !== 'agent_start') return null;
+  const b = e.body ?? {};
+  const bin = b.process?.binary ?? b.target ?? '';
+  if (!/(^|\/)effigentd[^/]*$/.test(bin)) return null;
+  const m = (b.process?.args ?? '').match(/^run\s+(?:.*\s)?--agent[= ](\S+)(?:.*?)\s--\s+(.+)$/s);
+  if (!m) return null;
+  const name = m[1].toLowerCase(), command = m[2].trim();
+  const prog = (command.split(/\s+/)[0] ?? '').split('/').pop() ?? '';
+  const known = AGENT_BINARIES[name];
+  return { name, command, declared: known ? !known.includes(prog) : false };
+}
+
 export interface LiveNode {
   id: string;
   kind: LiveNodeKind;
@@ -42,6 +67,8 @@ export interface LiveNode {
   risk?: CommandRisk;
   /** "Routine (N)" node: the commands folded into it, busiest first. */
   items?: { label: string; full: string; count: number }[];
+  /** Agent nodes started as `effigentd run --agent NAME -- cmd` where cmd isn't that agent: the command. */
+  declared?: string;
   /** Targets: the layout group, "command" | "file" | "network" | "tool" | "routine" | "mcp:<server>". */
   group?: string;
   /** "+N more" nodes: how many targets they stand for. */
@@ -296,7 +323,12 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
     const mid = `m:${e.endpoint_id}`;
     const aid = `a:${e.endpoint_id}:${agent}`;
     touch(mid, () => ({ kind: 'machine', label: host, sub: 'Machine', full: host, endpoint: e.endpoint_id }), outcome, at, e.id);
-    touch(aid, () => ({ kind: 'agent', label: agent, sub: host, full: `${agent} @ ${host}`, agent, endpoint: e.endpoint_id }), outcome, at, e.id);
+    const an = touch(aid, () => ({ kind: 'agent', label: agent, sub: host, full: `${agent} @ ${host}`, agent, endpoint: e.endpoint_id }), outcome, at, e.id);
+    const la = launchedAs(e);
+    if (la?.declared) {
+      an.declared = la.command;
+      an.full = `${agent} @ ${host} — the name was set by “effigentd run --agent ${la.name}”; the command was: ${la.command}`;
+    }
     link(mid, aid, 'runs', 'flow', at);
     if (!c || !outcome) continue;
     hits.push({ tid: `t:${c.kind}:${c.key}`, c, agentId: aid, outcome, at, ev: e.id });
