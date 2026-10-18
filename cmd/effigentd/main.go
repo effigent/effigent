@@ -46,6 +46,9 @@ func main() {
 		case "run":
 			runAgent(os.Args[2:])
 			return
+		case "run-probe": // internal: the child check of `effigentd run`
+			runProbe(os.Args[2:])
+			return
 		case "enroll":
 			enrollCmd(os.Args[2:])
 			return

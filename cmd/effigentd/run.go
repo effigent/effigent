@@ -60,21 +60,70 @@ func runAgent(args []string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	// The agent's tools run as child processes: the rules must follow forks,
+	// not only cover this pid. Check that with a child before saying so.
+	children := false
+	if enforced {
+		children = childRefused(canary)
+	}
 	_ = os.Remove(canary) // unlink isn't a file_open, so this works under the policy
 	_ = os.Remove(dir)
 
-	if !enforced {
+	switch {
+	case !enforced:
 		msg := fmt.Sprintf("enforcement for %q not confirmed after %s (is the effigentd daemon running?)", *agent, *timeout)
 		if *strict {
 			fatalf("%s; not starting the agent (--strict)", msg)
 		}
 		fmt.Fprintf(os.Stderr, "effigentd: warning: %s; starting anyway\n", msg)
-	} else if os.Getenv("EFFIGENT_RUN_QUIET") == "" {
+	case !children:
+		msg := fmt.Sprintf("the kernel rules for %q cover this process but not the processes it starts, so the agent's commands would NOT be enforced on this machine", *agent)
+		if *strict {
+			fatalf("%s; not starting the agent (--strict)", msg)
+		}
+		fmt.Fprintf(os.Stderr, "effigentd: WARNING: %s; starting anyway\n", msg)
+	case os.Getenv("EFFIGENT_RUN_QUIET") == "":
 		fmt.Fprintf(os.Stderr, "effigentd: %s enforced after %s\n", *agent, time.Since(start).Round(time.Millisecond))
 	}
 	if err := syscall.Exec(bin, cmd, os.Environ()); err != nil {
 		fatalf("exec %s: %v", bin, err)
 	}
+}
+
+// childRefused starts a short-lived child (`effigentd run-probe CANARY`) and
+// reports whether the kernel refused it the canary too — proof the policy
+// follows forks. A few tries: the child's tracking can lag its fork briefly.
+func childRefused(canary string) bool {
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	for i := 0; i < 5; i++ {
+		c := exec.Command(self, "run-probe", canary)
+		c.Stdin, c.Stdout, c.Stderr = nil, nil, nil
+		if err := c.Run(); err == nil {
+			return true // exit 0: refused
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
+// runProbe is the child half of childRefused: exit 0 when opening the canary
+// is refused (EPERM), 1 when it opens, 2 on any other error.
+func runProbe(args []string) {
+	if len(args) != 1 {
+		os.Exit(2)
+	}
+	f, err := os.Open(args[0])
+	switch {
+	case errors.Is(err, syscall.EPERM):
+		os.Exit(0)
+	case err == nil:
+		f.Close()
+		os.Exit(1)
+	}
+	os.Exit(2)
 }
 
 func fatalf(format string, a ...any) {
