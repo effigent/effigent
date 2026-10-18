@@ -93,6 +93,7 @@ export const DOCS: Array<[string, string, string]> = [
   ['Policies', '/docs/policies', 'Scope, rules, decisions and precedence — and how one policy becomes kernel rules and hook checks.'],
   ['Approvals', '/docs/approvals', 'How a paused action reaches a reviewer, what an approval is bound to, and when it expires.'],
   ['Enforcement & coverage', '/docs/enforcement', 'The layers, the per-OS coverage matrix, fail-closed start, offline behaviour and emergency suspend.'],
+  ['Kubernetes & containers', '/docs/kubernetes', 'effigentd on every Kubernetes node with Helm, or on a plain Docker host: requirements, install, upgrade, uninstall and limits.'],
   ['API', '/docs/api', 'effigentd’s local API, the event stream it sends to the control plane, and what the console exposes.'],
 ];
 

@@ -322,7 +322,7 @@ export default function Page() {
         <Eyebrow hue="250">How it works</Eyebrow>
         <h2 className="h-serif" style={{ fontSize: 'clamp(26px, 6vw, 32px)', margin: '0 0 12px', maxWidth: 680 }}>A gateway sees the model call. <b>effigentd sees the process tree.</b></h2>
         <div style={{ fontSize: 15, color: 'var(--ink-2)', lineHeight: 1.6, maxWidth: 640, marginBottom: 40 }}>
-          Same session, same command. An LLM gateway sits between the agent and the model API, so it never sees what the shell does next. effigentd sits on the machine, in the agent&apos;s hooks and in the kernel.
+          Same session, same command. An LLM gateway sits between the agent and the model API, so it never sees what the shell does next. effigentd sits on the machine, in the agent&apos;s hooks and in the kernel. So it governs the agent whatever model drives it (Claude, GPT, Gemini, Grok via API), on any machine you control: laptops, servers, containers and <Link href="/docs/kubernetes" style={{ color: 'oklch(0.4 0.14 250)', fontWeight: 600 }}>Kubernetes nodes</Link>.
         </div>
 
         <div className="arch-panel" style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '32px 28px 24px', background: 'oklch(0.995 0.002 90)' }}>

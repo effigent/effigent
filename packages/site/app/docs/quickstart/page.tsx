@@ -21,7 +21,7 @@ export default function Quickstart() {
       <DocSection>
         <H2>Before you start</H2>
         <ul className="doc-list">
-          <li><b>Linux with systemd</b>, x86_64 or arm64. Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+ and Amazon Linux 2023 all work.</li>
+          <li><b>Linux with systemd</b>, x86_64 or arm64. Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+ and Amazon Linux 2023 all work. Kubernetes or a Docker host without systemd: see <Link href="/docs/kubernetes">Kubernetes &amp; containers</Link>.</li>
           <li><b>A kernel with BTF</b> (5.8 or newer; every distro above ships one). Check: <code>ls /sys/kernel/btf/vmlinux</code>.</li>
           <li><b>BPF LSM</b> for blocking. Without it effigentd still watches and reports every agent, but can&apos;t refuse anything. Check: <code>cat /sys/kernel/security/lsm</code> must include <code>bpf</code>. Step 4 shows how to turn it on.</li>
           <li><b>Root</b> (<code>sudo</code>) to install.</li>

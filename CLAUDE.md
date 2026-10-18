@@ -20,6 +20,8 @@ Keep this file current when architecture, data model or deployment change.
 | `packages/site` | Marketing site + docs, Next.js static export. | S3 + CloudFront, effigent.ai |
 | `test/endpoint` | Endpoint e2e against Tetragon (37 checks). On a Mac with effigentd installed run `PORT=7787 ./test/endpoint/e2e.sh` (the installed daemon holds 7777). | Docker Desktop |
 | `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
+| `Dockerfile.effigentd`, `deploy/helm/effigent`, `deploy/docker` | effigentd for container hosts and Kubernetes. Image `ghcr.io/effigent/effigentd:<version>` + `:latest` (amd64/arm64), Helm repo `https://effigent.ai/charts` (chart `effigent`, DaemonSet: hostPID, hostNetwork, privileged, `/var/lib/effigent` hostPath, `EFFIGENT_HOSTNAME` = node name, token from a Secret). Both published by `release-effigentd.yml` after the binaries; the ghcr package must be public. Tetragon comes from its official chart with `tetragon.grpc.address=localhost:54321` + `tetragon.processAncestors.enabled=base,kprobe,lsm`. `deploy/docker/compose.yaml` = Tetragon (event cache 2 × 1s) + effigentd on a plain host. | customer clusters / Docker hosts |
+| `test/containers` | `kind.sh` (2-node kind + Tetragon chart + our chart) and `docker.sh` (compose): stand-in agent's curl and `.env` blocked, blocks in the local control plane, restart keeps the machine. One Tetragon per kernel: stop the dev `tetragon` container first. | Docker Desktop |
 
 ## 2. How policy reaches the kernel
 
@@ -32,6 +34,11 @@ Keep this file current when architecture, data model or deployment change.
 3. Offline restart → the cached signed policy is applied; a tampered cache is rejected and
    the built-in default applies. Local `PUT /policy` is refused while enrolled.
 4. Events are POSTed in batches to `/ep/v1/events` and stored in `cp.events`.
+5. Containers enroll on start: with `EFFIGENT_ENROLL_TOKEN` (+ `EFFIGENT_SERVER`, default
+   https://api.effigent.ai) and no `endpoint.json` in the state dir, the daemon enrolls first
+   (`cpclient.EnsureEnrolled`: retries network errors/5xx, not a refused token). Saved
+   credentials always win, so a restarted pod is the same machine. `EFFIGENT_HOSTNAME` overrides
+   the machine name at enrollment and in every event's `node`.
 
 **Central policies** (`internal/shared/policy`: rules for users / teams / agent types,
 allow / deny / require_approval) are compiled per machine by `internal/controlplane/compile`:
@@ -190,7 +197,10 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
 
 ```
 docker compose up -d postgres                       # localhost:5433
-make tetragon-up                                    # Tetragon in Docker Desktop's VM (BTF + BPF LSM)
+docker run -d --name tetragon --privileged --pid host -p 127.0.0.1:54321:54321 \
+  -v /sys/kernel/btf/vmlinux:/var/lib/tetragon/btf quay.io/cilium/tetragon:v1.7.1 /usr/bin/tetragon \
+  --server-address 0.0.0.0:54321 --export-filename /var/log/tetragon/tetragon.log \
+  --enable-ancestors=base,kprobe,lsm               # Tetragon in Docker Desktop's VM (BTF + BPF LSM)
 DATABASE_URL=postgres://effigent:effigent@localhost:5433/effigent EFFIGENT_ADMIN_TOKEN=devadmin \
   go run ./cmd/effigent-cp -listen 127.0.0.1:8080
 curl -H 'Authorization: Bearer devadmin' -H 'X-Effigent-Tenant: org:dev' -X POST localhost:8080/api/v1/enrollment-tokens
@@ -254,6 +264,12 @@ npm run -w @effigent/site build                     # site
 - `effigentd run --agent NAME -- cmd` trusts NAME (it picks the policy rule; it is not checked against cmd). A launch inside an already-tracked agent tree stays under the outer agent (no relabel escape). The console marks a root whose command isn't NAME's program as "name set by effigentd run" (`launchedAs` in `lib/live-graph.ts`; e.g. the Grok-VM test 2026-10-18 ran `--agent codex -- sh -c …`).
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8–1.1s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
+- Kubernetes / Docker hosts: kernel layer only for agents in containers (their hooks can't reach the node's
+  127.0.0.1:7777, so approvals and command/tool/MCP rules don't apply); one machine and policy per node;
+  exec/file paths are the container's; an agent's policy loads ~1–2s after it starts in a pod (use
+  `effigentd run` in the agent image, verified 2026-10-18 on kind). Autoscaled nodes need a valid token in
+  the Secret. Docker Desktop: a bind path that doesn't exist on the Mac is created in the VM, while
+  `/var/lib` itself maps to the Mac's `/private/var/lib`.
 
 ## 6. Conventions
 

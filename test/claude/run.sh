@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real Claude Code under effigentd + Tetragon, managed by the control plane.
-# Needs: `make tetragon-up`, local Postgres (docker compose up -d postgres),
+# Needs: the dev `tetragon` container (CLAUDE.md §4), local Postgres (docker compose up -d postgres),
 # and ~/.effigent-claude.env with CLAUDE_CODE_OAUTH_TOKEN=… (from `claude setup-token`).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
