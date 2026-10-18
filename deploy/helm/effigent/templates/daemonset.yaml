@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "effigent.fullname" . }}
+  labels:
+    {{- include "effigent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "effigent.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "effigent.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # The node's network (Tetragon's gRPC on its loopback) and process view
+      # (agents in every pod on the node).
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: effigentd
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -state-dir=/var/lib/effigent
+            - -procfs=/host/proc
+            - -tetragon={{ .Values.tetragon.address }}
+            - -listen={{ .Values.listen }}
+            - -output={{ .Values.output }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            # Enroll and report as the node, not the pod.
+            - name: EFFIGENT_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: EFFIGENT_SERVER
+              value: {{ .Values.server | quote }}
+            # Used only on a node's first start; saved credentials win after that.
+            - name: EFFIGENT_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "effigent.secretName" . }}
+                  key: {{ .Values.enrollment.secretKey }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            # Reads every process's /proc entries (including /proc/<pid>/exe)
+            # and signals agents for emergency suspend.
+            privileged: true
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/effigent
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+            # Whether the kernel can enforce (bpf in the LSM list) is reported to the console.
+            - name: securityfs
+              mountPath: /sys/kernel/security
+              readOnly: true
+      volumes:
+        - name: state
+          hostPath:
+            path: {{ .Values.stateHostPath }}
+            type: DirectoryOrCreate
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: securityfs
+          hostPath:
+            path: /sys/kernel/security
+            type: ""   # not checked: some container hosts (Docker Desktop) have no securityfs
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

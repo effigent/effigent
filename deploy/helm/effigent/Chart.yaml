@@ -1,0 +1,10 @@
+apiVersion: v2
+name: effigent
+description: effigentd on every node — governs AI coding agents with Tetragon (BPF LSM) and Effigent policy
+type: application
+home: https://effigent.ai/docs/kubernetes
+icon: https://effigent.ai/icon1.png
+# The chart version moves with effigentd; the image tag defaults to appVersion.
+version: 0.6.0
+appVersion: v0.6.0
+kubeVersion: ">=1.23.0-0"

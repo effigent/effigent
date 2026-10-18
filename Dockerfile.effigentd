@@ -1,0 +1,23 @@
+# effigentd for container hosts and Kubernetes (ghcr.io/effigent/effigentd).
+# Runs next to Tetragon: see deploy/helm/effigent and deploy/docker.
+# Compile on the build machine's own architecture and cross-compile to the target
+# (no CPU emulation needed).
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+ARG TARGETOS=linux
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/effigentd ./cmd/effigentd
+
+# Root, not :nonroot: effigentd reads every process's /proc entries on the host.
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/effigentd /usr/local/bin/effigentd
+# Credentials and the cached signed policy; mount a host path here so a restart
+# keeps the same machine.
+VOLUME /var/lib/effigent
+ENTRYPOINT ["/usr/local/bin/effigentd"]
+CMD ["-state-dir", "/var/lib/effigent", "-procfs", "/host/proc", "-output", "json"]

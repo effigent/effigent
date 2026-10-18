@@ -1,0 +1,15 @@
+effigentd is starting on every matching node. Each node enrolls once with
+{{ .Values.server }} and shows up in the console under Machines with the node's name.
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }} -o wide
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} --tail=20
+
+effigentd needs Tetragon on the same nodes, with gRPC on {{ .Values.tetragon.address }}
+and process ancestors enabled:
+  helm upgrade --install tetragon cilium/tetragon -n kube-system \
+    --set tetragon.grpc.address=localhost:54321 \
+    --set tetragon.processAncestors.enabled=base\,kprobe\,lsm
+
+A pod that logs "enroll: … 401" used a token that is expired or has no machines
+left: create a token with Machines ≥ node count, update the Secret and delete the pod.

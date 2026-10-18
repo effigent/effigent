@@ -1,0 +1,13 @@
+# A stand-in coding agent for the container/Kubernetes tests: a copy of bash
+# named "claude" (matched by the default policy's binary_names), curl, and a
+# project with a .env. effigentd is copied in for `effigentd run` (zero-gap start),
+# the way a customer's agent image would: COPY --from=ghcr.io/effigent/effigentd:<version>.
+ARG EFFIGENTD_IMAGE=ghcr.io/effigent/effigentd:latest
+FROM ${EFFIGENTD_IMAGE} AS effigentd
+FROM debian:stable-slim
+COPY --from=effigentd /usr/local/bin/effigentd /usr/local/bin/effigentd
+RUN apt-get update -qq && apt-get install -y -qq curl >/dev/null && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /opt/ag /work && cp /bin/bash /opt/ag/claude && echo "API_KEY=x" > /work/.env
+WORKDIR /work
+# Exit codes: curl 126 = exec blocked; cat 1 = open blocked.
+CMD ["/opt/ag/claude", "-c", "sleep 2; curl -s -o /dev/null https://example.com; echo \"curl exit=$?\"; cat .env >/dev/null; echo \"cat .env exit=$?\"; sleep 5"]

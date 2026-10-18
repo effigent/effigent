@@ -1,0 +1,46 @@
+# Effigent on a Docker host without Kubernetes: Tetragon and effigentd as two
+# privileged containers on the host's network and process view. Agents in any
+# container on this host (or on the host itself) are governed.
+#
+#   echo "EFFIGENT_ENROLL_TOKEN=eft_…" > .env      # from the console: Machines → Enroll → Docker
+#   docker compose up -d
+#
+# Needs a Linux kernel with BTF and BPF LSM (`cat /sys/kernel/security/lsm` lists bpf).
+# Guide: https://effigent.ai/docs/kubernetes
+services:
+  tetragon:
+    image: quay.io/cilium/tetragon:v1.7.1
+    restart: unless-stopped
+    privileged: true
+    pid: host
+    cgroup: host
+    network_mode: host
+    command:
+      - --server-address=127.0.0.1:54321
+      # effigentd attributes every event to its agent through the ancestor chain.
+      - --enable-ancestors=base,kprobe,lsm
+      # Outside Kubernetes nothing fills in pod details, and by default Tetragon
+      # holds each event from a container ~30s (15 x 2s) waiting for them.
+      - --event-cache-retries=2
+      - --event-cache-retry-delay=1
+    volumes:
+      - /sys/kernel/btf/vmlinux:/var/lib/tetragon/btf:ro
+
+  effigentd:
+    image: ghcr.io/effigent/effigentd:${EFFIGENTD_VERSION:-latest}
+    restart: unless-stopped
+    privileged: true
+    pid: host
+    network_mode: host
+    depends_on: [tetragon]
+    environment:
+      # Used on the first start only; afterwards the credentials in
+      # /var/lib/effigent are reused and this host stays the same machine.
+      EFFIGENT_ENROLL_TOKEN: ${EFFIGENT_ENROLL_TOKEN:-}
+      EFFIGENT_SERVER: ${EFFIGENT_SERVER:-https://api.effigent.ai}
+      # The machine name in the console (default: this host's name).
+      EFFIGENT_HOSTNAME: ${EFFIGENT_HOSTNAME:-}
+    volumes:
+      - ${EFFIGENT_STATE_DIR:-/var/lib/effigent}:/var/lib/effigent
+      - /proc:/host/proc:ro
+      - /sys/kernel/security:/sys/kernel/security:ro

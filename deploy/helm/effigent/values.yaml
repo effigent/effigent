@@ -1,0 +1,71 @@
+# effigentd runs on every node next to Tetragon, which must be installed first
+# from the official chart with gRPC on localhost:54321 and process ancestors on:
+#
+#   helm install tetragon cilium/tetragon -n kube-system \
+#     --set tetragon.grpc.address=localhost:54321 \
+#     --set tetragon.processAncestors.enabled=base\,kprobe\,lsm
+#
+# See https://effigent.ai/docs/kubernetes.
+
+image:
+  repository: ghcr.io/effigent/effigentd
+  tag: ""                 # default: the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Control plane this cluster's nodes enroll with.
+server: https://api.effigent.ai
+
+enrollment:
+  # Kubernetes Secret holding the enrollment token (key below). Create it with
+  #   kubectl -n effigent create secret generic effigent-enrollment --from-literal=token=eft_…
+  # Use a token whose "Machines" count is at least the number of nodes: each
+  # node enrolls once, and a node whose pod can't enroll restarts until it can.
+  existingSecret: effigent-enrollment
+  secretKey: token
+  # Or let the chart create the Secret (the token then lives in the release's
+  # values; prefer existingSecret).
+  token: ""
+
+# Where each node keeps its credentials and cached signed policy. Keep it: a
+# restarted or upgraded pod reuses the same machine instead of enrolling again.
+stateHostPath: /var/lib/effigent
+
+tetragon:
+  # Tetragon's gRPC address on the node (both pods use the host network).
+  address: 127.0.0.1:54321
+
+# effigentd's local REST API on each node (host network: the node's loopback).
+# "" turns it off.
+listen: 127.0.0.1:7777
+
+# Events in the pod log as well: none | json | pretty. They go to the control
+# plane either way; json logs every exec of every agent on the node.
+output: none
+
+extraArgs: []
+extraEnv: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector:
+  kubernetes.io/os: linux
+
+# Run on every node, including tainted ones (control plane, GPU pools…).
+tolerations:
+  - operator: Exists
+
+affinity: {}
+priorityClassName: ""
+podAnnotations: {}
+podLabels: {}
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
