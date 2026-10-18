@@ -112,6 +112,17 @@ if [ "$LSM_OK" = 0 ]; then
 fi
 
 # ---- Tetragon ------------------------------------------------------------
+
+# Outside Kubernetes nothing ever fills in pod details, but in a container- or
+# pod-style cgroup Tetragon holds each event waiting for them: 15 retries x 2s
+# by default, so events (and the `effigentd run` start confirmation) arrive
+# ~30s late. Keep the wait to ~2s there.
+tetragon_event_cache() {
+  [ -n "${KUBERNETES_SERVICE_HOST:-}" ] && return 0
+  echo 2 > /etc/tetragon/tetragon.conf.d/event-cache-retries
+  echo 1 > /etc/tetragon/tetragon.conf.d/event-cache-retry-delay
+}
+
 if [ "$SKIP_TETRAGON" = 0 ] && ! systemctl is-active --quiet tetragon; then
   say "Installing Tetragon $TETRAGON_VERSION"
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -123,11 +134,13 @@ if [ "$SKIP_TETRAGON" = 0 ] && ! systemctl is-active --quiet tetragon; then
   install -d /etc/tetragon/tetragon.conf.d
   # effigentd attributes every event to its agent through the ancestor chain.
   echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
+  tetragon_event_cache
   "$TMP/tetragon-$TETRAGON_VERSION-$ARCH/install.sh" >/dev/null
 else
   say "Tetragon is already running"
-  if [ ! -s /etc/tetragon/tetragon.conf.d/enable-ancestors ]; then
+  if [ ! -s /etc/tetragon/tetragon.conf.d/enable-ancestors ] || { [ -z "${KUBERNETES_SERVICE_HOST:-}" ] && [ ! -s /etc/tetragon/tetragon.conf.d/event-cache-retries ]; }; then
     echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
+    tetragon_event_cache
     systemctl restart tetragon
   fi
 fi
