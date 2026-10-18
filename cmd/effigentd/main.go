@@ -118,6 +118,23 @@ func daemon() {
 		backend = sink.NewHTTP(sink.HTTPConfig{URL: *backendURL, Token: os.Getenv("EFFIGENT_BACKEND_TOKEN"), MinSeverity: *backendMin})
 		sinks = append(sinks, backend)
 	}
+	// Containers enroll on first start: EFFIGENT_ENROLL_TOKEN (+ EFFIGENT_SERVER).
+	// Credentials already in the state dir win, so restarts reuse the machine.
+	if tok := os.Getenv("EFFIGENT_ENROLL_TOKEN"); tok != "" {
+		server := os.Getenv("EFFIGENT_SERVER")
+		if server == "" {
+			server = cpclient.DefaultServer
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		st, enrolled, err := cpclient.EnsureEnrolled(ctx, server, tok, *stateDir, version, logger.Printf)
+		cancel()
+		if err != nil {
+			logger.Fatalf("enroll: %v", err)
+		}
+		if enrolled {
+			logger.Printf("enrolled %s as endpoint %s (tenant %s)", cpclient.MachineName(), st.EndpointID, st.Tenant)
+		}
+	}
 	cp, _ := cpclient.LoadState(*stateDir)
 	if cp != nil {
 		// Enrolled: ship every event to the control plane too.
@@ -127,6 +144,12 @@ func daemon() {
 		logger.Printf("enrolled as %s with %s", cp.EndpointID, cp.Server)
 	}
 	defer sinks.Close()
+	emit := sinks.Write
+	if name := strings.TrimSpace(os.Getenv("EFFIGENT_HOSTNAME")); name != "" {
+		// Tetragon names the node after its own host (a container's id outside
+		// Kubernetes); report the machine name this endpoint enrolled under.
+		emit = func(e event.Event) { e.Node = name; sinks.Write(e) }
+	}
 
 	hooksOnly := *sensor == "hooks"
 	var tg *tetragon.Client
@@ -144,7 +167,7 @@ func daemon() {
 	defer stop()
 	go func() { <-serviceStop; stop() }() // Windows service stop/shutdown
 
-	eng := engine.New(pol, raw, enf, sinks.Write, logger.Printf, *verbose)
+	eng := engine.New(pol, raw, enf, emit, logger.Printf, *verbose)
 	var upstreams []string
 	for _, u := range strings.Split(*dnsServers, ",") {
 		if u = strings.TrimSpace(u); u != "" {
@@ -166,7 +189,7 @@ func daemon() {
 			OnApply: func(v int64) {
 				policyVersion.Store(v)
 				logger.Printf("applied policy v%d from the control plane", v)
-				sinks.Write(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "info",
+				emit(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "info",
 					Rule: fmt.Sprintf("v%d", v), Message: fmt.Sprintf("policy v%d from the control plane is active", v)})
 			},
 		}

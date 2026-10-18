@@ -57,6 +57,20 @@ func DefaultStateDir() string {
 	return filepath.Join(home, ".effigent")
 }
 
+// DefaultServer is the hosted control plane.
+const DefaultServer = "https://api.effigent.ai"
+
+// MachineName is the name this endpoint enrolls and reports events under:
+// $EFFIGENT_HOSTNAME when set (in Kubernetes the node's name, since a pod's own
+// hostname is the pod's), else the OS hostname.
+func MachineName() string {
+	if h := strings.TrimSpace(os.Getenv("EFFIGENT_HOSTNAME")); h != "" {
+		return h
+	}
+	h, _ := os.Hostname()
+	return h
+}
+
 func LoadState(dir string) (*State, error) {
 	b, err := os.ReadFile(statePath(dir))
 	if err != nil {
@@ -71,9 +85,8 @@ func LoadState(dir string) (*State, error) {
 
 // Enroll exchanges a one-time enrollment token for endpoint credentials.
 func Enroll(ctx context.Context, server, token, dir, version string) (*State, error) {
-	host, _ := os.Hostname()
 	body, _ := json.Marshal(map[string]any{"token": token, "info": map[string]string{
-		"hostname": host, "os": runtime.GOOS, "arch": runtime.GOARCH, "version": version}})
+		"hostname": MachineName(), "os": runtime.GOOS, "arch": runtime.GOARCH, "version": version}})
 	server = strings.TrimSuffix(server, "/")
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server+"/ep/v1/enroll", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -84,7 +97,7 @@ func Enroll(ctx context.Context, server, token, dir, version string) (*State, er
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		return nil, fmt.Errorf("enroll: %s: %s", res.Status, strings.TrimSpace(string(msg)))
+		return nil, &EnrollError{Status: res.StatusCode, Msg: fmt.Sprintf("enroll: %s: %s", res.Status, strings.TrimSpace(string(msg)))}
 	}
 	var out struct {
 		EndpointID      string `json:"endpoint_id"`
@@ -100,10 +113,57 @@ func Enroll(ctx context.Context, server, token, dir, version string) (*State, er
 		return nil, err
 	}
 	b, _ := json.MarshalIndent(st, "", "  ")
-	if err := os.WriteFile(statePath(dir), b, 0o600); err != nil {
+	// Write-then-rename: a crash mid-write must not leave a half file that
+	// makes the next start look unenrolled (and spend another token use).
+	tmp := statePath(dir) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, statePath(dir)); err != nil {
 		return nil, err
 	}
 	return st, nil
+}
+
+// EnrollError is the control plane refusing an enrollment (bad, expired or
+// used-up token); retrying the same token won't help.
+type EnrollError struct {
+	Status int
+	Msg    string
+}
+
+func (e *EnrollError) Error() string { return e.Msg }
+
+// EnsureEnrolled returns the enrollment saved in dir, enrolling with token
+// first when there is none (containers pass EFFIGENT_ENROLL_TOKEN). Saved
+// credentials always win, so a restarted pod that keeps its state dir stays the
+// same machine and never spends another token use. Network errors and 5xx are
+// retried until ctx ends; a refused token is not. enrolled reports whether this
+// call enrolled.
+func EnsureEnrolled(ctx context.Context, server, token, dir, version string, logf func(string, ...any)) (st *State, enrolled bool, err error) {
+	st, err = LoadState(dir)
+	if err == nil {
+		return st, false, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, false, fmt.Errorf("%s: %w", statePath(dir), err)
+	}
+	if token == "" {
+		return nil, false, nil
+	}
+	for wait := 2 * time.Second; ; wait = min(2*wait, 30*time.Second) {
+		st, err = Enroll(ctx, server, token, dir, version)
+		var refused *EnrollError
+		if err == nil || (errors.As(err, &refused) && refused.Status < 500) {
+			return st, err == nil, err
+		}
+		logf("enroll with %s: %v (retrying in %s)", server, err, wait)
+		select {
+		case <-ctx.Done():
+			return nil, false, err
+		case <-time.After(wait):
+		}
+	}
 }
 
 // Client syncs policy for an enrolled endpoint.
