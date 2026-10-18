@@ -264,6 +264,7 @@ func daemon() {
 			} else {
 				eng.Bootstrap(ctx, procs, ppid)
 			}
+			eng.EnableRescan(func() ([]event.Proc, map[uint32]uint32, error) { return procscan.Scan(*procfs) })
 		}
 		first = false
 		eng.Reconcile(ctx)

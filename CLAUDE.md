@@ -272,8 +272,11 @@ npm run -w @effigent/site build                     # site
   there (e.g. started by hand) is left as is and effigentd connects to its `--server-address` (warns without
   `--enable-ancestors`); the old effigentd is stopped only right before the new one starts. Verified 2026-10-18 in a
   no-systemd Ubuntu container: install, rerun, uninstall; an `effigentd run` child's curl and `/etc/shadow` blocked.
-  Grok Bot's own commands are only governed when started through `effigentd run --agent grok-bot -- …` (no
-  detection rule for its process). Tetragon's local log carries the installer's `--token` as an ancestor; the
+  Grok Bot runs every command as `bash -c` under its command server `/exec-daemon/node /exec-daemon/index.js
+  serve …` (two instances; process tree 2026-10-18), so an agent rule `args_contains: ["/exec-daemon/index.js"]`
+  covers it. Any policy change rescans /proc (after the startup scan), so a rule added for an agent that's
+  already running applies without restarting effigentd, and removing it unblocks the same process.
+  The installer double-forks the daemons so they leave the installing agent's tree at once. Tetragon's local log carries the installer's `--token` as an ancestor; the
   installer enrolls before Tetragon starts, so a one-time token is already spent.
 - Kubernetes / Docker hosts: kernel layer only for agents in containers (their hooks can't reach the node's
   127.0.0.1:7777, so approvals and command/tool/MCP rules don't apply); one machine and policy per node;

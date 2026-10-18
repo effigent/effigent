@@ -107,9 +107,12 @@ fi
 [ "$SYSTEMD" = 1 ] || warn "systemd is not running: Tetragon and effigentd will run as background processes and stop at the next reboot (rerun this installer then)."
 
 # Without systemd: start a daemon in its own session so it outlives this shell.
+# The subshell exits at once, so the daemon is orphaned right away and leaves
+# the process tree of whoever ran the installer (often an AI agent itself)
+# before effigentd starts tracking agents.
 start_bg() { # start_bg LOGFILE CMD...
   log="$1"; shift
-  setsid nohup "$@" >>"$log" 2>&1 </dev/null &
+  ( setsid nohup "$@" >>"$log" 2>&1 </dev/null & )
 }
 
 case "$(uname -m)" in

@@ -66,9 +66,10 @@ type Engine struct {
 	learned  map[string]map[string]int // agent -> binary -> exec count
 	recent   map[string]time.Time      // dedup of repeated kernel events
 	gen      uint64
-	dns      *domains.Resolver // domain_deny hostnames -> addresses
-	procfs   string            // to read each agent's own resolv.conf
-	empty    map[string]bool   // domain_deny names currently resolving to nothing (reported once)
+	dns      *domains.Resolver                               // domain_deny hostnames -> addresses
+	procfs   string                                          // to read each agent's own resolv.conf
+	empty    map[string]bool                                 // domain_deny names currently resolving to nothing (reported once)
+	scan     func() ([]event.Proc, map[uint32]uint32, error) // running processes, once rescans are enabled
 }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
@@ -439,21 +440,33 @@ func (e *Engine) learn(agent, binary string) {
 }
 
 // Bootstrap tracks agents that were already running when effigentd started
-// (Linux, from /proc). Their exec happened before we were listening.
+// (Linux, from /proc). Their exec happened before we were listening. It is
+// also how a policy change reaches running processes (see EnableRescan), so
+// roots already tracked, and anything inside their trees, are left alone.
 func (e *Engine) Bootstrap(ctx context.Context, procs []event.Proc, ppid map[uint32]uint32) {
 	byPID := map[uint32]event.Proc{}
 	for _, p := range procs {
 		byPID[p.PID] = p
 	}
-	isAgent := func(p event.Proc) string { return e.pol.MatchAgent(p.Binary, p.Args) }
+	e.mu.Lock()
+	pol := e.pol
+	tracked := make(map[uint32]bool, len(e.roots))
+	for pid := range e.roots {
+		tracked[pid] = true
+	}
+	e.mu.Unlock()
+	isAgent := func(p event.Proc) string { return pol.MatchAgent(p.Binary, p.Args) }
 	for _, p := range procs {
+		if tracked[p.PID] {
+			continue
+		}
 		name := isAgent(p)
 		if name == "" {
 			continue
 		}
 		nested := false
 		for a, n := ppid[p.PID], 0; a > 1 && n < 64; a, n = ppid[a], n+1 {
-			if isAgent(byPID[a]) != "" {
+			if tracked[a] || isAgent(byPID[a]) != "" {
 				nested = true
 				break
 			}
@@ -554,7 +567,28 @@ func (e *Engine) SetPolicy(ctx context.Context, raw []byte) (int, error) {
 	for _, pid := range pids {
 		e.reapply(ctx, pid)
 	}
+	// A new or changed agent rule may match processes that are already
+	// running (their exec is long past): look for them, as at startup.
+	e.mu.Lock()
+	scan := e.scan
+	e.mu.Unlock()
+	if scan != nil {
+		if procs, ppid, err := scan(); err != nil {
+			e.logf("rescan after policy change: %v", err)
+		} else {
+			e.Bootstrap(ctx, procs, ppid)
+		}
+	}
 	return len(pids), nil
+}
+
+// EnableRescan makes every policy change look for running processes that
+// its agent rules match (e.g. a rule just added for an agent that is already
+// up). Call it after the startup Bootstrap, once enforcement is connected.
+func (e *Engine) EnableRescan(scan func() ([]event.Proc, map[uint32]uint32, error)) {
+	e.mu.Lock()
+	e.scan = scan
+	e.mu.Unlock()
 }
 
 // expand turns a rule's domain_deny into addresses the kernel can match:
