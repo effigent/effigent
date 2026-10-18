@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { agentMeta } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
@@ -9,7 +10,7 @@ import { apiErrorText, type ApiEvent } from '@/lib/api.ts';
 import { classify } from '@/lib/live-graph.ts';
 import { ago, dateTime, toConsoleEvent } from '@/lib/live-map.ts';
 import type { ConsoleEvent, EventType } from '@/types.ts';
-import { AgentGlyph, Card, CardHead, Empty, Loading, OutcomePill, RiskyTag } from '@/components/ui.tsx';
+import { AgentGlyph, Card, CardHead, Empty, InfoTip, Loading, OutcomePill, RiskyTag } from '@/components/ui.tsx';
 
 /** Result = what policy did. Each maps to the event types the server filters on. */
 const RESULTS = [
@@ -197,7 +198,7 @@ export function ActivityEvents({ initialQuery, initialOutcome, initialRisky = fa
       </div>
 
       <Card>
-        <CardHead title="Agent events" sub={
+        <CardHead info={HELP.agentEvents} title="Agent events" sub={
           first ? 'Loading…' : `${shown.length.toLocaleString()} shown${next ? ' · older events available' : ''}${routineHidden ? ` · ${routineHidden} routine command${routineHidden === 1 ? '' : 's'} hidden` : ''}`
         }>
           {routineHidden > 0 || showRoutine ? (
@@ -206,6 +207,7 @@ export function ActivityEvents({ initialQuery, initialOutcome, initialRisky = fa
               {showRoutine ? 'Hide routine commands' : `Show routine commands (${routineHidden})`}
             </button>
           ) : null}
+          {(routineHidden > 0 || showRoutine) && <InfoTip align="right" label="About routine commands">{HELP.routine}</InfoTip>}
           <button className="btn sm" onClick={exportCsv} disabled={exporting || first}><Ic n="download" size={14} /> {exporting ? 'Exporting…' : 'Export CSV'}</button>
         </CardHead>
         {err && <div className="callout bad" style={{ margin: '0 20px 14px' }}><Ic n="alert" size={16} /><span>{err}</span></div>}

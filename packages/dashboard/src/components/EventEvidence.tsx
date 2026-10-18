@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { useEffect, useState } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
@@ -46,7 +47,7 @@ export function EventEvidence() {
 
   return (
     <Card>
-      <CardHead title="Evidence" sub={`Agent events are append-only and chained per machine, so an edited, removed or inserted event shows up. After ${arch?.retention_days ?? 90} days they move to an archive in S3 (one file per day) and leave the database.`}>
+      <CardHead info={HELP.evidence} title="Evidence" sub={`Agent events are append-only and chained per machine, so an edited, removed or inserted event shows up. After ${arch?.retention_days ?? 90} days they move to an archive in S3 (one file per day) and leave the database.`}>
         <button className="btn sm" onClick={verify} disabled={checking}><Ic n="shieldCheck" size={14} /> {checking ? 'Checking…' : 'Verify events'}</button>
       </CardHead>
       {(v || verr) && (

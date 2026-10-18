@@ -964,3 +964,35 @@ tr.revoked td { opacity: 0.55; }
   .app.collapsed .sidebar-toggle svg { transform: none; }
 }
 @media (max-width: 900px) { .sidebar-toggle { display: none; } }
+
+/* ---------- ⓘ info tips ---------- */
+.info-tip { position: relative; display: inline-flex; vertical-align: middle; margin-left: 7px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.info-tip-btn {
+  width: 17px; height: 17px; border-radius: 50%; display: inline-grid; place-items: center; padding: 0; cursor: help;
+  border: 1px solid var(--border); background: var(--panel-2, var(--panel)); color: var(--txt-3);
+  font: 600 11px/1 Georgia, 'Times New Roman', serif; font-style: italic;
+}
+.info-tip-btn:hover, .info-tip-btn:focus-visible, .info-tip.open .info-tip-btn { color: var(--accent-2); border-color: var(--accent-line, var(--accent-2)); outline: none; }
+.info-tip-pop {
+  position: absolute; top: calc(100% + 8px); z-index: 70; width: max-content; max-width: min(320px, 78vw);
+  padding: 10px 12px; border-radius: 10px; background: var(--txt, #111827); color: var(--bg, #fff);
+  font-size: 12.5px; line-height: 1.5; font-weight: 400; text-align: left; white-space: normal;
+  box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.45); opacity: 0; visibility: hidden; transform: translateY(-3px);
+  transition: opacity .12s ease, transform .12s ease, visibility .12s; pointer-events: none;
+}
+.info-tip.align-center .info-tip-pop { left: 50%; transform: translate(-50%, -3px); }
+.info-tip.align-left .info-tip-pop { left: -10px; }
+.info-tip.align-right .info-tip-pop { right: -10px; }
+.info-tip:hover .info-tip-pop, .info-tip:focus-within .info-tip-pop, .info-tip.open .info-tip-pop { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
+.info-tip.align-center:hover .info-tip-pop, .info-tip.align-center:focus-within .info-tip-pop, .info-tip.align-center.open .info-tip-pop { transform: translate(-50%, 0); }
+.info-tip-pop b { color: inherit; }
+.info-tip-pop code { background: rgba(255, 255, 255, 0.14); color: inherit; padding: 0 4px; border-radius: 4px; }
+@media (max-width: 600px) {
+  /* phones: the explanation opens as a sheet at the bottom of the screen */
+  .info-tip .info-tip-pop, .info-tip.align-center .info-tip-pop, .info-tip.align-left .info-tip-pop, .info-tip.align-right .info-tip-pop {
+    position: fixed; left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; max-width: none;
+    transform: translateY(6px); font-size: 14px; padding: 14px 16px;
+  }
+  .info-tip:hover .info-tip-pop, .info-tip:focus-within .info-tip-pop, .info-tip.open .info-tip-pop,
+  .info-tip.align-center:hover .info-tip-pop, .info-tip.align-center:focus-within .info-tip-pop, .info-tip.align-center.open .info-tip-pop { transform: none; }
+}

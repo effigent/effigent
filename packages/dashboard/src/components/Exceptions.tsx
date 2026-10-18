@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { agentMeta } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
@@ -82,7 +83,7 @@ export function Exceptions() {
   const who = (x: Exception) => [...(x.endpoints ?? []), ...(x.owners ?? []), ...(x.teams ?? []).map((t) => `team ${t}`)].join(', ');
   return (
     <Card>
-      <CardHead title="Exceptions" sub="Allow something the company policy blocks — for specific machines, one agent or all, for a while or for good. Each change publishes a new policy version." />
+      <CardHead info={HELP.exceptions} title="Exceptions" sub="Allow something the company policy blocks — for specific machines, one agent or all, for a while or for good. Each change publishes a new policy version." />
       {err && <div className="callout bad" style={{ margin: '0 20px 14px' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
       <div style={{ padding: '0 20px' }}>
         {list?.length === 0 && <div className="muted" style={{ fontSize: 13, padding: '0 0 10px' }}>No exceptions: every machine gets the company policy.</div>}

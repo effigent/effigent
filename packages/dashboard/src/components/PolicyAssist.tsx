@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { useState } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
@@ -54,7 +55,7 @@ export function PolicyAssist({ current, onLoad }: { current: string; onLoad: (ya
 
   return (
     <Card>
-      <CardHead title={<><Ic n="spark" size={16} /> Ask AI to change the policy</>} sub="Describe what you want in plain words. The assistant proposes a policy, checked with effigentd’s own parser — you review it and publish." />
+      <CardHead info={HELP.askAi} title={<><Ic n="spark" size={16} /> Ask AI to change the policy</>} sub="Describe what you want in plain words. The assistant proposes a policy, checked with effigentd’s own parser — you review it and publish." />
       <div style={{ padding: '0 20px 16px' }}>
         <div style={{ position: 'relative' }}>
           <textarea className="textarea" rows={3} style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', paddingRight: 150, fontSize: 14 }}

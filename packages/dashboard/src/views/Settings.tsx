@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Ic } from '@/icons.tsx';
@@ -33,7 +34,7 @@ export function Settings({ dev }: { dev: boolean }) {
 
   return (
     <div className="page">
-      <PageHead title="Settings" sub="Notifications, integrations and workspace options. Each card saves on its own." />
+      <PageHead info={HELP.settings} title="Settings" sub="Notifications, integrations and workspace options. Each card saves on its own." />
       <PageGuide id="settings" steps={[<><b>Approvals</b>: connect Slack and email so approvers can decide from the message</>, <><b>Integrations</b>: API keys and webhooks for Windmill, Tines or scripts</>, <><b>Workspace</b>: your role, and the control plane you are connected to</>]} />
 
       <div className="grid-2">
@@ -163,7 +164,7 @@ function ApprovalNotifications() {
 
   return (
     <Card>
-      <CardHead title="Approvals" sub={slack
+      <CardHead info={HELP.notifications} title="Approvals" sub={slack
         ? 'When an agent pauses for approval, the request is posted to Slack and email. Approvers decide in Slack (with the Effigent app), from the email, or in the console — every decision records who made it.'
         : 'When an agent pauses for approval, each approver below gets an email with Approve / Deny buttons, or decides in the console. Every decision records who made it.'} />
       {n && slack && <SlackApp n={n} onChange={setN} />}

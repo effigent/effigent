@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
@@ -278,7 +279,7 @@ function LiveGraphView({ initialAgent, initialView, initialNode }: { initialAgen
 
   return (
     <div className="page">
-      <PageHead title="Agent Graph" sub={SUB}>
+      <PageHead info={HELP.graph} title="Agent Graph" sub={SUB}>
         <button className={`chip ${showRoutine ? 'on' : ''}`} aria-pressed={showRoutine} onClick={() => { setShowRoutine((v) => !v); setSelected(null); }}
           title="Routine activity (ls, grep, git commit, ToolSearch…) is hidden. Turn on to show it as one node per agent.">
           <Ic n={showRoutine ? 'eye' : 'layers'} size={14} /> Show routine{graph.routineEvents ? <span className="n">{graph.routineEvents.toLocaleString()}</span> : null}
@@ -351,7 +352,7 @@ function SampleGraph({ initialAgent, initialView }: { initialAgent?: string; ini
 
   return (
     <div className="page">
-      <PageHead title="Agent Graph" sub={SUB}>
+      <PageHead info={HELP.graph} title="Agent Graph" sub={SUB}>
         {env && <button className="chip on" onClick={() => dispatch({ t: 'env', env: null })} title="Show all environments"><span className="env-dot" style={{ background: envMeta(env).color }} /> {envMeta(env).label} only <Ic n="x" size={12} /></button>}
         <Seg value={view} onChange={(v) => { setView(v); sync(focus, v); }} options={[{ id: 'graph', label: 'Graph' }, { id: 'list', label: 'List' }]} />
       </PageHead>

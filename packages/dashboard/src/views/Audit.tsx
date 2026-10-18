@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { useMemo, useState } from 'react';
 import { RANGE_MS, useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
@@ -22,7 +23,7 @@ export function Audit({ initialQuery, initialOutcome, initialTab = 'events', ini
 
   return (
     <div className="page">
-      <PageHead title="Activity & Audit" sub="Every agent action effigentd reported, and every change made in this console — attributable and tamper-evident.">
+      <PageHead info={HELP.audit} title="Activity & Audit" sub="Every agent action effigentd reported, and every change made in this console — attributable and tamper-evident.">
         {tab === 'events' && <RangeSelect />}
       </PageHead>
       <PageGuide id="audit" steps={[<><b>Agent events</b>: everything agents ran, opened and reached, with what policy did</>, <><b>Admin trail</b>: every policy, approval and setting change — tamper-evident</>, <>Filter by time and result, then <b>Export CSV</b> for compliance</>]} />

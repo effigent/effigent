@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { agentMeta, MODES } from '@/data.ts';
@@ -116,7 +117,7 @@ export function Overview() {
 
   return (
     <div className="page">
-      <PageHead title="Overview" sub="Control, secure, and monitor your AI agents — across every endpoint, every action.">
+      <PageHead info={HELP.overview} title="Overview" sub="Control, secure, and monitor your AI agents — across every endpoint, every action.">
         <span className="updated"><span className="dot" /> {updatedAt ? `Last updated ${ago(updatedAt, now)}` : 'Connecting…'}</span>
         <RangeSelect />
       </PageHead>
@@ -160,7 +161,7 @@ export function Overview() {
               )}
             </Card>
             <Card>
-              <CardHead title="Recent Activity" href="/audit" />
+              <CardHead info={HELP.recentActivity} title="Recent Activity" href="/audit" />
               {!loaded ? <Loading /> : activity.length === 0 ? <Empty icon="activity" title="No activity yet" sub="Events appear here as enrolled endpoints report them." /> : (
                 <div className="tbl-wrap">
                   <table className="tbl">
@@ -184,7 +185,7 @@ export function Overview() {
 
         <aside className="ov-rail">
           <Card>
-            <CardHead title="Live Events" href="/audit" />
+            <CardHead info={HELP.liveEvents} title="Live Events" href="/audit" />
             {notable.length === 0 ? <div className="rail-empty"><Ic n="activity" size={18} /> {loaded ? (evs.length ? 'Only routine commands in this range.' : 'No events in this range.') : 'Loading…'}</div> : (
               <ul className="feed">
                 {notable.slice(0, 5).map((e) => {
@@ -205,7 +206,7 @@ export function Overview() {
           </Card>
 
           <Card>
-            <CardHead title="Waiting for approval" href="/approvals" />
+            <CardHead info={HELP.waiting} title="Waiting for approval" href="/approvals" />
             {demo ? (pending.length === 0 ? (
               <div className="rail-empty"><Ic n="checkCircle" size={18} /> All caught up — nothing waiting.</div>
             ) : (
@@ -245,7 +246,7 @@ export function Overview() {
           </Card>
 
           <Card>
-            <CardHead title="Endpoint Policy" href="/policies">{mode && <ModeTag mode={mode} />}</CardHead>
+            <CardHead info={HELP.endpointPolicy} title="Endpoint Policy" href="/policies">{mode && <ModeTag mode={mode} />}</CardHead>
             <ul className="feed">
               <li className="feed-row">
                 <span className="feed-ic ic-green"><Ic n="shield" size={16} /></span>

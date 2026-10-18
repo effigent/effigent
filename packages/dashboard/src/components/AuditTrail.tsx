@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
@@ -195,7 +196,7 @@ export function AuditTrail({ initialPeriod = 'all' }: { initialPeriod?: string }
 
   return (
     <Card>
-      <CardHead title="Console audit trail" sub="Append-only and hash-chained per workspace: each entry commits to the one before it, so edits or deletions break the chain.">
+      <CardHead info={HELP.consoleTrail} title="Console audit trail" sub="Append-only and hash-chained per workspace: each entry commits to the one before it, so edits or deletions break the chain.">
         <button className="btn sm" onClick={exportCsv} disabled={exporting || !page?.total}><Ic n="download" size={14} /> {exporting ? 'Exporting…' : 'Export CSV'}</button>
         <button className="btn sm" onClick={runVerify} disabled={verifying}><Ic n="shieldCheck" size={14} /> {verifying ? 'Verifying…' : 'Verify chain'}</button>
       </CardHead>

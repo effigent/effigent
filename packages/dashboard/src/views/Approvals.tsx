@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { ACTION_CLASS_LABEL, AGENT_TYPES, endpointById, envMeta, userById } from '@/data.ts';
@@ -9,7 +10,7 @@ import type { Action, AgentType, Approval, ApprovalState } from '@/types.ts';
 import { useLive } from '@/live.tsx';
 import { apiErrorText, type ApiApproval } from '@/lib/api.ts';
 import { ago } from '@/lib/live-map.ts';
-import { AgentGlyph, ApprovalPill, Card, CardHead, Empty, EnvTag, Loading, PageGuide, PageHead, ReadOnlyNote, RiskTag } from '@/components/ui.tsx';
+import { AgentGlyph, ApprovalPill, Card, CardHead, Empty, EnvTag, Loading, PageGuide, PageHead, ReadOnlyNote, RiskTag, InfoTip } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
 export function actionText(a: Action): string {
@@ -159,7 +160,7 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
         {a.cwd && <><dt>Working dir</dt><dd className="mono-sm">{a.cwd}</dd></>}
         <dt>Session</dt><dd className="mono-sm">{a.session_id || '—'}</dd>
         <dt>Rule</dt><dd>{RULE_LABEL[a.rule] ?? a.rule} · <Link href="/policies" className="view-all">policy</Link></dd>
-        <dt>Decided by</dt><dd>{a.group_name ? <><b>{a.group_name}</b> <span className="muted">· routed by <Link href="/team" className="view-all">Team &amp; Approvers</Link></span></> : <span className="muted">Workspace admins (no routing rule matched)</span>}</dd>
+        <dt>Decided by <InfoTip label="How requests are routed">{HELP.decidedBy}</InfoTip></dt><dd>{a.group_name ? <><b>{a.group_name}</b> <span className="muted">· routed by <Link href="/team" className="view-all">Team &amp; Approvers</Link></span></> : <span className="muted">Workspace admins (no routing rule matched)</span>}</dd>
         <dt>Status</dt><dd><ApprovalPill state={pillState(a)} />
           {a.state !== 'pending' && a.decided_at && <span className="muted"> by {a.decided_by_name || a.decided_by} · {ago(Date.parse(a.decided_at), now)}</span>}
           {a.state === 'used' && a.used_at && <span className="muted"> · ran {ago(Date.parse(a.used_at), now)}</span>}
@@ -185,6 +186,7 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
           <div className="decide-bar">
             <button className="btn-approve" disabled={!mayDecide || busy} onClick={() => decide('approve')}><Ic n="check" size={15} /> {override ? 'Approve as admin' : 'Approve once'}</button>
             <button className="btn-deny" disabled={!mayDecide || busy} onClick={() => decide('deny')}><Ic n="x" size={15} /> {override ? 'Deny as admin' : 'Deny'}</button>
+            <InfoTip align="right" label="What approving does">{HELP.approveOnce}</InfoTip>
           </div>
           {!mayDecide && <div className="muted" style={{ padding: '0 20px 8px', fontSize: 13 }}>{a.group_name ? <>Waiting for <b>{a.group_name}</b> — only its members (or a workspace admin) can decide.</> : <ReadOnlyNote what="approve or deny requests" />}</div>}
           <div className={`expires wrap ${left < 5 * 60_000 ? 'soon' : ''}`} style={{ padding: '0 20px 18px' }}><Ic n="clock" size={13} /> Expires in {untilText(left)}. Until then the agent is told the action is waiting; a retry after approval runs it.</div>
@@ -216,7 +218,7 @@ function LiveApprovalQueue({ initialId }: { initialId?: string }) {
 
   return (
     <div className="page">
-      <PageHead title="Approvals" sub={SUB}>
+      <PageHead info={HELP.approvals} title="Approvals" sub={SUB}>
         <Link className="btn sm" href="/settings#approvals"><Ic n="bell" /> Slack & email</Link>
       </PageHead>
       <PageGuide id="approvals" steps={[<>Add approval rules in <Link href="/policies" className="view-all">Policies</Link> (e.g. <code>git push*</code>)</>, <>When an agent hits one it pauses, and approvers get Slack or email</>, <>Approve once or deny — here, or from the message</>]} />
@@ -275,7 +277,7 @@ function ApprovalQueue({ initialId }: { initialId?: string }) {
 
   return (
     <div className="page">
-      <PageHead title="Approvals" sub={SUB}>
+      <PageHead info={HELP.approvals} title="Approvals" sub={SUB}>
         {env && <span className="muted">Showing {envMeta(env).label} only</span>}
       </PageHead>
 

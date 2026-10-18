@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode, useId, useRef } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useDemoMode } from '@/demo.tsx';
 import { THEME_OPTIONS, useTheme, type ThemePref } from '@/theme.tsx';
@@ -115,11 +115,31 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
   return <section className={`card ${className}`}>{children}</section>;
 }
 
-export function CardHead({ title, sub, href, children }: { title: ReactNode; sub?: ReactNode; href?: string; children?: ReactNode }) {
+/** A small ⓘ that explains a feature: shown on hover, keyboard focus or tap. */
+export function InfoTip({ children, label = 'What is this?', align = 'center' }: { children: ReactNode; label?: string; align?: 'center' | 'left' | 'right' }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const btn = useRef<HTMLButtonElement>(null);
+  // Escape closes it, also when it is showing because the button has focus
+  useEffect(() => {
+    const close = (e: KeyboardEvent) => { if (e.key === 'Escape' && (open || document.activeElement === btn.current)) { setOpen(false); btn.current?.blur(); } };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [open]);
+  return (
+    <span className={`info-tip ${open ? 'open' : ''} align-${align}`} onMouseLeave={() => setOpen(false)}>
+      <button ref={btn} type="button" className="info-tip-btn" aria-label={label} aria-describedby={id} aria-expanded={open}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); }} onBlur={() => setOpen(false)}>i</button>
+      <span role="tooltip" id={id} className="info-tip-pop">{children}</span>
+    </span>
+  );
+}
+
+export function CardHead({ title, sub, href, info, children }: { title: ReactNode; sub?: ReactNode; href?: string; info?: ReactNode; children?: ReactNode }) {
   return (
     <div className="card-head">
       <div className="card-head-text">
-        <h2 className="card-title">{title}</h2>
+        <h2 className="card-title">{title}{info && <InfoTip label={`About ${typeof title === 'string' ? title : 'this'}`} align="left">{info}</InfoTip>}</h2>
         {sub && <div className="card-sub">{sub}</div>}
       </div>
       <div className="card-head-actions">
@@ -147,11 +167,11 @@ export function PageGuide({ id, steps, action }: { id: string; steps: ReactNode[
   );
 }
 
-export function PageHead({ title, sub, children }: { title: string; sub: string; children?: ReactNode }) {
+export function PageHead({ title, sub, info, children }: { title: string; sub: string; info?: ReactNode; children?: ReactNode }) {
   return (
     <header className="page-head">
       <div>
-        <h1>{title}</h1>
+        <h1>{title}{info && <InfoTip label={`About ${title}`} align="left">{info}</InfoTip>}</h1>
         <p className="page-sub">{sub}</p>
       </div>
       {children && <div className="page-head-actions">{children}</div>}

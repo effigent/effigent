@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { useCallback, useEffect, useState } from 'react';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
@@ -99,7 +100,7 @@ export function Integrations() {
 
   return (
     <Card>
-      <CardHead title="Integrations" sub="Let Windmill, Tines, Torq or your own scripts act on Effigent (API keys) and react to it (webhooks)." />
+      <CardHead info={HELP.integrations} title="Integrations" sub="Let Windmill, Tines, Torq or your own scripts act on Effigent (API keys) and react to it (webhooks)." />
       {made && (
         <div style={{ padding: '0 20px 14px' }}>
           <div className="callout warn" style={{ margin: '0 0 8px' }}><Ic n="key" size={16} />

@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { agentMeta } from '@/data.ts';
@@ -107,14 +108,14 @@ export function Team({ dev }: { dev: boolean }) {
   return (
     <div className="page">
       {!dev && !fixture && <ClerkMembers onMembers={onMembers} onInvite={onInvite} />}
-      <PageHead title="Team & Approvers" sub="Who is in the workspace, and who decides which approval requests — e.g. AWS to DevOps, outside hosts to the CISO." >
+      <PageHead info={HELP.team} title="Team & Approvers" sub="Who is in the workspace, and who decides which approval requests — e.g. AWS to DevOps, outside hosts to the CISO." >
         {ro && <ReadOnlyNote what="change approvers" />}
       </PageHead>
       <PageGuide id="team" steps={[<>Invite people to the workspace</>, <>Put them in <b>approver groups</b> (Security, DevOps…)</>, <>Add <b>rules</b>: which requests go to which group. Only that group is emailed and can decide; admins can step in</>]} />
       {err && <div className="callout bad"><Ic n="alert" size={16} /><span>{err}</span></div>}
 
       <Card>
-        <CardHead title="Members" sub={isOrg ? 'People in this workspace. Admins and security admins change policy and can step in on any approval; everyone else is read-only unless an approver group includes them.' : 'This is a personal workspace: you are its only member. Create an organization (top right) to add your team.'}>
+        <CardHead info={HELP.members} title="Members" sub={isOrg ? 'People in this workspace. Admins and security admins change policy and can step in on any approval; everyone else is read-only unless an approver group includes them.' : 'This is a personal workspace: you are its only member. Create an organization (top right) to add your team.'}>
           {invite && <button className="btn sm" onClick={() => invite()}><Ic n="plus" size={14} /> Invite & manage members</button>}
         </CardHead>
         {!members ? <Loading label="Loading members…" /> : (
@@ -139,7 +140,7 @@ export function Team({ dev }: { dev: boolean }) {
       {!draft ? (!err && <Loading />) : (
         <>
           <Card>
-            <CardHead title="Approver groups" sub="Each group is a set of workspace members. Its members get the email for requests routed to it, and can approve or deny them in the console or from the email.">
+            <CardHead info={HELP.groups} title="Approver groups" sub="Each group is a set of workspace members. Its members get the email for requests routed to it, and can approve or deny them in the console or from the email.">
               {!ro && <button className="btn sm" onClick={() => edit((d) => { d.groups.push({ id: tmpId('grp_'), name: `Group ${d.groups.length + 1}`, members: [] }); return d; })}><Ic n="plus" size={14} /> Add group</button>}
             </CardHead>
             {draft.groups.length === 0 && (
@@ -187,7 +188,7 @@ export function Team({ dev }: { dev: boolean }) {
           </Card>
 
           <Card>
-            <CardHead title="Routing rules" sub="Checked top to bottom when an agent asks; the first rule that matches decides which group gets the request. Text matches the action as it was reported (secrets redacted), case-insensitive; * is a wildcard; leave a box empty to match anything.">
+            <CardHead info={HELP.rules} title="Routing rules" sub="Checked top to bottom when an agent asks; the first rule that matches decides which group gets the request. Text matches the action as it was reported (secrets redacted), case-insensitive; * is a wildcard; leave a box empty to match anything.">
               {!ro && draft.groups.length > 0 && <button className="btn sm" onClick={() => edit((d) => { d.routes.push({ id: tmpId('rte_'), name: '', kinds: [], patterns: [], machines: [], agents: [], group_id: d.groups[0].id }); return d; })}><Ic n="plus" size={14} /> Add rule</button>}
             </CardHead>
             <div style={{ padding: '0 20px 6px', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -247,7 +248,7 @@ export function Team({ dev }: { dev: boolean }) {
           </Card>
 
           <Card>
-            <CardHead title="Try it" sub="Type an action an agent might ask for and see who would decide it — with the rules above, saved or not." />
+            <CardHead info={HELP.tryIt} title="Try it" sub="Type an action an agent might ask for and see who would decide it — with the rules above, saved or not." />
             <div className="toolbar" style={{ padding: '0 20px 16px' }}>
               <select className="select" style={{ flex: '0 1 190px' }} value={tryKind} onChange={(e) => setTryKind(e.target.value)} aria-label="Kind">
                 {KINDS.filter((k) => k.id).map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}

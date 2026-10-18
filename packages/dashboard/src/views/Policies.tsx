@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import Link from 'next/link';
 import { Exceptions } from '@/components/Exceptions.tsx';
 import { PolicyAssist } from '@/components/PolicyAssist.tsx';
@@ -95,7 +96,7 @@ export function Policies() {
 
   return (
     <div className="page">
-      <PageHead title="Policies" sub="What agents may run, open and reach — one signed policy per workspace, enforced on every endpoint by effigentd." >
+      <PageHead info={HELP.policies} title="Policies" sub="What agents may run, open and reach — one signed policy per workspace, enforced on every endpoint by effigentd." >
         {me && !canWrite && <ReadOnlyNote what="publish policy" />}
       </PageHead>
       <PageGuide id="policies" steps={[<>Describe a change to <b>Ask AI</b>, or edit the policy text below</>, <>Add <b>exceptions</b> for machines that need something the company blocks</>, <><b>Publish</b> — every machine applies it within seconds</>]} />
@@ -115,6 +116,7 @@ export function Policies() {
 
       <Card>
         <CardHead
+          info={HELP.editor}
           title={<>Endpoint policy {dirty && <span className="badge b-gold" style={{ marginLeft: 8 }}>Unpublished changes</span>}</>}
           sub={latestPolicy > 0
             ? `v${latestPolicy} · “${policy?.comment || 'no comment'}” · ${dateTime(ms(policy?.created_at))}`
@@ -200,7 +202,7 @@ export function Policies() {
 
       <div className="grid-2">
         <Card>
-          <CardHead title="Version history" sub="Every publish is kept; endpoints never go back to an older version." />
+          <CardHead info={HELP.versions} title="Version history" sub="Every publish is kept; endpoints never go back to an older version." />
           {history.length === 0 ? <Empty icon="clock" title="No versions yet" sub="The first publish becomes v1." /> : (
             <div className="tbl-wrap">
               <table className="tbl">

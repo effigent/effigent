@@ -1,5 +1,6 @@
 'use client';
 
+import { HELP } from '@/lib/help.tsx';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AGENT_TYPES } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
@@ -96,7 +97,7 @@ function Enroll() {
 
   return (
     <Card>
-      <CardHead title="Enroll an endpoint" sub="Create an enrollment token, then run one command on the machine. It installs effigentd, enrolls the machine into this workspace and starts enforcing your published policy.">
+      <CardHead info={HELP.enroll} title="Enroll an endpoint" sub="Create an enrollment token, then run one command on the machine. It installs effigentd, enrolls the machine into this workspace and starts enforcing your published policy.">
         {me && !canWrite && <ReadOnlyNote what="enroll endpoints" />}
       </CardHead>
       <div style={{ padding: '0 20px 20px' }}>
@@ -239,7 +240,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
 
   return (
     <div className="page">
-      <PageHead title="Machines" sub="Every laptop and server running Effigent: what it can stop, and whether it has your latest policy." />
+      <PageHead info={HELP.machines} title="Machines" sub="Every laptop and server running Effigent: what it can stop, and whether it has your latest policy." />
       <PageGuide id="machines" steps={[<>Create an enrollment token below (one per machine, or multi-use for a fleet)</>, <>Run the one-line install on the machine, or deploy it with your MDM</>, <>It shows up here and starts following your published policy</>]} action={<a className="btn primary sm" href="#enroll"><Ic n="plus" /> Add a machine</a>} />
 
       <div className="grid-4">
@@ -250,7 +251,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
       </div>
 
       <Card>
-        <CardHead title="Coverage" sub="Share of enrolled endpoints by the strongest layer that can stop an agent action." />
+        <CardHead info={HELP.coverage} title="Coverage" sub="Share of enrolled endpoints by the strongest layer that can stop an agent action." />
         <div className="coverage">
           <i style={{ width: `${(kernel.filter((e) => e.status === 'online').length / n) * 100}%`, background: 'var(--green)' }} />
           <i style={{ width: `${(observe.filter((e) => e.status === 'online').length / n) * 100}%`, background: 'var(--blue)' }} />
@@ -264,7 +265,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
       </Card>
 
       <Card>
-        <CardHead title="Endpoints" sub="Online = heartbeat in the last minute (effigentd syncs every 5s). Click a row for the agents it reported." />
+        <CardHead info={HELP.endpoints} title="Endpoints" sub="Online = heartbeat in the last minute (effigentd syncs every 5s). Click a row for the agents it reported." />
         {!loaded ? <Loading /> : endpointRows.length === 0 ? (
           <Empty icon="laptop" title="No endpoints enrolled yet" sub="Create an enrollment token below and run the command on a machine." />
         ) : (
