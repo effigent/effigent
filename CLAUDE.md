@@ -31,6 +31,8 @@ Keep this file current when architecture, data model or deployment change.
    The control plane signs the document (ed25519); the endpoint verifies signature and
    tenant against the key pinned at enrollment, refuses versions ≤ current, applies it
    live (`engine.SetPolicy`, make-before-break per agent), caches it in `policy.json`.
+   With no usable cached policy (fresh enrollment) the daemon fetches the first one before its
+   API answers and agents are tracked (≤15s; unreachable → built-in default until a sync succeeds).
 3. Offline restart → the cached signed policy is applied; a tampered cache is rejected and
    the built-in default applies. Local `PUT /policy` is refused while enrolled.
 4. Events are POSTed in batches to `/ep/v1/events` and stored in `cp.events`.

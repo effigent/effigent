@@ -195,6 +195,23 @@ func daemon() {
 		}
 	}
 
+	if client != nil {
+		if err := client.LoadCached(ctx); err != nil {
+			logger.Printf("cached policy: %v", err)
+		}
+		// Freshly enrolled (or the cache was rejected): fetch the control
+		// plane's policy before the API reports ready and agents are tracked,
+		// so nothing starts under the built-in default. Offline: carry on with
+		// the default; the loop below keeps trying.
+		if client.Version() == 0 {
+			sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if err := client.SyncOnce(sctx); err != nil {
+				logger.Printf("first control plane sync: %v (enforcing the built-in policy until it succeeds)", err)
+			}
+			cancel()
+		}
+	}
+
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
@@ -227,9 +244,6 @@ func daemon() {
 	}
 
 	if client != nil {
-		if err := client.LoadCached(ctx); err != nil {
-			logger.Printf("cached policy: %v", err)
-		}
 		go client.Run(ctx, *syncEvery)
 	}
 
