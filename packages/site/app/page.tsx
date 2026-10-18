@@ -569,7 +569,14 @@ export default function Page() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 14 }}>
             <Link href="/docs/quickstart" className="btn btn-primary" style={{ padding: '13px 26px', fontSize: 14.5, display: 'inline-block' }}>Enroll a machine</Link>
-            <Link href="/security" className="btn btn-ghost" style={{ padding: '13px 22px', fontSize: 14.5, display: 'inline-block' }}>Security &amp; data</Link>
+            <Link href="/security" className="btn btn-ghost" style={{ padding: '13px 22px', fontSize: 14.5, display: 'inline-block' }}>Security &amp; trust</Link>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '8px 18px', marginTop: 26, fontSize: 13, color: 'var(--ink-3)' }}>
+            {['SOC 2 in progress', 'Data hosted in the US', 'Encrypted in transit and at rest', 'Tamper-evident audit trail', 'No source code or prompts collected'].map((t) => (
+              <Link key={t} href="/security" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'oklch(0.6 0.15 150)' }} />{t}
+              </Link>
+            ))}
           </div>
         </Reveal>
       </div>

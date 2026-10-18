@@ -1,0 +1,5 @@
+Contact: mailto:security@effigent.ai
+Expires: 2027-10-18T00:00:00.000Z
+Preferred-Languages: en, he
+Canonical: https://effigent.ai/.well-known/security.txt
+Policy: https://effigent.ai/security

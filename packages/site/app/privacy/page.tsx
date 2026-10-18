@@ -46,11 +46,11 @@ const SECTIONS: Array<[string, string | string[]]> = [
   ],
   [
     'Subprocessors',
-    'We run on a small set of infrastructure providers who process data on our behalf: Vercel (application hosting), Neon (database), Clerk (authentication), and Amazon Web Services (storage and website delivery). Each processes data only as needed to provide their service.',
+    'We run on a small set of infrastructure providers who process data on our behalf, all in the United States: Amazon Web Services (control plane hosting, event archive, approval email and website delivery), Neon (database), Vercel (console hosting), Clerk (authentication), and Anthropic (the optional policy assistant, only when an admin uses it: the policy text and the request; not used for training). Each processes data only as needed to provide their service. The current list is on our Security page.',
   ],
   [
     'Retention & deletion',
-    'Events and audit records are kept for the retention period of your plan. You may request deletion of an endpoint’s data or your entire workspace at any time, and we will remove it from live systems promptly.',
+    'Agent events are kept in the database for 90 days, then moved to an encrypted archive where they are locked for one year and then deleted. Console audit records, policies and approvals are kept for the life of the workspace. You may request deletion of an endpoint’s data or your entire workspace at any time, and we will remove it from live systems promptly; archived copies are deleted when their one-year lock ends.',
   ],
   [
     'Cookies',

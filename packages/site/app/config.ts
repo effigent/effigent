@@ -10,4 +10,6 @@
 export const COLLECTOR_URL = process.env.NEXT_PUBLIC_COLLECTOR_URL || 'https://api.effigent.ai';
 export const API_URL = COLLECTOR_URL;
 export const DASHBOARD_URL = process.env.NEXT_PUBLIC_DASHBOARD_URL || 'https://app.effigent.ai';
-export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || 'sales@your-domain';
+export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || 'sales@effigent.ai';
+// Security questions, documents under NDA and vulnerability reports.
+export const SECURITY_EMAIL = process.env.NEXT_PUBLIC_SECURITY_EMAIL || 'security@effigent.ai';
