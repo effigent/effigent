@@ -30,17 +30,41 @@ function cmpVersion(a: string, b: string): number {
   return 0;
 }
 
-type Os = 'macos' | 'linux' | 'windows';
+type Os = 'macos' | 'linux' | 'windows' | 'kubernetes' | 'docker';
 
 const DEFAULT_SERVER = 'https://api.effigent.ai';
 
-/** The one-line install + enroll command for an OS. `server` is added only when it isn't the default. */
+/** The install + enroll command for an OS. `server` is added only when it isn't the default. */
 function installCommand(os: Os, token: string, server: string): string {
+  const custom = server !== DEFAULT_SERVER;
   if (os === 'windows') {
-    const extra = server !== DEFAULT_SERVER ? ` -Server ${server}` : '';
+    const extra = custom ? ` -Server ${server}` : '';
     return `iwr https://effigent.ai/install.ps1 -OutFile $env:TEMP\\effigent-install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\\effigent-install.ps1 -Token ${token}${extra}`;
   }
-  const extra = server !== DEFAULT_SERVER ? ` --server ${server}` : '';
+  if (os === 'kubernetes') {
+    return [
+      'helm repo add cilium https://helm.cilium.io && helm repo add effigent https://effigent.ai/charts && helm repo update',
+      'helm upgrade --install tetragon cilium/tetragon -n kube-system \\',
+      '  --set tetragon.grpc.address=localhost:54321 \\',
+      "  --set 'tetragon.processAncestors.enabled=base\\,kprobe\\,lsm'",
+      'kubectl create namespace effigent',
+      `kubectl -n effigent create secret generic effigent-enrollment --from-literal=token=${token}`,
+      `helm install effigent effigent/effigent -n effigent${custom ? ` --set server=${server}` : ''}`,
+    ].join('\n');
+  }
+  if (os === 'docker') {
+    return [
+      'docker run -d --name tetragon --restart unless-stopped --privileged --pid host --cgroupns host --network host \\',
+      '  -v /sys/kernel/btf/vmlinux:/var/lib/tetragon/btf:ro \\',
+      '  quay.io/cilium/tetragon:v1.7.1 --server-address=127.0.0.1:54321 --enable-ancestors=base,kprobe,lsm \\',
+      '  --event-cache-retries=2 --event-cache-retry-delay=1',
+      'docker run -d --name effigentd --restart unless-stopped --privileged --pid host --network host \\',
+      `  -e EFFIGENT_ENROLL_TOKEN=${token}${custom ? ` -e EFFIGENT_SERVER=${server}` : ''} \\`,
+      '  -v /var/lib/effigent:/var/lib/effigent -v /proc:/host/proc:ro -v /sys/kernel/security:/sys/kernel/security:ro \\',
+      '  ghcr.io/effigent/effigentd:latest',
+    ].join('\n');
+  }
+  const extra = custom ? ` --server ${server}` : '';
   return `curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token ${token}${extra}`;
 }
 
@@ -51,7 +75,7 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
     fleet: 'Fleet (Jamf, Kandji, Intune): deploy the Effigent .pkg with a configuration profile for the ai.effigent domain that sets EnrollmentToken to a multi-use token.',
   },
   linux: {
-    run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023).',
+    run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). For hosts without systemd, use the Docker tab.',
     does: 'Installs Tetragon and effigentd as services and enrolls the machine. Agents are blocked in the kernel (BPF LSM): programs, files and network.',
     fleet: 'Fleet: run the same command from Ansible, cloud-init or your image build with a multi-use token.',
   },
@@ -59,6 +83,16 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
     run: 'Run in PowerShell as Administrator. Windows support is in preview.',
     does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code, Codex and Gemini CLI hooks. Their tool calls are checked against policy before they run.',
     fleet: 'Fleet (Intune Win32 app): powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token <multi-use token>.',
+  },
+  kubernetes: {
+    run: 'Run with kubectl and helm pointed at the cluster. Set Machines to at least the number of nodes: each node enrolls once. Nodes need a kernel with BTF and BPF LSM, and privileged pods allowed. Already running Tetragon? Set the same two values on it instead of reinstalling.',
+    does: 'Installs Tetragon from its official chart and effigentd as a DaemonSet on every node. Each node shows up here under its node name, and agents in any pod on it are blocked in the kernel: programs, files and network. A restarted pod stays the same machine.',
+    fleet: 'GitOps (Argo CD, Flux): chart effigent/effigent from https://effigent.ai/charts; keep the token in your secret store as the effigent-enrollment Secret (key: token).',
+  },
+  docker: {
+    run: 'Run on the Docker host: Linux with a BTF + BPF LSM kernel, no systemd needed. A Compose file with the same settings is in the Kubernetes & containers docs.',
+    does: 'Starts Tetragon and effigentd as two privileged containers on the host’s network and process view and enrolls the host. Agents in any container on it, or on the host itself, are blocked in the kernel. The credentials stay in /var/lib/effigent, so a restart keeps the same machine.',
+    fleet: 'Fleet: run the same two containers from your provisioning tool with a multi-use token; each host enrolls once.',
   },
 };
 
@@ -134,7 +168,7 @@ function Enroll() {
 
         <div className="section-label" style={{ margin: '18px 0 6px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span>2 · Run it on the machine</span>
-          <Seg value={os} onChange={setOs} options={[{ id: 'macos', label: 'macOS' }, { id: 'linux', label: 'Linux' }, { id: 'windows', label: 'Windows' }]} />
+          <Seg value={os} onChange={setOs} options={[{ id: 'macos', label: 'macOS' }, { id: 'linux', label: 'Linux' }, { id: 'windows', label: 'Windows' }, { id: 'kubernetes', label: 'Kubernetes (Helm)' }, { id: 'docker', label: 'Docker' }]} />
         </div>
         <div className="muted" style={{ fontSize: 13, margin: '0 0 6px' }}>{note.run}</div>
         {made ? (
