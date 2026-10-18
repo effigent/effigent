@@ -7,6 +7,8 @@
 # Postgres (docker compose up -d postgres). Only one Tetragon per kernel: stop the
 # dev `tetragon` container and deploy/docker first. KEEP=1 leaves the cluster up
 # (delete it with `kind delete cluster --name effigent-test` before the next run).
+# PUBLISHED=1 installs what a customer gets — the chart from https://effigent.ai/charts
+# and the image from ghcr.io — instead of local builds (a release check).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 . test/containers/lib.sh
@@ -20,14 +22,21 @@ publish_test_policy
 TOK=$(enroll_token 2)
 
 kind create cluster --config test/containers/kind.yaml
-kind load docker-image effigentd:dev effigent-agent:test --name "$CLUSTER" >/dev/null
+if [ -n "${PUBLISHED:-}" ]; then
+  kind load docker-image effigent-agent:test --name "$CLUSTER" >/dev/null
+  helm repo add effigent https://effigent.ai/charts --force-update >/dev/null && helm repo update effigent >/dev/null
+  CHART=(effigent/effigent); IMAGE=()
+else
+  kind load docker-image effigentd:dev effigent-agent:test --name "$CLUSTER" >/dev/null
+  CHART=(deploy/helm/effigent); IMAGE=(--set image.repository=effigentd --set image.tag=dev --set image.pullPolicy=Never)
+fi
 helm repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
 helm --kube-context "kind-$CLUSTER" upgrade --install tetragon cilium/tetragon --version 1.7.1 -n kube-system \
   --set tetragon.grpc.address=localhost:54321 --set 'tetragon.processAncestors.enabled=base\,kprobe\,lsm' --wait >/dev/null
 "${K[@]}" create namespace effigent --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 "${K[@]}" -n effigent create secret generic effigent-enrollment --from-literal=token="$TOK" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-helm --kube-context "kind-$CLUSTER" upgrade --install effigent deploy/helm/effigent -n effigent \
-  --set server="http://host.docker.internal:$CP_PORT" --set image.repository=effigentd --set image.tag=dev --set image.pullPolicy=Never >/dev/null
+helm --kube-context "kind-$CLUSTER" upgrade --install effigent "${CHART[@]}" -n effigent \
+  --set server="http://host.docker.internal:$CP_PORT" ${IMAGE[@]+"${IMAGE[@]}"} >/dev/null
 "${K[@]}" -n effigent rollout status ds/effigent --timeout 120s >/dev/null
 
 echo "== one machine per node"
