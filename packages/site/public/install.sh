@@ -1,7 +1,8 @@
 #!/bin/sh
 # Effigent endpoint installer (Linux and macOS). Installs effigentd as a
 # service, enrolls this machine with your organization, and starts enforcing.
-# Linux: also installs Tetragon (kernel enforcement). macOS: installs the
+# Linux: also installs Tetragon (kernel enforcement); without systemd (containers,
+# sandboxes) both run as background processes until the next reboot. macOS: installs the
 # release .pkg (checksum-verified), which adds the Claude Code, Codex and Gemini CLI
 # hooks to their machine-wide settings.
 #
@@ -81,21 +82,35 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 
 [ "$(uname -s)" = Linux ] || die "this installer is for Linux and macOS; on Windows use https://effigent.ai/install.ps1"
-# Uninstall works with or without systemd (containers and sandboxes often have none).
+# Containers and sandboxes (e.g. Grok Bot's computer) often have no systemd, or
+# systemctl without systemd running. There both daemons run as background processes.
+SYSTEMD=0
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then SYSTEMD=1; fi
+
 if [ "$UNINSTALL" = 1 ]; then
   say "Removing effigentd"
-  if command -v systemctl >/dev/null 2>&1; then
+  if [ "$SYSTEMD" = 1 ]; then
     systemctl disable --now effigentd 2>/dev/null || true
     rm -f /etc/systemd/system/effigentd.service
     systemctl daemon-reload 2>/dev/null || true
   fi
   pkill -x effigentd 2>/dev/null || true # a daemon started by hand
   rm -f /usr/local/bin/effigentd
+  if [ "$SYSTEMD" = 0 ] && pkill -x tetragon 2>/dev/null; then # started by this installer
+    sleep 1; umount /run/tetragon/cgroup2 2>/dev/null || true
+    echo "Tetragon stopped (its files stay in /usr/local)."
+  fi
   echo "effigentd removed. Enrollment state kept in /var/lib/effigent (delete it to unenroll this machine)."
   exit 0
 fi
 
-command -v systemctl >/dev/null 2>&1 || die "systemd is required to install (effigentd and Tetragon run as services)"
+[ "$SYSTEMD" = 1 ] || warn "systemd is not running: Tetragon and effigentd will run as background processes and stop at the next reboot (rerun this installer then)."
+
+# Without systemd: start a daemon in its own session so it outlives this shell.
+start_bg() { # start_bg LOGFILE CMD...
+  log="$1"; shift
+  setsid nohup "$@" >>"$log" 2>&1 </dev/null &
+}
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
@@ -116,41 +131,10 @@ if [ "$LSM_OK" = 0 ]; then
   warn "Enable it: add 'lsm=$(cat /sys/kernel/security/lsm 2>/dev/null),bpf' to GRUB_CMDLINE_LINUX in /etc/default/grub, run update-grub (or grub2-mkconfig), reboot."
 fi
 
-# ---- Tetragon ------------------------------------------------------------
-
-# Outside Kubernetes nothing ever fills in pod details, but in a container- or
-# pod-style cgroup Tetragon holds each event waiting for them: 15 retries x 2s
-# by default, so events (and the `effigentd run` start confirmation) arrive
-# ~30s late. Keep the wait to ~2s there.
-tetragon_event_cache() {
-  [ -n "${KUBERNETES_SERVICE_HOST:-}" ] && return 0
-  echo 2 > /etc/tetragon/tetragon.conf.d/event-cache-retries
-  echo 1 > /etc/tetragon/tetragon.conf.d/event-cache-retry-delay
-}
-
-if [ "$SKIP_TETRAGON" = 0 ] && ! systemctl is-active --quiet tetragon; then
-  say "Installing Tetragon $TETRAGON_VERSION"
-  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-  TGZ="tetragon-$TETRAGON_VERSION-$ARCH.tar.gz"
-  curl -fsSL -o "$TMP/$TGZ" "https://github.com/cilium/tetragon/releases/download/$TETRAGON_VERSION/$TGZ"
-  curl -fsSL -o "$TMP/$TGZ.sha256sum" "https://github.com/cilium/tetragon/releases/download/$TETRAGON_VERSION/$TGZ.sha256sum"
-  (cd "$TMP" && sha256sum -c "$TGZ.sha256sum" >/dev/null) || die "Tetragon download failed its checksum"
-  tar -xzf "$TMP/$TGZ" -C "$TMP"
-  install -d /etc/tetragon/tetragon.conf.d
-  # effigentd attributes every event to its agent through the ancestor chain.
-  echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
-  tetragon_event_cache
-  "$TMP/tetragon-$TETRAGON_VERSION-$ARCH/install.sh" >/dev/null
-else
-  say "Tetragon is already running"
-  if [ ! -s /etc/tetragon/tetragon.conf.d/enable-ancestors ] || { [ -z "${KUBERNETES_SERVICE_HOST:-}" ] && [ ! -s /etc/tetragon/tetragon.conf.d/event-cache-retries ]; }; then
-    echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
-    tetragon_event_cache
-    systemctl restart tetragon
-  fi
-fi
-
 # ---- effigentd ------------------------------------------------------------
+# Enroll before Tetragon starts: it logs command lines and their ancestors, and this
+# installer's own (with --token) is an ancestor of everything below. A one-time token
+# is spent by then.
 say "Installing effigentd ($VERSION)"
 if [ "$VERSION" = latest ]; then VERSION="$(curl -fsSL "$RELEASES/latest")"; fi
 BIN="effigentd-linux-$ARCH"
@@ -158,6 +142,7 @@ TMPB="$(mktemp -d)"
 curl -fsSL -o "$TMPB/$BIN" "$RELEASES/$VERSION/$BIN"
 curl -fsSL -o "$TMPB/$BIN.sha256" "$RELEASES/$VERSION/$BIN.sha256"
 (cd "$TMPB" && sha256sum -c "$BIN.sha256" >/dev/null) || die "effigentd download failed its checksum"
+[ "$SYSTEMD" = 1 ] || pkill -x effigentd 2>/dev/null || true # replace a daemon started by hand
 install -m 0755 "$TMPB/$BIN" /usr/local/bin/effigentd
 rm -rf "$TMPB"
 
@@ -171,7 +156,61 @@ else
   /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --state-dir /var/lib/effigent
 fi
 
-cat > /etc/systemd/system/effigentd.service <<'UNIT'
+# ---- Tetragon ------------------------------------------------------------
+
+# Outside Kubernetes nothing ever fills in pod details, but in a container- or
+# pod-style cgroup Tetragon holds each event waiting for them: 15 retries x 2s
+# by default, so events (and the `effigentd run` start confirmation) arrive
+# ~30s late. Keep the wait to ~2s there.
+tetragon_event_cache() {
+  [ -n "${KUBERNETES_SERVICE_HOST:-}" ] && return 0
+  echo 2 > /etc/tetragon/tetragon.conf.d/event-cache-retries
+  echo 1 > /etc/tetragon/tetragon.conf.d/event-cache-retry-delay
+}
+
+tetragon_running() {
+  if [ "$SYSTEMD" = 1 ]; then systemctl is-active --quiet tetragon; else pgrep -x tetragon >/dev/null 2>&1; fi
+}
+
+if [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
+  say "Installing Tetragon $TETRAGON_VERSION"
+  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+  TGZ="tetragon-$TETRAGON_VERSION-$ARCH.tar.gz"
+  curl -fsSL -o "$TMP/$TGZ" "https://github.com/cilium/tetragon/releases/download/$TETRAGON_VERSION/$TGZ"
+  curl -fsSL -o "$TMP/$TGZ.sha256sum" "https://github.com/cilium/tetragon/releases/download/$TETRAGON_VERSION/$TGZ.sha256sum"
+  (cd "$TMP" && sha256sum -c "$TGZ.sha256sum" >/dev/null) || die "Tetragon download failed its checksum"
+  tar -xzf "$TMP/$TGZ" -C "$TMP"
+  install -d /etc/tetragon/tetragon.conf.d
+  # effigentd attributes every event to its agent through the ancestor chain.
+  echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
+  tetragon_event_cache
+  if [ "$SYSTEMD" = 1 ]; then
+    "$TMP/tetragon-$TETRAGON_VERSION-$ARCH/install.sh" >/dev/null
+  else
+    # What Tetragon's install.sh does, minus the systemd unit.
+    cp -Rf "$TMP/tetragon-$TETRAGON_VERSION-$ARCH/usr/local/"* /usr/local/
+    install -d /etc/tetragon/tetragon.tp.d /var/log/tetragon /var/run/tetragon
+    cp -n -r /usr/local/lib/tetragon/tetragon.conf.d /etc/tetragon/ 2>/dev/null || true
+    start_bg /var/log/tetragon/tetragon.out env PATH="/usr/local/lib/tetragon:$PATH" /usr/local/bin/tetragon
+  fi
+else
+  say "Tetragon is already running"
+  if [ ! -s /etc/tetragon/tetragon.conf.d/enable-ancestors ] || { [ -z "${KUBERNETES_SERVICE_HOST:-}" ] && [ ! -s /etc/tetragon/tetragon.conf.d/event-cache-retries ]; }; then
+    echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
+    tetragon_event_cache
+    if [ "$SYSTEMD" = 1 ]; then
+      systemctl restart tetragon
+    else
+      pkill -x tetragon || true; sleep 2
+      start_bg /var/log/tetragon/tetragon.out env PATH="/usr/local/lib/tetragon:$PATH" /usr/local/bin/tetragon
+    fi
+  fi
+fi
+
+# ---- start effigentd ------------------------------------------------------
+EFFIGENTD_ARGS="--tetragon unix:///var/run/tetragon/tetragon.sock --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl --keep-policies-on-exit"
+if [ "$SYSTEMD" = 1 ]; then
+cat > /etc/systemd/system/effigentd.service <<UNIT
 [Unit]
 Description=Effigent endpoint agent (AI agent monitoring and enforcement)
 Documentation=https://effigent.ai/docs/quickstart
@@ -180,7 +219,7 @@ Wants=network-online.target
 Requires=tetragon.service
 
 [Service]
-ExecStart=/usr/local/bin/effigentd --tetragon unix:///var/run/tetragon/tetragon.sock --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl --keep-policies-on-exit
+ExecStart=/usr/local/bin/effigentd $EFFIGENTD_ARGS
 Restart=always
 RestartSec=3
 
@@ -190,11 +229,21 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now effigentd >/dev/null 2>&1
 systemctl restart effigentd
+LOGHINT="journalctl -u effigentd"
+else
+  i=0 # effigentd retries Tetragon on its own, but don't race its first start
+  until [ -S /var/run/tetragon/tetragon.sock ] || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
+  [ -S /var/run/tetragon/tetragon.sock ] || warn "Tetragon has not opened its socket yet: see /var/log/tetragon/tetragon.out"
+  # shellcheck disable=SC2086
+  start_bg /var/log/effigent/effigentd.log /usr/local/bin/effigentd $EFFIGENTD_ARGS
+  LOGHINT="/var/log/effigent/effigentd.log"
+fi
 
 say "Waiting for effigentd"
 i=0
 until /usr/local/bin/effigentd status >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
-/usr/local/bin/effigentd status || die "effigentd did not come up: journalctl -u effigentd"
+/usr/local/bin/effigentd status || die "effigentd did not come up: $LOGHINT"
 echo
 echo "Done. This machine now appears in the console under Machines."
+[ "$SYSTEMD" = 1 ] || echo "No systemd: Tetragon and effigentd stop at the next reboot; rerun this installer to start them again."
 [ "$LSM_OK" = 1 ] || echo "Blocking turns on after you enable BPF LSM and reboot (see the warning above)."

@@ -30,7 +30,7 @@ function cmpVersion(a: string, b: string): number {
   return 0;
 }
 
-type Os = 'macos' | 'linux' | 'windows' | 'kubernetes' | 'docker';
+type Os = 'macos' | 'linux' | 'grokbot' | 'windows' | 'kubernetes' | 'docker';
 
 const DEFAULT_SERVER = 'https://api.effigent.ai';
 
@@ -75,9 +75,14 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
     fleet: 'Fleet (Jamf, Kandji, Intune): deploy the Effigent .pkg with a configuration profile for the ai.effigent domain that sets EnrollmentToken to a multi-use token.',
   },
   linux: {
-    run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). For hosts without systemd, use the Docker tab.',
+    run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). Without systemd (containers, sandboxes) both run as background processes.',
     does: 'Installs Tetragon and effigentd as services and enrolls the machine. Agents are blocked in the kernel (BPF LSM): programs, files and network.',
     fleet: 'Fleet: run the same command from Ansible, cloud-init or your image build with a multi-use token.',
+  },
+  grokbot: {
+    run: 'Paste into Grok Bot (or run it in its terminal). Its computer is a Linux VM without systemd, so Tetragon and effigentd run as background processes; after the computer restarts, run the same command again (the machine stays enrolled). Needs a kernel with BTF.',
+    does: 'Installs Tetragon and effigentd and enrolls the computer. Commands the Bot starts through effigentd run --agent grok-bot -- <command> are blocked in the kernel, including every process they start: programs, files and network.',
+    fleet: 'All of an account’s Bots share one computer, so it enrolls once and every Bot is covered by the same policy.',
   },
   windows: {
     run: 'Run in PowerShell as Administrator. Windows support is in preview.',
@@ -168,7 +173,7 @@ function Enroll() {
 
         <div className="section-label" style={{ margin: '18px 0 6px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span>2 · Run it on the machine</span>
-          <Seg value={os} onChange={setOs} options={[{ id: 'macos', label: 'macOS' }, { id: 'linux', label: 'Linux' }, { id: 'windows', label: 'Windows' }, { id: 'kubernetes', label: 'Kubernetes (Helm)' }, { id: 'docker', label: 'Docker' }]} />
+          <Seg value={os} onChange={setOs} options={[{ id: 'macos', label: 'macOS' }, { id: 'linux', label: 'Linux' }, { id: 'grokbot', label: 'Grok Bot' }, { id: 'windows', label: 'Windows' }, { id: 'kubernetes', label: 'Kubernetes (Helm)' }, { id: 'docker', label: 'Docker' }]} />
         </div>
         <div className="muted" style={{ fontSize: 13, margin: '0 0 6px' }}>{note.run}</div>
         {made ? (

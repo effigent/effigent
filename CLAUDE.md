@@ -264,6 +264,13 @@ npm run -w @effigent/site build                     # site
 - `effigentd run --agent NAME -- cmd` trusts NAME (it picks the policy rule; it is not checked against cmd). A launch inside an already-tracked agent tree stays under the outer agent (no relabel escape). The console marks a root whose command isn't NAME's program as "name set by effigentd run" (`launchedAs` in `lib/live-graph.ts`; e.g. the Grok-VM test 2026-10-18 ran `--agent codex -- sh -c …`).
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8–1.1s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
+- Hosts without systemd (Grok Bot's computer, plain containers; console tab "Grok Bot"): `install.sh` starts
+  Tetragon and effigentd with `setsid nohup` (logs `/var/log/tetragon/tetragon.out`, `/var/log/effigent/effigentd.log`);
+  nothing restarts them after a reboot, so rerun the installer (enrollment is kept). Verified 2026-10-18 in a
+  no-systemd Ubuntu container: install, rerun, uninstall; an `effigentd run` child's curl and `/etc/shadow` blocked.
+  Grok Bot's own commands are only governed when started through `effigentd run --agent grok-bot -- …` (no
+  detection rule for its process). Tetragon's local log carries the installer's `--token` as an ancestor; the
+  installer enrolls before Tetragon starts, so a one-time token is already spent.
 - Kubernetes / Docker hosts: kernel layer only for agents in containers (their hooks can't reach the node's
   127.0.0.1:7777, so approvals and command/tool/MCP rules don't apply); one machine and policy per node;
   exec/file paths are the container's; an agent's policy loads ~1–2s after it starts in a pod (use
