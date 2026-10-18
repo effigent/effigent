@@ -96,7 +96,7 @@ if [ "$UNINSTALL" = 1 ]; then
   fi
   pkill -x effigentd 2>/dev/null || true # a daemon started by hand
   rm -f /usr/local/bin/effigentd
-  if [ "$SYSTEMD" = 0 ] && pkill -x tetragon 2>/dev/null; then # started by this installer
+  if [ "$SYSTEMD" = 0 ] && pkill -x tetragon 2>/dev/null; then # nothing else manages it here
     sleep 1; umount /run/tetragon/cgroup2 2>/dev/null || true
     echo "Tetragon stopped (its files stay in /usr/local)."
   fi
@@ -142,7 +142,6 @@ TMPB="$(mktemp -d)"
 curl -fsSL -o "$TMPB/$BIN" "$RELEASES/$VERSION/$BIN"
 curl -fsSL -o "$TMPB/$BIN.sha256" "$RELEASES/$VERSION/$BIN.sha256"
 (cd "$TMPB" && sha256sum -c "$BIN.sha256" >/dev/null) || die "effigentd download failed its checksum"
-[ "$SYSTEMD" = 1 ] || pkill -x effigentd 2>/dev/null || true # replace a daemon started by hand
 install -m 0755 "$TMPB/$BIN" /usr/local/bin/effigentd
 rm -rf "$TMPB"
 
@@ -167,6 +166,8 @@ tetragon_event_cache() {
   echo 2 > /etc/tetragon/tetragon.conf.d/event-cache-retries
   echo 1 > /etc/tetragon/tetragon.conf.d/event-cache-retry-delay
 }
+
+TETRAGON_ADDR="unix:///var/run/tetragon/tetragon.sock"
 
 tetragon_running() {
   if [ "$SYSTEMD" = 1 ]; then systemctl is-active --quiet tetragon; else pgrep -x tetragon >/dev/null 2>&1; fi
@@ -193,22 +194,38 @@ if [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
     cp -n -r /usr/local/lib/tetragon/tetragon.conf.d /etc/tetragon/ 2>/dev/null || true
     start_bg /var/log/tetragon/tetragon.out env PATH="/usr/local/lib/tetragon:$PATH" /usr/local/bin/tetragon
   fi
+elif [ "$SYSTEMD" = 0 ]; then
+  # Possibly started by hand with its own flags: leave it running and connect
+  # effigentd to wherever it listens (flag, then config, then Tetragon's default).
+  say "Tetragon is already running"
+  TARGS="$(tr '\0' ' ' < "/proc/$(pgrep -xo tetragon)/cmdline" 2>/dev/null || true)"
+  ADDR="$(printf '%s\n' "$TARGS" | sed -n 's/.*--server-address[= ]\([^ ]*\).*/\1/p')"
+  for f in /etc/tetragon/tetragon.conf.d/server-address /usr/local/lib/tetragon/tetragon.conf.d/server-address; do
+    [ -n "$ADDR" ] || ADDR="$(cat "$f" 2>/dev/null || true)"
+  done
+  ADDR="${ADDR:-localhost:54321}"
+  case "$ADDR" in
+    unix://*) TETRAGON_ADDR="$ADDR" ;;
+    0.0.0.0:*|:*) TETRAGON_ADDR="127.0.0.1:${ADDR##*:}" ;;
+    *) TETRAGON_ADDR="$ADDR" ;;
+  esac
+  case "$TARGS" in
+    *enable-ancestors*) ;;
+    *) grep -qs kprobe /etc/tetragon/tetragon.conf.d/enable-ancestors ||
+         warn "Tetragon was started without --enable-ancestors base,kprobe,lsm, so effigentd cannot tell which agent caused an event. Restart it with that flag, or stop it (pkill -x tetragon) and rerun this installer." ;;
+  esac
 else
   say "Tetragon is already running"
   if [ ! -s /etc/tetragon/tetragon.conf.d/enable-ancestors ] || { [ -z "${KUBERNETES_SERVICE_HOST:-}" ] && [ ! -s /etc/tetragon/tetragon.conf.d/event-cache-retries ]; }; then
+    install -d /etc/tetragon/tetragon.conf.d
     echo "base,kprobe,lsm" > /etc/tetragon/tetragon.conf.d/enable-ancestors
     tetragon_event_cache
-    if [ "$SYSTEMD" = 1 ]; then
-      systemctl restart tetragon
-    else
-      pkill -x tetragon || true; sleep 2
-      start_bg /var/log/tetragon/tetragon.out env PATH="/usr/local/lib/tetragon:$PATH" /usr/local/bin/tetragon
-    fi
+    systemctl restart tetragon
   fi
 fi
 
 # ---- start effigentd ------------------------------------------------------
-EFFIGENTD_ARGS="--tetragon unix:///var/run/tetragon/tetragon.sock --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl --keep-policies-on-exit"
+EFFIGENTD_ARGS="--tetragon $TETRAGON_ADDR --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl --keep-policies-on-exit"
 if [ "$SYSTEMD" = 1 ]; then
 cat > /etc/systemd/system/effigentd.service <<UNIT
 [Unit]
@@ -231,9 +248,14 @@ systemctl enable --now effigentd >/dev/null 2>&1
 systemctl restart effigentd
 LOGHINT="journalctl -u effigentd"
 else
-  i=0 # effigentd retries Tetragon on its own, but don't race its first start
-  until [ -S /var/run/tetragon/tetragon.sock ] || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
-  [ -S /var/run/tetragon/tetragon.sock ] || warn "Tetragon has not opened its socket yet: see /var/log/tetragon/tetragon.out"
+  SOCK="${TETRAGON_ADDR#unix://}"
+  if [ "$SOCK" != "$TETRAGON_ADDR" ]; then
+    i=0 # effigentd retries Tetragon on its own, but don't race its first start
+    until [ -S "$SOCK" ] || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
+    [ -S "$SOCK" ] || warn "Tetragon has not opened $SOCK yet: see /var/log/tetragon/tetragon.out"
+  fi
+  # Replace a daemon started by hand or by an earlier run only now, so a failure above leaves it running.
+  if pkill -x effigentd 2>/dev/null; then sleep 1; fi
   # shellcheck disable=SC2086
   start_bg /var/log/effigent/effigentd.log /usr/local/bin/effigentd $EFFIGENTD_ARGS
   LOGHINT="/var/log/effigent/effigentd.log"

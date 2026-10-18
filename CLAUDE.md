@@ -266,7 +266,9 @@ npm run -w @effigent/site build                     # site
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.
 - Hosts without systemd (Grok Bot's computer, plain containers; console tab "Grok Bot"): `install.sh` starts
   Tetragon and effigentd with `setsid nohup` (logs `/var/log/tetragon/tetragon.out`, `/var/log/effigent/effigentd.log`);
-  nothing restarts them after a reboot, so rerun the installer (enrollment is kept). Verified 2026-10-18 in a
+  nothing restarts them after a reboot, so rerun the installer (enrollment is kept). A Tetragon already running
+  there (e.g. started by hand) is left as is and effigentd connects to its `--server-address` (warns without
+  `--enable-ancestors`); the old effigentd is stopped only right before the new one starts. Verified 2026-10-18 in a
   no-systemd Ubuntu container: install, rerun, uninstall; an `effigentd run` child's curl and `/etc/shadow` blocked.
   Grok Bot's own commands are only governed when started through `effigentd run --agent grok-bot -- …` (no
   detection rule for its process). Tetragon's local log carries the installer's `--token` as an ancestor; the
