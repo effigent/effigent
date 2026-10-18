@@ -81,16 +81,21 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 
 [ "$(uname -s)" = Linux ] || die "this installer is for Linux and macOS; on Windows use https://effigent.ai/install.ps1"
-command -v systemctl >/dev/null 2>&1 || die "systemd is required"
-
+# Uninstall works with or without systemd (containers and sandboxes often have none).
 if [ "$UNINSTALL" = 1 ]; then
   say "Removing effigentd"
-  systemctl disable --now effigentd 2>/dev/null || true
-  rm -f /etc/systemd/system/effigentd.service /usr/local/bin/effigentd
-  systemctl daemon-reload
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now effigentd 2>/dev/null || true
+    rm -f /etc/systemd/system/effigentd.service
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+  pkill -x effigentd 2>/dev/null || true # a daemon started by hand
+  rm -f /usr/local/bin/effigentd
   echo "effigentd removed. Enrollment state kept in /var/lib/effigent (delete it to unenroll this machine)."
   exit 0
 fi
+
+command -v systemctl >/dev/null 2>&1 || die "systemd is required to install (effigentd and Tetragon run as services)"
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
