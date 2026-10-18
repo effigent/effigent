@@ -1,8 +1,7 @@
 # Partner outreach emails (drafts)
 
 Short first emails, one per provider. Attach or link `agent-platforms.md`. Fill in the
-brackets; check each provider's current product names before sending. The xAI email mentions
-the 2026-10-18 test on a Grok bot's Linux sandbox; drop that sentence if it shouldn't be shared.
+brackets; check each provider's current product names before sending.
 
 ---
 
@@ -14,8 +13,8 @@ Hi [name],
 
 I run Effigent. We govern AI coding agents on the machines they run on: what they may execute,
 read and connect to, enforced in the Linux kernel, with human approval for risky steps and an
-audit trail the customer's security team owns. It works whatever model drives the agent; this
-week we ran it on a Linux sandbox where a Grok-driven bot executes commands.
+audit trail the customer's security team owns. It works whatever model drives the agent,
+Grok included.
 
 Where your agents run in your own cloud, your enterprise customers lose those controls at your
 boundary. We'd like to change that with you: effigentd ships in your sandbox image, and each
