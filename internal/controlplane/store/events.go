@@ -60,7 +60,7 @@ func (s *Store) IngestBatch(ctx context.Context, tenant, endpointID, clientBatch
 		// daily activity per machine, agent and person (Pricing Leaks, People)
 		if _, err := tx.Exec(ctx, `insert into cp.agent_activity_daily as d
 			(tenant_ref, endpoint_id, day, agent, os_user, git_email, model, events, first_at, last_at)
-			select tenant_ref, endpoint_id, (event_time at time zone 'UTC')::date, agent,
+			select tenant_ref, endpoint_id, (event_time at time zone 'UTC')::date, left(agent, 120),
 			       left(lower(coalesce(body->>'os_user', '')), 200), left(lower(coalesce(body->>'git_email', '')), 254),
 			       left(coalesce(body->>'model', ''), 120), count(*), min(event_time), max(event_time)
 			from cp.events where batch_id = $1 and agent <> '' and agent not like 'mcp:%'

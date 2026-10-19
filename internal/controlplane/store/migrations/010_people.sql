@@ -68,7 +68,7 @@ create index if not exists agent_activity_daily_day on cp.agent_activity_daily (
 
 -- Backfill the last 35 days (older events carry no os_user / git_email).
 insert into cp.agent_activity_daily (tenant_ref, endpoint_id, day, agent, os_user, git_email, model, events, first_at, last_at)
-select tenant_ref, endpoint_id, (event_time at time zone 'UTC')::date, agent,
+select tenant_ref, endpoint_id, (event_time at time zone 'UTC')::date, left(agent, 120),
        left(lower(coalesce(body->>'os_user', '')), 200), left(lower(coalesce(body->>'git_email', '')), 254), left(coalesce(body->>'model', ''), 120),
        count(*), min(event_time), max(event_time)
 from cp.events
