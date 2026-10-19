@@ -31,18 +31,20 @@ type SpendConnector struct {
 	LastCounts    map[string]int    `json:"last_counts,omitempty"`
 	UpdatedBy     string            `json:"updated_by,omitempty"`
 	UpdatedAt     time.Time         `json:"updated_at"`
+	NextPollAt    *time.Time        `json:"next_poll_at,omitempty"`
+	Failures      int               `json:"failures,omitempty"` // failed polls in a row
 }
 
 // Configured reports whether the connector has a key.
 func (c SpendConnector) Configured() bool { return c.SecretEnc != "" }
 
-const spendConnCols = `tenant_ref, vendor, secret_enc, secret_hint, settings, enabled, sync_status, sync_started_at, last_sync_at, last_error, last_counts, updated_by, updated_at`
+const spendConnCols = `tenant_ref, vendor, secret_enc, secret_hint, settings, enabled, sync_status, sync_started_at, last_sync_at, last_error, last_counts, updated_by, updated_at, next_poll_at, failures`
 
 func scanSpendConn(r pgx.Row) (SpendConnector, error) {
 	var c SpendConnector
 	var settings, counts []byte
 	err := r.Scan(&c.Tenant, &c.Vendor, &c.SecretEnc, &c.SecretHint, &settings, &c.Enabled, &c.SyncStatus, &c.SyncStartedAt,
-		&c.LastSyncAt, &c.LastError, &counts, &c.UpdatedBy, &c.UpdatedAt)
+		&c.LastSyncAt, &c.LastError, &counts, &c.UpdatedBy, &c.UpdatedAt, &c.NextPollAt, &c.Failures)
 	if err != nil {
 		return c, err
 	}
@@ -53,9 +55,6 @@ func scanSpendConn(r pgx.Row) (SpendConnector, error) {
 	}
 	return c, nil
 }
-
-// spendSyncStale: a sync marked running for longer than this died with its process.
-const spendSyncStale = 30 * time.Minute
 
 func (s *Store) ListSpendConnectors(ctx context.Context, tenant string) ([]SpendConnector, error) {
 	rows, err := s.db.Query(ctx, `select `+spendConnCols+` from cp.spend_connectors where tenant_ref = $1 order by vendor`, tenant)
@@ -122,26 +121,35 @@ func (s *Store) DeleteSpendConnector(ctx context.Context, tenant, vendor string)
 	return tx.Commit(ctx)
 }
 
-// ClaimSpendSync marks a connector's sync as running, unless one already
-// is (several control plane instances, or a click during the nightly run).
-func (s *Store) ClaimSpendSync(ctx context.Context, tenant, vendor string) (SpendConnector, bool, error) {
-	c, err := scanSpendConn(s.db.QueryRow(ctx, `update cp.spend_connectors set sync_status = 'running', sync_started_at = now()
-		where tenant_ref = $1 and vendor = $2 and secret_enc <> '' and enabled
-		  and (sync_status <> 'running' or sync_started_at < now() - make_interval(secs => $3))
-		returning `+spendConnCols, tenant, vendor, spendSyncStale.Seconds()))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return c, false, nil
+// Vendor poller (migration 010). Each connector has a next_poll_at; a poll
+// runs under a session advisory lock for its tenant+vendor (the
+// RetentionLock pattern), so several control plane instances, or a click
+// on Sync during a scheduled poll, never pull the same vendor twice at once.
+
+// SpendPollLock takes the poll lock for one connector. ok=false: another
+// poll holds it.
+func (s *Store) SpendPollLock(ctx context.Context, tenant, vendor string) (release func(), ok bool, err error) {
+	conn, err := s.db.Acquire(ctx)
+	if err != nil {
+		return nil, false, err
 	}
-	return c, err == nil, err
+	key := "cp.spend.poll:" + tenant + "/" + vendor
+	if err := conn.QueryRow(ctx, `select pg_try_advisory_lock(hashtext($1))`, key).Scan(&ok); err != nil || !ok {
+		conn.Release()
+		return nil, false, err
+	}
+	return func() {
+		_, _ = conn.Exec(context.Background(), `select pg_advisory_unlock(hashtext($1))`, key)
+		conn.Release()
+	}, true, nil
 }
 
-// DueSpendSyncs lists connectors (every tenant) whose last sync attempt is
-// older than every.
-func (s *Store) DueSpendSyncs(ctx context.Context, every time.Duration) ([]SpendConnector, error) {
+// DueSpendPolls lists connectors (every tenant) whose next poll is due,
+// oldest first.
+func (s *Store) DueSpendPolls(ctx context.Context, limit int) ([]SpendConnector, error) {
 	rows, err := s.db.Query(ctx, `select `+spendConnCols+` from cp.spend_connectors
-		where secret_enc <> '' and enabled and coalesce(sync_started_at, 'epoch') < now() - make_interval(secs => $1)
-		  and (sync_status <> 'running' or sync_started_at < now() - make_interval(secs => $2))
-		order by coalesce(sync_started_at, 'epoch') limit 100`, every.Seconds(), spendSyncStale.Seconds())
+		where secret_enc <> '' and enabled and coalesce(next_poll_at, 'epoch') <= now()
+		order by coalesce(next_poll_at, 'epoch') limit $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -157,16 +165,49 @@ func (s *Store) DueSpendSyncs(ctx context.Context, every time.Duration) ([]Spend
 	return out, rows.Err()
 }
 
-// FailSpendSync records a failed sync; the data from the last good one stays.
-func (s *Store) FailSpendSync(ctx context.Context, tenant, vendor, msg string) error {
-	_, err := s.db.Exec(ctx, `update cp.spend_connectors set sync_status = 'error', last_error = $3 where tenant_ref = $1 and vendor = $2`,
-		tenant, vendor, msg)
+// StartSpendSync marks a connector's poll as running (call it holding the
+// poll lock) and returns the connector as it is now; ErrNotFound when it
+// has no key, is disabled or (onlyIfDue) isn't due any more.
+func (s *Store) StartSpendSync(ctx context.Context, tenant, vendor string, onlyIfDue bool) (SpendConnector, error) {
+	c, err := scanSpendConn(s.db.QueryRow(ctx, `update cp.spend_connectors set sync_status = 'running', sync_started_at = now()
+		where tenant_ref = $1 and vendor = $2 and secret_enc <> '' and enabled
+		  and (not $3 or coalesce(next_poll_at, 'epoch') <= now())
+		returning `+spendConnCols, tenant, vendor, onlyIfDue))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
+// SpendRetryAfter is the wait after the nth failure in a row: 15 min
+// doubling, never longer than the regular interval.
+func SpendRetryAfter(failures int, every time.Duration) time.Duration {
+	d := 15 * time.Minute
+	for i := 1; i < failures && d < every; i++ {
+		d *= 2
+	}
+	return min(d, every)
+}
+
+// FailSpendSync records a failed poll and when to retry; the data from the
+// last good one stays.
+func (s *Store) FailSpendSync(ctx context.Context, tenant, vendor, msg string, every time.Duration) error {
+	var failures int
+	if err := s.db.QueryRow(ctx, `select failures + 1 from cp.spend_connectors where tenant_ref = $1 and vendor = $2`, tenant, vendor).Scan(&failures); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // deleted while polling
+		}
+		return err
+	}
+	_, err := s.db.Exec(ctx, `update cp.spend_connectors set sync_status = 'error', last_error = $3, failures = $4,
+		next_poll_at = now() + make_interval(secs => $5) where tenant_ref = $1 and vendor = $2`,
+		tenant, vendor, msg, failures, SpendRetryAfter(failures, every).Seconds())
 	return err
 }
 
 // FinishSpendSync replaces the vendor's API seats, and its API usage for
-// the synced days, with what the sync brought back.
-func (s *Store) FinishSpendSync(ctx context.Context, tenant, vendor string, from, to time.Time, p spend.Pull) error {
+// the synced days, with what the poll brought back, and schedules the next.
+func (s *Store) FinishSpendSync(ctx context.Context, tenant, vendor string, from, to time.Time, p spend.Pull, every time.Duration) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -184,8 +225,9 @@ func (s *Store) FinishSpendSync(ctx context.Context, tenant, vendor string, from
 	}
 	counts, _ := json.Marshal(map[string]int{"seats": len(p.Seats), "usage_rows": len(p.Usage)})
 	errMsg := strings.Join(p.Notes, "; ")
-	if _, err := tx.Exec(ctx, `update cp.spend_connectors set sync_status = 'ok', last_sync_at = now(), last_error = $3, last_counts = $4
-		where tenant_ref = $1 and vendor = $2`, tenant, vendor, errMsg, counts); err != nil {
+	if _, err := tx.Exec(ctx, `update cp.spend_connectors set sync_status = 'ok', last_sync_at = now(), last_error = $3, last_counts = $4,
+		failures = 0, next_poll_at = now() + make_interval(secs => $5)
+		where tenant_ref = $1 and vendor = $2`, tenant, vendor, errMsg, counts, every.Seconds()); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -336,9 +378,10 @@ func (s *Store) SpendObservations(ctx context.Context, tenant string, since time
 		byID[e.ID] = m
 		machines = append(machines, m)
 	}
-	rows, err = s.db.Query(ctx, `select endpoint_id::text, agent, (event_time at time zone 'UTC')::date, count(*)
-		from cp.events where tenant_ref = $1 and event_time >= $2 and agent <> '' and agent not like 'mcp:%'
-		group by 1, 2, 3`, tenant, since)
+	// the daily rollup kept at ingest (migration 010), not a scan of cp.events
+	rows, err = s.db.Query(ctx, `select endpoint_id::text, agent, day, os_user, git_email, sum(events)::bigint
+		from cp.agent_activity_daily where tenant_ref = $1 and day >= $2
+		group by 1, 2, 3, 4, 5`, tenant, spend.Day(since))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -346,7 +389,7 @@ func (s *Store) SpendObservations(ctx context.Context, tenant string, since time
 	obs := []spend.Observation{}
 	for rows.Next() {
 		var o spend.Observation
-		if err := rows.Scan(&o.EndpointID, &o.Agent, &o.Day, &o.Events); err != nil {
+		if err := rows.Scan(&o.EndpointID, &o.Agent, &o.Day, &o.OSUser, &o.GitEmail, &o.Events); err != nil {
 			return nil, nil, err
 		}
 		m, ok := byID[o.EndpointID]
@@ -359,12 +402,12 @@ func (s *Store) SpendObservations(ctx context.Context, tenant string, since time
 	return machines, obs, rows.Err()
 }
 
-// SpendSettings is the tenant's people directory and price overrides.
+// SpendSettings is the tenant's price overrides (people live in cp.people
+// since migration 010).
 type SpendSettings struct {
-	People    []spend.Person `json:"people"`
-	Prices    spend.Prices   `json:"prices"`
-	UpdatedBy string         `json:"updated_by,omitempty"`
-	UpdatedAt *time.Time     `json:"updated_at,omitempty"`
+	Prices    spend.Prices `json:"prices"`
+	UpdatedBy string       `json:"updated_by,omitempty"`
+	UpdatedAt *time.Time   `json:"updated_at,omitempty"`
 }
 
 func (s *Store) GetSpendSettings(ctx context.Context, tenant string) (SpendSettings, error) {
@@ -374,15 +417,12 @@ func (s *Store) GetSpendSettings(ctx context.Context, tenant string) (SpendSetti
 	var at time.Time
 	err := s.db.QueryRow(ctx, `select config, updated_by, updated_at from cp.spend_settings where tenant_ref = $1`, tenant).Scan(&raw, &by, &at)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return SpendSettings{People: []spend.Person{}, Prices: spend.Prices{Seat: map[string]int64{}, Personal: map[string]int64{}}}, nil
+		return SpendSettings{Prices: spend.Prices{Seat: map[string]int64{}, Personal: map[string]int64{}}}, nil
 	} else if err != nil {
 		return c, err
 	}
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return c, err
-	}
-	if c.People == nil {
-		c.People = []spend.Person{}
 	}
 	if c.Prices.Seat == nil {
 		c.Prices.Seat = map[string]int64{}

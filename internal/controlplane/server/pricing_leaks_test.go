@@ -25,8 +25,6 @@ var testDBFlag = flag.String("effigent.db", "", "test database URL (default $EFF
 
 func TestCleanSpendSettings(t *testing.T) {
 	bad := []store.SpendSettings{
-		{People: []spend.Person{{Email: "not-an-email"}}},
-		{People: []spend.Person{{Email: "a@x.io"}, {Email: "A@x.io "}}},
 		{Prices: spend.Prices{Seat: map[string]int64{"windsurf": 1500}}},
 		{Prices: spend.Prices{Seat: map[string]int64{"cursor": -1}}},
 		{Prices: spend.Prices{Personal: map[string]int64{"cursor": 2_000_000}}},
@@ -37,14 +35,10 @@ func TestCleanSpendSettings(t *testing.T) {
 		}
 	}
 	c, err := cleanSpendSettings(store.SpendSettings{
-		People: []spend.Person{{Email: " Dana@Acme.io ", Name: " Dana ", Aliases: []string{"github:dana-k", " dana-k ", "", "GITHUB:DANA-K"}}, {Email: ""}},
 		Prices: spend.Prices{Seat: map[string]int64{"Copilot/Enterprise": 3900, "anthropic": 15000}, Personal: map[string]int64{"google": 2000}},
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(c.People) != 1 || c.People[0].Email != "dana@acme.io" || c.People[0].Name != "Dana" || len(c.People[0].Aliases) != 2 {
-		t.Fatalf("people %+v", c.People)
 	}
 	if c.Prices.Seat["copilot/enterprise"] != 3900 || c.Prices.Personal["google"] != 2000 {
 		t.Fatalf("prices %+v", c.Prices)
@@ -200,22 +194,43 @@ func TestPricingLeaksEndToEnd(t *testing.T) {
 		}
 		return id
 	}
-	events := func(ep, agent string, days int) {
+	events := func(ep, agent string, days int, who map[string]any) {
 		var evs []store.Event
 		for d := 0; d < days; d++ {
-			body, _ := json.Marshal(map[string]any{"type": "exec", "agent": agent})
-			evs = append(evs, store.Event{Time: now.AddDate(0, 0, -d), Type: "exec", Severity: "info", Agent: agent, Body: body})
+			b := map[string]any{"type": "exec", "agent": agent}
+			for k, v := range who {
+				b[k] = v
+			}
+			body, _ := json.Marshal(b)
+			evs = append(evs, store.Event{Time: now.AddDate(0, 0, -d), Type: "exec", Severity: "info", Agent: agent, Body: body},
+				store.Event{Time: now.AddDate(0, 0, -d), Type: "file_open", Severity: "info", Agent: agent, Body: body})
 		}
 		if _, _, err := st.IngestBatch(ctx, tenant, ep, fmt.Sprintf("b-%s-%s", agent, ep), evs); err != nil {
 			t.Fatal(err)
+		}
+		// a replayed batch is stored once, and so counted once
+		if _, dup, err := st.IngestBatch(ctx, tenant, ep, fmt.Sprintf("b-%s-%s", agent, ep), evs); err != nil || !dup {
+			t.Fatalf("replay: dup=%v err=%v", dup, err)
 		}
 	}
 	dana := enroll("dana-mbp", "")
 	omer := enroll("omer-mbp", "omer@acme.io")
 	build := enroll("build-7", "")
-	events(dana, "claude-code", 12)
-	events(omer, "cursor-agent", 6)
-	events(build, "codex", 2)
+	events(dana, "claude-code", 12, map[string]any{"os_user": "dana", "git_email": "Dana@Acme.io", "model": "claude-opus-5-5"})
+	events(omer, "cursor-agent", 6, nil)
+	events(build, "codex", 2, map[string]any{"os_user": "ci"})
+	sightings, err := st.Sightings(ctx, tenant, now.AddDate(0, 0, -29))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range sightings {
+		if x.Hostname == "dana-mbp" && (x.OSUser != "dana" || x.GitEmail != "dana@acme.io" || x.Events != 24) {
+			t.Errorf("rollup: %+v", x)
+		}
+	}
+	if len(sightings) != 3 {
+		t.Errorf("sightings %+v", sightings)
+	}
 
 	// connectors: validation, key never returned
 	if code, raw := call("PUT", "/pricing-leaks/connectors/cursor", map[string]any{}, nil); code != 400 {
@@ -260,11 +275,80 @@ func TestPricingLeaksEndToEnd(t *testing.T) {
 		t.Fatalf("bad csv: %d", code)
 	}
 
-	// the people directory ties Dana's laptop and GitHub login to her email
-	set := map[string]any{"people": []map[string]any{{"email": "dana@acme.io", "name": "Dana Katz", "aliases": []string{"dana-mbp", "github:dana-k"}}},
-		"prices": map[string]any{"seat": map[string]int64{"cursor": 3500}}}
-	if code, raw := call("PUT", "/pricing-leaks/settings", set, nil); code != 200 {
-		t.Fatalf("settings: %d %s", code, raw)
+	// the poller schedules the next poll after a good one, and backs off after a failure
+	if c, _ := st.GetSpendConnector(ctx, tenant, spend.Copilot); c.NextPollAt == nil || c.NextPollAt.Before(now.Add(999*time.Hour)) || c.Failures != 0 {
+		t.Errorf("copilot next poll %v failures %d", c.NextPollAt, c.Failures)
+	}
+	if code, _ := call("PUT", "/pricing-leaks/settings", map[string]any{"prices": map[string]any{"seat": map[string]int64{"cursor": 3500}}}, nil); code != 200 {
+		t.Fatal("settings")
+	}
+
+	// People: suggestions from what effigentd and the vendors saw
+	type peoplePage struct {
+		People      []store.PersonRow  `json:"people"`
+		Suggestions []spend.Suggestion `json:"suggestions"`
+		Sightings   []spend.Sighting   `json:"sightings"`
+		Unattrib    []string           `json:"unattributed"`
+	}
+	getPeople := func() peoplePage {
+		t.Helper()
+		var pp peoplePage
+		if code, raw := call("GET", "/people", nil, &pp); code != 200 {
+			t.Fatalf("GET /people %d %s", code, raw)
+		}
+		return pp
+	}
+	sug := func(pp peoplePage, kind, value string) *spend.Suggestion {
+		for i, x := range pp.Suggestions {
+			if x.Kind == kind && x.Value == value {
+				return &pp.Suggestions[i]
+			}
+		}
+		return nil
+	}
+	pp := getPeople()
+	if x := sug(pp, "os_user", "dana"); x == nil || x.Email != "dana@acme.io" {
+		t.Errorf("want os_user:dana -> dana@acme.io suggested: %+v", pp.Suggestions)
+	}
+	if x := sug(pp, "person", "idle@acme.io"); x == nil || x.Name != "Idle" {
+		t.Errorf("want the Cursor seat idle@acme.io suggested as a person: %+v", pp.Suggestions)
+	}
+	if len(pp.Unattrib) != 1 || pp.Unattrib[0] != "build-7" {
+		t.Errorf("people unattributed %v", pp.Unattrib)
+	}
+	// Dana: her GitHub login by hand, her OS user from the suggestion
+	if code, raw := call("PUT", "/people/Dana@acme.io", map[string]any{"name": "Dana Katz", "identities": []map[string]string{{"kind": "github", "value": "Dana-K"}}}, nil); code != 200 {
+		t.Fatalf("put person: %d %s", code, raw)
+	}
+	if code, raw := call("POST", "/people/identities", map[string]any{"kind": "os_user", "value": "dana", "email": "dana@acme.io", "source": "suggestion"}, nil); code != 200 {
+		t.Fatalf("accept: %d %s", code, raw)
+	}
+	if code, _ := call("PUT", "/people/omer@acme.io", map[string]any{"identities": []map[string]string{{"kind": "os_user", "value": "dana"}}}, nil); code != 409 {
+		t.Errorf("an identity of someone else: %d, want 409", code)
+	}
+	if code, _ := call("PUT", "/people/omer@acme.io", map[string]any{"identities": []map[string]string{{"kind": "shoe_size", "value": "44"}}}, nil); code != 400 {
+		t.Errorf("unknown kind: %d", code)
+	}
+	if code, _ := call("POST", "/people/identities", map[string]any{"kind": "person", "email": "temp@acme.io", "name": "Temp"}, nil); code != 200 {
+		t.Error("add person")
+	}
+	if code, _ := call("DELETE", "/people/temp@acme.io", nil, nil); code != 200 {
+		t.Error("delete person")
+	}
+	if code, _ := call("DELETE", "/people/identities?kind=github&value=nobody", nil, nil); code != 404 {
+		t.Error("delete unknown identity")
+	}
+	pp = getPeople()
+	if sug(pp, "os_user", "dana") != nil {
+		t.Errorf("accepted suggestion still listed")
+	}
+	if len(pp.People) != 1 || pp.People[0].Name != "Dana Katz" || len(pp.People[0].Identities) != 2 || pp.People[0].Identities[0].Kind != "os_user" {
+		t.Errorf("people %+v", pp.People)
+	}
+	for _, x := range pp.Sightings {
+		if x.Hostname == "dana-mbp" && (x.Person != "dana@acme.io" || x.Via != spend.ViaOSUser) {
+			t.Errorf("dana's sighting %+v", x)
+		}
 	}
 
 	p, raw := get()
@@ -296,14 +380,44 @@ func TestPricingLeaksEndToEnd(t *testing.T) {
 	if len(p.Report.Unattributed) != 1 || p.Report.Unattributed[0] != "build-7" {
 		t.Errorf("unattributed %v", p.Report.Unattributed)
 	}
+	for _, l := range p.Report.Leaks {
+		if l.Person == "dana@acme.io" && l.Attribution != spend.ViaOSUser {
+			t.Errorf("dana's leak attributed by %q, want os_user: %+v", l.Attribution, l)
+		}
+	}
 
-	// sync now: only configured vendors; one at a time
-	var sync struct{ Started, AlreadyRunning []string }
-	if code, raw := call("POST", "/pricing-leaks/sync", map[string]any{}, &sync); code != 202 || len(sync.Started)+len(sync.AlreadyRunning) != 2 {
+	// sync now: only configured vendors; a vendor whose poll lock is held
+	// (another instance polling it) isn't polled twice
+	release, ok, err := st.SpendPollLock(ctx, tenant, spend.Cursor)
+	if err != nil || !ok {
+		t.Fatalf("lock: %v %v", ok, err)
+	}
+	var sync struct {
+		Started        []string `json:"started"`
+		AlreadyRunning []string `json:"already_running"`
+	}
+	if code, raw := call("POST", "/pricing-leaks/sync", map[string]any{}, &sync); code != 202 || len(sync.Started) != 1 || len(sync.AlreadyRunning) != 1 || sync.AlreadyRunning[0] != spend.Cursor {
 		t.Fatalf("sync: %d %s", code, raw)
 	}
-	waitSynced(spend.Cursor)
+	release()
 	waitSynced(spend.Copilot)
+	// the scheduled poll: not due (next poll in 1000h) -> nothing happens; due -> it runs
+	s.pollSpend(ctx, tenant, spend.Cursor)
+	if c, _ := st.GetSpendConnector(ctx, tenant, spend.Cursor); c.SyncStartedAt != nil && c.SyncStartedAt.After(now.Add(time.Minute)) {
+		t.Errorf("a poll that wasn't due ran")
+	}
+	due, err := st.DueSpendPolls(ctx, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range due {
+		if c.Tenant == tenant {
+			t.Errorf("not due yet: %+v", c)
+		}
+	}
+	if store.SpendRetryAfter(1, 24*time.Hour) != 15*time.Minute || store.SpendRetryAfter(3, 24*time.Hour) != time.Hour || store.SpendRetryAfter(20, 24*time.Hour) != 24*time.Hour {
+		t.Error("retry backoff")
+	}
 
 	// disconnecting drops the synced data, CSV imports stay until cleared
 	if code, _ := call("DELETE", "/pricing-leaks/connectors/cursor", nil, nil); code != 200 {
@@ -329,7 +443,15 @@ func TestPricingLeaksEndToEnd(t *testing.T) {
 			t.Fatal("a key leaked into the audit trail")
 		}
 	}
-	for _, a := range []string{"pricing_leaks.connector.update", "pricing_leaks.connector.delete", "pricing_leaks.import", "pricing_leaks.settings.update", "pricing_leaks.sync"} {
+	people, err := st.ListAudit(ctx, tenant, 100, "people.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range append(entries, people...) {
+		seen[e.Action] = true
+	}
+	for _, a := range []string{"pricing_leaks.connector.update", "pricing_leaks.connector.delete", "pricing_leaks.import", "pricing_leaks.settings.update", "pricing_leaks.sync",
+		"people.create", "people.identity.add", "people.delete"} {
 		if !seen[a] {
 			t.Errorf("no audit entry %s", a)
 		}

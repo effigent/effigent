@@ -75,6 +75,10 @@ type Leak struct {
 	// a saving, since the company doesn't pay it today.
 	AtRiskCents int64  `json:"at_risk_cents"`
 	Confidence  string `json:"confidence"`
+	// Attribution: how effigentd's activity was tied to the person (Via*:
+	// os_user, git_email, owner, host, "" = not matched). Leaks that rest on
+	// a machine-level match say so in their evidence.
+	Attribution string `json:"attribution,omitempty"`
 }
 
 // VendorSpend is what the org pays one vendor.
@@ -108,7 +112,8 @@ type ToolUse struct {
 type PersonUsage struct {
 	Person   string    `json:"person"`
 	Name     string    `json:"name,omitempty"`
-	Matched  bool      `json:"matched"` // resolved to a work email
+	Matched  bool      `json:"matched"`       // resolved to a work email
+	Via      string    `json:"via,omitempty"` // strongest match of effigentd's activity (Via*)
 	Machines []string  `json:"machines,omitempty"`
 	Tools    []ToolUse `json:"tools"`
 }
@@ -149,8 +154,9 @@ type analysis struct {
 	people   map[string]map[string]*tool
 	names    map[string]string
 	machines map[string]map[string]bool
-	covered  map[string]bool // people with an enrolled machine seen in the window
-	tracks   map[string]bool // vendor reports per-person activity
+	covered  map[string]bool   // people with an enrolled machine seen in the window
+	via      map[string]string // strongest way effigentd's activity matched the person
+	tracks   map[string]bool   // vendor reports per-person activity
 	conn     map[string]bool
 	orgDaily map[string]map[time.Time]int64
 }
@@ -187,7 +193,7 @@ func Analyze(in Input) Report {
 	}
 	a := &analysis{in: in, dir: NewDirectory(in.People), today: Day(in.Now),
 		people: map[string]map[string]*tool{}, names: map[string]string{}, machines: map[string]map[string]bool{},
-		covered: map[string]bool{}, tracks: map[string]bool{}, conn: map[string]bool{}, orgDaily: map[string]map[time.Time]int64{}}
+		covered: map[string]bool{}, via: map[string]string{}, tracks: map[string]bool{}, conn: map[string]bool{}, orgDaily: map[string]map[time.Time]int64{}}
 	a.start = a.today.AddDate(0, 0, -(in.WindowDays - 1))
 	for _, v := range in.Connected {
 		a.conn[v] = true
@@ -196,6 +202,15 @@ func Analyze(in Input) Report {
 		if p.Name != "" {
 			a.names[norm(p.Email)] = p.Name
 		}
+	}
+	// a git email that is someone's seat or a machine owner is that person
+	for _, s := range in.Seats {
+		if SeatKind(s.Vendor) == KindEmail {
+			a.dir.AddKnown(s.Identity)
+		}
+	}
+	for _, m := range in.Machines {
+		a.dir.AddKnown(m.Owner)
 	}
 
 	for i := range in.Seats {
@@ -253,8 +268,9 @@ func Analyze(in Input) Report {
 		if m.LastSeen == nil || m.LastSeen.Before(a.start) {
 			continue
 		}
-		if key := a.dir.EndpointPerson(m.Owner, m.Hostname, m.OSUsers); key != "" {
+		if key, via := a.dir.endpointPerson(m.Owner, m.Hostname, m.OSUsers); key != "" {
 			a.covered[key] = true
+			a.matched(key, via)
 			a.machine(key, m.Hostname)
 		}
 	}
@@ -265,7 +281,7 @@ func Analyze(in Input) Report {
 		if v == "" || d.Before(a.start) || d.After(a.today) {
 			continue
 		}
-		key := a.dir.EndpointPerson(o.Owner, o.Hostname, o.OSUsers)
+		key, via := a.dir.ObsPerson(o)
 		if key == "" {
 			continue
 		}
@@ -273,6 +289,7 @@ func Analyze(in Input) Report {
 			unattributed[o.Hostname] = true
 		}
 		a.covered[key] = true
+		a.matched(key, via)
 		a.machine(key, o.Hostname)
 		t := a.tool(key, v)
 		t.agents[o.Agent] = true
@@ -297,6 +314,12 @@ func Analyze(in Input) Report {
 		if l.Name == "" {
 			l.Name = a.names[l.Person]
 		}
+		if l.Type != RunawayCost && a.covered[l.Person] { // runaway rests on vendor data only
+			l.Attribution = a.via[l.Person]
+			if viaRank(l.Attribution) == 2 {
+				l.Evidence = append(l.Evidence, "effigentd's activity is attributed by "+ViaLabel[l.Attribution]+" (one person per machine); map their OS user or git email on the People page if the machine is shared")
+			}
+		}
 		r.TotalSavingsCents += l.MonthlySavingsCents
 		r.TotalAtRiskCents += l.AtRiskCents
 	}
@@ -312,6 +335,13 @@ func Analyze(in Input) Report {
 	})
 	r.People = a.peopleView()
 	return r
+}
+
+// matched keeps the strongest way a person was tied to effigentd's activity.
+func (a *analysis) matched(person, via string) {
+	if cur, ok := a.via[person]; !ok || viaRank(via) > viaRank(cur) {
+		a.via[person] = via
+	}
 }
 
 func (a *analysis) machine(person, host string) {
@@ -422,7 +452,7 @@ func (a *analysis) unusedSeats() []Leak {
 			if effKnows {
 				ev = append(ev, fmt.Sprintf("effigentd: no %s agent on %s in %d days", VendorLabel[v], strings.Join(sortedKeys(a.machines[person]), ", "), a.in.WindowDays))
 			} else {
-				ev = append(ev, "effigentd: no enrolled machine is linked to this person (set a machine owner or a People alias)")
+				ev = append(ev, "effigentd: no agent activity is linked to this person (map their OS user, git email or machine on the People page)")
 			}
 			conf := confidenceMedium
 			if vendorKnows && effKnows {
@@ -513,7 +543,7 @@ func (a *analysis) shadow() []Leak {
 				}
 				ev = append(ev, fmt.Sprintf("%s has no seat or usage for %s on the company account", VendorLabel[v], who))
 				if v == Anthropic || v == OpenAI {
-					ev = append(ev, "If they use a shared company API key, add the key name to their People aliases")
+					ev = append(ev, "If they use a shared company API key, map the key name to them on the People page")
 				}
 			case v == "google":
 				conf = confidenceLow
@@ -640,7 +670,7 @@ func (a *analysis) spike(daily map[time.Time]int64) (day time.Time, cost, base, 
 func (a *analysis) peopleView() []PersonUsage {
 	out := []PersonUsage{}
 	for _, person := range sortedKeys(a.people) {
-		p := PersonUsage{Person: person, Name: a.names[person], Matched: IsPerson(person), Machines: sortedKeys(a.machines[person]), Tools: []ToolUse{}}
+		p := PersonUsage{Person: person, Name: a.names[person], Matched: IsPerson(person), Via: a.via[person], Machines: sortedKeys(a.machines[person]), Tools: []ToolUse{}}
 		for _, v := range sortedKeys(a.people[person]) {
 			t := a.people[person][v]
 			u := ToolUse{Vendor: v, Seat: t.seat != nil, SeatCents: t.seatCents, Agents: sortedKeys(t.agents),

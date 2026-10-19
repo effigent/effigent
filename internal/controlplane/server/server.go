@@ -150,6 +150,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pricing-leaks/import", s.console(write, s.importSpendCSV))
 	mux.HandleFunc("DELETE /api/v1/pricing-leaks/import/{vendor}", s.console(write, s.clearSpendCSV))
 	mux.HandleFunc("PUT /api/v1/pricing-leaks/settings", s.console(write, s.putSpendSettings))
+	mux.HandleFunc("GET /api/v1/people", s.console(read, s.listPeople))
+	mux.HandleFunc("PUT /api/v1/people/{email}", s.console(write, s.putPerson))
+	mux.HandleFunc("DELETE /api/v1/people/{email}", s.console(write, s.deletePerson))
+	mux.HandleFunc("POST /api/v1/people/identities", s.console(write, s.addPersonIdentity))
+	mux.HandleFunc("DELETE /api/v1/people/identities", s.console(write, s.deletePersonIdentity))
 	// integrations: API keys and webhooks are managed by people only
 	mux.HandleFunc("GET /api/v1/api-keys", s.console(read, s.listAPIKeys))
 	mux.HandleFunc("POST /api/v1/api-keys", s.console(write, s.createAPIKey))

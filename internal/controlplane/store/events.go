@@ -57,6 +57,19 @@ func (s *Store) IngestBatch(ctx context.Context, tenant, endpointID, clientBatch
 		if err := tx.SendBatch(ctx, b).Close(); err != nil {
 			return 0, false, err
 		}
+		// daily activity per machine, agent and person (Pricing Leaks, People)
+		if _, err := tx.Exec(ctx, `insert into cp.agent_activity_daily as d
+			(tenant_ref, endpoint_id, day, agent, os_user, git_email, model, events, first_at, last_at)
+			select tenant_ref, endpoint_id, (event_time at time zone 'UTC')::date, agent,
+			       left(lower(coalesce(body->>'os_user', '')), 200), left(lower(coalesce(body->>'git_email', '')), 254),
+			       left(coalesce(body->>'model', ''), 120), count(*), min(event_time), max(event_time)
+			from cp.events where batch_id = $1 and agent <> '' and agent not like 'mcp:%'
+			group by 1, 2, 3, 4, 5, 6, 7
+			on conflict (tenant_ref, endpoint_id, day, agent, os_user, git_email, model) do update
+			set events = d.events + excluded.events, first_at = least(d.first_at, excluded.first_at), last_at = greatest(d.last_at, excluded.last_at)`,
+			batchID); err != nil {
+			return 0, false, err
+		}
 	}
 	// hashes are computed by Postgres from what it stored, the same way VerifyEvents recomputes them
 	_, err = tx.Exec(ctx, `with s as (select min(id) f, max(id) l, count(*)::int n, cp.event_batch_content($1) c, now() r from cp.events where batch_id = $1)

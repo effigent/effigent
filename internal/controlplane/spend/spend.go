@@ -101,13 +101,18 @@ func (u UsageDay) Active() bool { return u.Requests > 0 || u.Tokens > 0 || u.Cos
 
 // Observation is effigentd's view: an agent ran on a machine on a day.
 type Observation struct {
-	EndpointID string    `json:"endpoint_id"`
-	Hostname   string    `json:"hostname"`
-	Owner      string    `json:"owner"`    // cp.endpoints.owner (email or console user id)
-	OSUsers    []string  `json:"os_users"` // OS users seen on the machine (approval requests)
-	Agent      string    `json:"agent"`
-	Day        time.Time `json:"day"`
-	Events     int64     `json:"events"`
+	EndpointID string   `json:"endpoint_id"`
+	Hostname   string   `json:"hostname"`
+	Owner      string   `json:"owner"`    // cp.endpoints.owner (email or console user id)
+	OSUsers    []string `json:"os_users"` // OS users seen on the machine (approval requests)
+	// OSUser and GitEmail: who ran the agent, from the events themselves
+	// (effigentd builds that send them; empty on older ones).
+	OSUser   string    `json:"os_user,omitempty"`
+	GitEmail string    `json:"git_email,omitempty"`
+	Model    string    `json:"model,omitempty"`
+	Agent    string    `json:"agent"`
+	Day      time.Time `json:"day"`
+	Events   int64     `json:"events"`
 }
 
 // Prices are monthly list prices in USD cents, used when vendor data doesn't

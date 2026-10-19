@@ -18,15 +18,16 @@ import (
 // and runaway cost (internal/controlplane/spend). Vendor admin keys are
 // sealed like Slack credentials (secrets.go) and never returned: the console
 // sees "configured" and the key's last 4 characters. Syncs run on demand
-// and nightly (runSpendSyncs); CSV exports are the fallback without a key.
+// and on schedule (runSpendSyncs, per connector next_poll_at under an
+// advisory lock); CSV exports are the fallback without a key. Who is who
+// comes from the people mapping (people.go).
 
 const (
 	spendWindowDays   = 30
 	spendSyncTimeout  = 10 * time.Minute
 	spendSyncDefault  = 24 * time.Hour
+	spendPollTick     = time.Minute
 	spendMaxCSVBytes  = 20 << 20
-	spendMaxPeople    = 5000
-	spendMaxAliases   = 50
 	spendMaxPriceCent = 1_000_000 // $10,000 a seat per month
 )
 
@@ -41,6 +42,8 @@ type connectorView struct {
 	Settings   map[string]string `json:"settings"`
 	SyncStatus string            `json:"sync_status"`
 	LastSyncAt *time.Time        `json:"last_sync_at,omitempty"`
+	NextPollAt *time.Time        `json:"next_poll_at,omitempty"`
+	Failures   int               `json:"failures,omitempty"`
 	LastError  string            `json:"last_error,omitempty"`
 	LastCounts map[string]int    `json:"last_counts,omitempty"`
 	UpdatedBy  string            `json:"updated_by,omitempty"`
@@ -72,6 +75,11 @@ func (s *Server) pricingLeaks(w http.ResponseWriter, r *http.Request, p Principa
 		s.fail(w, err)
 		return
 	}
+	people, err := s.Store.SpendPeople(ctx, p.Tenant)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	views := map[string]*connectorView{}
 	for _, v := range spend.Vendors {
 		views[v] = &connectorView{Vendor: v, Label: spend.VendorLabel[v], Settings: map[string]string{}}
@@ -84,6 +92,7 @@ func (s *Server) pricingLeaks(w http.ResponseWriter, r *http.Request, p Principa
 		}
 		cv.Configured, cv.KeyHint, cv.Settings, cv.SyncStatus = c.Configured(), c.SecretHint, c.Settings, c.SyncStatus
 		cv.LastSyncAt, cv.LastError, cv.LastCounts, cv.UpdatedBy = c.LastSyncAt, c.LastError, c.LastCounts, c.UpdatedBy
+		cv.NextPollAt, cv.Failures = c.NextPollAt, c.Failures
 		if c.Configured() && c.LastSyncAt != nil {
 			connected[c.Vendor] = true
 		}
@@ -105,7 +114,7 @@ func (s *Server) pricingLeaks(w http.ResponseWriter, r *http.Request, p Principa
 		list = append(list, *views[v])
 	}
 	rep := spend.Analyze(spend.Input{Now: now, WindowDays: spendWindowDays, Seats: seats, Usage: usage, Machines: machines, Obs: obs,
-		People: set.People, Prices: spend.DefaultPrices.Merge(set.Prices), Connected: keys(connected)})
+		People: people, Prices: spend.DefaultPrices.Merge(set.Prices), Connected: keys(connected)})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"report": rep, "connectors": list, "settings": set, "default_prices": spend.DefaultPrices,
 		"secrets_available": len(s.SecretsKey) == 32,
@@ -247,29 +256,48 @@ func (s *Server) syncSpendNow(w http.ResponseWriter, r *http.Request, p Principa
 	writeJSON(w, http.StatusAccepted, map[string]any{"started": started, "already_running": running})
 }
 
-// startSpendSync claims a vendor's sync and runs it in the background.
+func (s *Server) spendEvery() time.Duration {
+	if s.SpendSyncEvery > 0 {
+		return s.SpendSyncEvery
+	}
+	return spendSyncDefault
+}
+
+// startSpendSync polls a vendor now, in the background, unless a poll of it
+// is already running (here or on another control plane instance).
 func (s *Server) startSpendSync(tenant, vendor string) bool {
-	c, ok, err := s.Store.ClaimSpendSync(context.Background(), tenant, vendor)
+	release, ok, err := s.Store.SpendPollLock(context.Background(), tenant, vendor)
 	if err != nil {
-		s.Logf("pricing leaks: claim %s/%s: %v", tenant, vendor, err)
+		s.Logf("pricing leaks: lock %s/%s: %v", tenant, vendor, err)
 		return false
 	}
 	if !ok {
 		return false
 	}
-	go s.syncSpend(context.Background(), c)
+	c, err := s.Store.StartSpendSync(context.Background(), tenant, vendor, false)
+	if err != nil {
+		release()
+		if !errors.Is(err, store.ErrNotFound) {
+			s.Logf("pricing leaks: start %s/%s: %v", tenant, vendor, err)
+		}
+		return false
+	}
+	go func() {
+		defer release()
+		s.syncSpend(context.Background(), c)
+	}()
 	return true
 }
 
-// syncSpend pulls one vendor's last 30 days and stores them. The connector
-// must already be claimed (sync_status = running).
+// syncSpend pulls one vendor's last 30 days and stores them, holding the
+// connector's poll lock (sync_status = running).
 func (s *Server) syncSpend(ctx context.Context, c store.SpendConnector) {
 	ctx, cancel := context.WithTimeout(ctx, spendSyncTimeout)
 	defer cancel()
 	fail := func(err error) {
 		msg := clip(err.Error(), 500)
 		s.Logf("pricing leaks: sync %s/%s failed: %s", c.Tenant, c.Vendor, msg)
-		if err := s.Store.FailSpendSync(context.Background(), c.Tenant, c.Vendor, msg); err != nil {
+		if err := s.Store.FailSpendSync(context.Background(), c.Tenant, c.Vendor, msg, s.spendEvery()); err != nil {
 			s.Logf("pricing leaks: record failure: %v", err)
 		}
 	}
@@ -290,31 +318,31 @@ func (s *Server) syncSpend(ctx context.Context, c store.SpendConnector) {
 		fail(err)
 		return
 	}
-	if err := s.Store.FinishSpendSync(context.Background(), c.Tenant, c.Vendor, from, to, pull); err != nil {
+	if err := s.Store.FinishSpendSync(context.Background(), c.Tenant, c.Vendor, from, to, pull, s.spendEvery()); err != nil {
 		fail(fmt.Errorf("storing the results: %v", err))
 		return
 	}
 	s.Logf("pricing leaks: synced %s/%s: %d seats, %d usage rows", c.Tenant, c.Vendor, len(pull.Seats), len(pull.Usage))
 }
 
-// runSpendSyncs is the nightly sync: every hour it syncs connectors whose
-// last attempt is older than SpendSyncEvery (default 24h), one at a time.
+// runSpendSyncs is the vendor poller: every minute it polls connectors whose
+// next_poll_at is due (SpendSyncEvery after the last good poll, default 24h;
+// failures retry after 15 min, doubling), each under its tenant+vendor
+// advisory lock, so control plane instances share the work without
+// polling a vendor twice.
 func (s *Server) runSpendSyncs(ctx context.Context) {
-	every := s.SpendSyncEvery
-	if every <= 0 {
-		every = spendSyncDefault
-	}
-	tick := time.NewTicker(time.Hour)
+	tick := time.NewTicker(spendPollTick)
 	defer tick.Stop()
 	for {
-		due, err := s.Store.DueSpendSyncs(ctx, every)
-		if err != nil {
-			s.Logf("pricing leaks: due syncs: %v", err)
+		due, err := s.Store.DueSpendPolls(ctx, 20)
+		if err != nil && ctx.Err() == nil {
+			s.Logf("pricing leaks: due polls: %v", err)
 		}
 		for _, c := range due {
-			if c, ok, err := s.Store.ClaimSpendSync(ctx, c.Tenant, c.Vendor); err == nil && ok {
-				s.syncSpend(ctx, c)
+			if ctx.Err() != nil {
+				return
 			}
+			s.pollSpend(ctx, c.Tenant, c.Vendor)
 		}
 		select {
 		case <-ctx.Done():
@@ -322,6 +350,21 @@ func (s *Server) runSpendSyncs(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+// pollSpend runs one scheduled poll if it is still due once the lock is held
+// (another instance may have just done it).
+func (s *Server) pollSpend(ctx context.Context, tenant, vendor string) {
+	release, ok, err := s.Store.SpendPollLock(ctx, tenant, vendor)
+	if err != nil || !ok {
+		return
+	}
+	defer release()
+	c, err := s.Store.StartSpendSync(ctx, tenant, vendor, true)
+	if err != nil {
+		return
+	}
+	s.syncSpend(ctx, c)
 }
 
 // importSpendCSV stores a vendor's CSV export ({"vendor", "kind": "seats" |
@@ -367,46 +410,10 @@ func (s *Server) clearSpendCSV(w http.ResponseWriter, r *http.Request, p Princip
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// cleanSpendSettings validates the people directory and price overrides.
+// cleanSpendSettings validates the price overrides (people are managed with
+// /api/v1/people, people.go).
 func cleanSpendSettings(in store.SpendSettings) (store.SpendSettings, error) {
-	out := store.SpendSettings{People: []spend.Person{}, Prices: spend.Prices{Seat: map[string]int64{}, Personal: map[string]int64{}}}
-	if len(in.People) > spendMaxPeople {
-		return out, fmt.Errorf("at most %d people", spendMaxPeople)
-	}
-	seen := map[string]bool{}
-	for _, p := range in.People {
-		email := strings.ToLower(strings.TrimSpace(p.Email))
-		if email == "" {
-			continue
-		}
-		if !strings.Contains(email, "@") || len(email) > 254 || strings.ContainsAny(email, " \t,;") {
-			return out, fmt.Errorf("%q isn't an email address", p.Email)
-		}
-		if seen[email] {
-			return out, fmt.Errorf("%s is listed twice", email)
-		}
-		seen[email] = true
-		var aliases []string
-		dup := map[string]bool{}
-		for _, a := range p.Aliases {
-			a = strings.TrimSpace(a)
-			if a == "" || dup[strings.ToLower(a)] {
-				continue
-			}
-			if len(a) > 200 {
-				return out, fmt.Errorf("alias %q is too long", clip(a, 40))
-			}
-			dup[strings.ToLower(a)] = true
-			aliases = append(aliases, a)
-		}
-		if len(aliases) > spendMaxAliases {
-			return out, fmt.Errorf("%s has more than %d aliases", email, spendMaxAliases)
-		}
-		if aliases == nil {
-			aliases = []string{}
-		}
-		out.People = append(out.People, spend.Person{Email: email, Name: clip(strings.TrimSpace(p.Name), 120), Aliases: aliases})
-	}
+	out := store.SpendSettings{Prices: spend.Prices{Seat: map[string]int64{}, Personal: map[string]int64{}}}
 	price := func(dst map[string]int64, src map[string]int64, what string) error {
 		for k, v := range src {
 			k = strings.ToLower(strings.TrimSpace(k))
@@ -433,7 +440,7 @@ func cleanSpendSettings(in store.SpendSettings) (store.SpendSettings, error) {
 func (s *Server) putSpendSettings(w http.ResponseWriter, r *http.Request, p Principal) {
 	var req store.SpendSettings
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "body must be {\"people\": [{\"email\", \"name\", \"aliases\": []}], \"prices\": {\"seat\": {}, \"personal\": {}}}")
+		writeErr(w, http.StatusBadRequest, "body must be {\"prices\": {\"seat\": {}, \"personal\": {}}}")
 		return
 	}
 	c, err := cleanSpendSettings(req)
@@ -445,7 +452,7 @@ func (s *Server) putSpendSettings(w http.ResponseWriter, r *http.Request, p Prin
 		s.fail(w, err)
 		return
 	}
-	s.audit(r, p, "pricing_leaks.settings.update", "pricing_leaks", map[string]any{"people": len(c.People), "seat_prices": c.Prices.Seat, "personal_prices": c.Prices.Personal})
+	s.audit(r, p, "pricing_leaks.settings.update", "pricing_leaks", map[string]any{"seat_prices": c.Prices.Seat, "personal_prices": c.Prices.Personal})
 	c, err = s.Store.GetSpendSettings(r.Context(), p.Tenant)
 	if err != nil {
 		s.fail(w, err)
