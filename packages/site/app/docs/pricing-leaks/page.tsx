@@ -93,7 +93,7 @@ export default function PricingLeaksDocs() {
       <DocSection>
         <H2 n={5}>Runaway cost alerts</H2>
         <p className="doc-p">
-          A runaway cost is announced as soon as it shows up in the vendor data, by email and to webhooks subscribed to <code>pricing_leaks.runaway_cost</code>, then weekly while it lasts. If it stops and starts again, that is a new alert. Choose the recipients or turn alerts off under Alerts on the Pricing Leaks page; by default they go to your approval recipients. Every alert is recorded in the audit trail with where it was sent.
+          Vendor data syncs once a day, so a runaway cost is flagged after the next daily sync, within a day of showing up in the vendor data. It is announced by email and to webhooks subscribed to <code>pricing_leaks.runaway_cost</code> (a webhook only gets it when you pick that event), then weekly while it lasts. If it stops and starts again, that is a new alert. Choose the recipients or turn alerts off under Alerts on the Pricing Leaks page; by default they go to your approval recipients. Every alert is recorded in the audit trail with where it was sent.
         </p>
         <CodeBlock title="webhook · pricing_leaks.runaway_cost">{`{
   "id": "…",

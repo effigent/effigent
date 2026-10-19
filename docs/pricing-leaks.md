@@ -162,7 +162,9 @@ wins over `vendor`.
   `notify_result` and the audit entry `pricing_leaks.alert` (actor via `system`). With alerts off
   (`settings.alerts.runaway_cost: false`) the leak is still claimed and recorded `{"alerts":"off"}`
   and nothing is sent, so turning alerts back on doesn't replay old leaks. `review_url` =
-  `EFFIGENT_CONSOLE_ORIGIN/pricing-leaks?leak=<id>`, which highlights the leak.
+  `EFFIGENT_CONSOLE_ORIGIN/pricing-leaks?leak=<id>`, which highlights the leak. Not real time:
+  vendor data arrives with the daily sync (`SpendSyncEvery`), so a runaway cost is flagged after
+  the next sync, within a day (a CSV import is rolled up within a minute).
 - `GET /pricing-leaks/alerts?limit=` → `{alerts (the runaway cost log, open and resolved, with
   notified_at / notify_result), runaway_cost, emails, default_emails, email_available, webhook_event}`.
 

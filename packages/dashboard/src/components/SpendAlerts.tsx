@@ -24,7 +24,7 @@ function Channels({ a }: { a: ApiSpendAlert }) {
   return parts.length ? <>{parts}</> : <span className="muted" title="Webhooks subscribed to the event still got it">no email or Slack recipients</span>;
 }
 
-/** Pricing Leaks → Alerts: runaway cost is announced as it appears (webhook event, email, Slack). */
+/** Pricing Leaks → Alerts: runaway cost is announced after the daily vendor sync finds it (webhook event, email, Slack). */
 export function SpendAlerts({ ro }: { ro: boolean }) {
   const { api } = useLive();
   const { dispatch } = useStore();
@@ -51,7 +51,7 @@ export function SpendAlerts({ ro }: { ro: boolean }) {
   return (
     <Card>
       <CardHead info={HELP.spendAlerts} title="Alerts"
-        sub="A runaway cost is announced when it appears, and weekly while it lasts. The other leaks stay on this page.">
+        sub="A runaway cost is flagged after the next daily vendor sync, within a day, and announced weekly while it lasts. The other leaks stay on this page.">
         {data && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
             {!ro && <Switch on={data.runaway_cost} label="Runaway cost alerts" onChange={(v) => void save(v, emails)} />}
