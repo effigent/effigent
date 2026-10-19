@@ -94,7 +94,8 @@ export const INSTALL_CODE: Record<string, string> = {
 };
 
 /** Agents effigentd recognises out of the box (internal/endpoint/policy/default.yaml).
- *  Drives the "recognised out of the box" count — keep it to that file. */
+ *  Drives the "recognised out of the box" count — keep it to that file. hermes is
+ *  left out until its matcher there is verified (see the comment on it). */
 export const supportedAgents = ['Claude Code', 'Codex', 'Cursor', 'Gemini CLI', 'Aider', 'OpenCode', 'Goose'];
 /** Agents shown in the "works with" strips: the recognised set, GitHub Copilot
  *  (Pricing Leaks connector) and any custom agent added in policy. */

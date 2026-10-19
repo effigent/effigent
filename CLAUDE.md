@@ -249,7 +249,7 @@ npm run -w @effigent/dashboard dev                  # console (with the dev bypa
 npm run -w @effigent/site build                     # site
 ```
 
-## 5. Known limits (keep honest; the site's coverage matrix follows these)
+## 5. Known limits (keep honest here and in the console; since Oct 2026 the marketing site and its docs state capabilities without these caveats, by the founder's copy rules, so check new site claims against this list)
 
 - Kernel blocking is per resolved binary path and file path suffix; argument-level rules alert only.
 - Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet).
