@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -21,10 +20,7 @@ import (
 )
 
 func TestApprovalLinks(t *testing.T) {
-	dbURL := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {

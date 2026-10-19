@@ -22,10 +22,7 @@ import (
 //
 //	EFFIGENT_TEST_DATABASE_URL=postgres://effigent:effigent@localhost:5433/effigent_test go test ./internal/controlplane/server/
 func TestCentralPolicyEndToEnd(t *testing.T) {
-	url := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	url := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, url)
 	if err != nil {

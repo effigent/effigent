@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"slices"
 	"testing"
 	"time"
@@ -23,13 +22,7 @@ import (
 // per episode (webhook + audit), not again while it lasts, again after it
 // went away and came back, and never while alerts are off.
 func TestPricingLeaksRollupAndAlerts(t *testing.T) {
-	dbURL := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if dbURL == "" {
-		dbURL = *testDBFlag
-	}
-	if dbURL == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {

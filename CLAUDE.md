@@ -274,7 +274,7 @@ go run ./cmd/effigentd --state-dir ~/.effigent
 ./test/endpoint/e2e.sh                              # endpoint e2e (standalone, not enrolled)
 ./test/claude/run.sh                                # real Claude Code (needs ~/.effigent-claude.env)
 ./test/hooks/approval.sh                            # approval flow: real hook process -> hooks-mode daemon -> local control plane
-go test ./internal/controlplane/server/ -run PricingLeaks -args -effigent.db=postgres://effigent:effigent@localhost:5433/effigent  # DB tests (or EFFIGENT_TEST_DATABASE_URL)
+go test ./internal/controlplane/server/ -args -effigent.db=postgres://effigent:effigent@localhost:5433/effigent  # all DB tests (or EFFIGENT_TEST_DATABASE_URL)
 # console against a local control plane (dev only): add to the dev command
 #   NEXT_PUBLIC_EFFIGENT_API_URL=http://127.0.0.1:8080 NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN=devadmin NEXT_PUBLIC_EFFIGENT_DEV_TENANT=org:dev
 #   (control plane: EFFIGENT_ADMIN_TENANTS=org:dev EFFIGENT_CONSOLE_ORIGIN=http://localhost:3000)

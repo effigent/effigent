@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -28,10 +27,7 @@ type received struct {
 }
 
 func TestIntegrations(t *testing.T) {
-	url := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	url := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, url)
 	if err != nil {

@@ -37,10 +37,7 @@ func (s *slackRecorder) count() int { s.mu.Lock(); defer s.mu.Unlock(); return l
 
 // TestApprovalFlow needs a throwaway Postgres database (see TestCentralPolicyEndToEnd).
 func TestApprovalFlow(t *testing.T) {
-	url := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	url := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, url)
 	if err != nil {

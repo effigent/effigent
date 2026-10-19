@@ -17,10 +17,7 @@ import (
 
 // TestAuditPaging needs a throwaway Postgres database (see TestCentralPolicyEndToEnd).
 func TestAuditPaging(t *testing.T) {
-	dsn := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, dsn)
 	if err != nil {

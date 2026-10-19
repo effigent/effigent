@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -36,10 +35,7 @@ agents:
 `
 
 func TestExceptionsAPI(t *testing.T) {
-	url := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	url := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, url)
 	if err != nil {

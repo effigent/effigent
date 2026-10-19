@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -52,10 +51,7 @@ func (m *memArchive) PresignGet(_ context.Context, key, filename string, _ time.
 
 // TestEventsPagingIntegrityRetention needs a throwaway Postgres database (see TestCentralPolicyEndToEnd).
 func TestEventsPagingIntegrityRetention(t *testing.T) {
-	dbURL := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {

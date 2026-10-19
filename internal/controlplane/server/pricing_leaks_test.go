@@ -20,8 +20,20 @@ import (
 )
 
 // -effigent.db is EFFIGENT_TEST_DATABASE_URL for runners that can't set
-// environment variables: go test ./internal/controlplane/server/ -run PricingLeaks -args -effigent.db=postgres://…
+// environment variables: go test ./internal/controlplane/server/ -args -effigent.db=postgres://…
 var testDBFlag = flag.String("effigent.db", "", "test database URL (default $EFFIGENT_TEST_DATABASE_URL)")
+
+// testDatabaseURL is the database the DB-backed tests use, or skips the test.
+func testDatabaseURL(t *testing.T) string {
+	t.Helper()
+	if u := os.Getenv("EFFIGENT_TEST_DATABASE_URL"); u != "" {
+		return u
+	}
+	if *testDBFlag == "" {
+		t.Skip("EFFIGENT_TEST_DATABASE_URL (or -args -effigent.db=…) not set")
+	}
+	return *testDBFlag
+}
 
 func TestCleanSpendSettings(t *testing.T) {
 	bad := []store.SpendSettings{
@@ -47,13 +59,7 @@ func TestCleanSpendSettings(t *testing.T) {
 
 // TestPricingLeaksEndToEnd needs a throwaway Postgres database (see TestCentralPolicyEndToEnd).
 func TestPricingLeaksEndToEnd(t *testing.T) {
-	dbURL := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if dbURL == "" {
-		dbURL = *testDBFlag
-	}
-	if dbURL == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {

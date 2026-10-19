@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -105,10 +104,7 @@ func slackUserJSON(id, name, email string, extra map[string]any) map[string]any 
 }
 
 func TestSlackApprover(t *testing.T) {
-	dbURL := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {
