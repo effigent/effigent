@@ -41,6 +41,10 @@ type Server struct {
 	// Directory maps a Slack approver's email to their console role (Clerk);
 	// nil = Slack clicks are refused unless the workspace allows any Slack member.
 	Directory Directory
+	// SpendBaseURLs points Pricing Leaks vendor clients elsewhere (tests);
+	// SpendSyncEvery is how often connectors sync on their own (default 24h).
+	SpendBaseURLs  map[string]string
+	SpendSyncEvery time.Duration
 
 	limits         *limits
 	whOnce         sync.Once
@@ -76,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 					s.runRetention(context.Background())
 				}
 			}()
+			go s.runSpendSyncs(context.Background()) // Pricing Leaks: nightly vendor syncs
 		})
 		if s.Auth != nil && s.Auth.APIKeys == nil {
 			s.Auth.APIKeys = func(ctx context.Context, secret string) (string, string, []string, error) {
@@ -136,6 +141,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/exceptions/options", s.console(read, s.exceptionOptions))
 	mux.HandleFunc("POST /api/v1/exceptions", s.scoped("policy", write, s.createException))
 	mux.HandleFunc("DELETE /api/v1/exceptions/{id}", s.scoped("policy", write, s.deleteException))
+	// Pricing Leaks: AI tool spend joined with what effigentd sees. Vendor keys
+	// and CSV imports are managed by people only.
+	mux.HandleFunc("GET /api/v1/pricing-leaks", s.console(read, s.pricingLeaks))
+	mux.HandleFunc("PUT /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.putSpendConnector))
+	mux.HandleFunc("DELETE /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.deleteSpendConnector))
+	mux.HandleFunc("POST /api/v1/pricing-leaks/sync", s.console(write, s.syncSpendNow))
+	mux.HandleFunc("POST /api/v1/pricing-leaks/import", s.console(write, s.importSpendCSV))
+	mux.HandleFunc("DELETE /api/v1/pricing-leaks/import/{vendor}", s.console(write, s.clearSpendCSV))
+	mux.HandleFunc("PUT /api/v1/pricing-leaks/settings", s.console(write, s.putSpendSettings))
 	// integrations: API keys and webhooks are managed by people only
 	mux.HandleFunc("GET /api/v1/api-keys", s.console(read, s.listAPIKeys))
 	mux.HandleFunc("POST /api/v1/api-keys", s.console(write, s.createAPIKey))

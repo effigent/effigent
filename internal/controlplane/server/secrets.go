@@ -11,12 +11,15 @@ import (
 )
 
 // Tenant secrets the control plane must use later (a Slack app's bot token
-// and signing secret) are sealed with AES-256-GCM under EFFIGENT_SECRETS_KEY,
+// and signing secret, AI vendors' admin API keys for Pricing Leaks) are sealed with AES-256-GCM under EFFIGENT_SECRETS_KEY,
 // bound to the tenant and the field so a sealed value can't be moved to
 // another tenant. The key is separate from the policy signing key so either
 // can be rotated without the other; losing it means reconnecting Slack.
 
-var errNoSecretsKey = errors.New("this control plane has no EFFIGENT_SECRETS_KEY, so it can't store Slack credentials")
+var (
+	errNoSecretsKey      = errors.New("this control plane has no EFFIGENT_SECRETS_KEY, so it can't store Slack credentials")
+	errNoSecretsKeySpend = errors.New("this control plane has no EFFIGENT_SECRETS_KEY, so it can't store vendor API keys; use CSV import instead")
+)
 
 // SecretsKeyFrom turns the EFFIGENT_SECRETS_KEY value (at least 32
 // characters, e.g. `openssl rand -base64 48`) into an AES-256 key.
