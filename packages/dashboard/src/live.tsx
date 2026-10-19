@@ -208,6 +208,11 @@ const devEmptyApi: Api = {
     if (p === '/pricing-leaks/connectors') return Promise.resolve({
       connectors: (['cursor', 'anthropic', 'copilot', 'openai'] as const).map((v) => ({ vendor: v, label: v, configured: false, settings: {}, sync_status: '', csv_seats: 0, csv_usage_rows: 0 })),
       secrets_available: false } as T);
+    if (p === '/pricing-leaks/metrics') {
+      const to = new Date().toISOString().slice(0, 10);
+      return Promise.resolve({ days: 90, from: to, to, usage: [], activity: [], report: [], leaks: [] } as T);
+    }
+    if (p === '/pricing-leaks/alerts') return Promise.resolve({ alerts: [], runaway_cost: true, emails: [], default_emails: [], email_available: false, webhook_event: 'pricing_leaks.runaway_cost' } as T);
     if (p === '/people') return Promise.resolve({ people: [], suggestions: [], sightings: [], unattributed: [], kinds: ['os_user', 'git_email', 'host', 'github', 'email', 'api_key'], window_days: 30 } as T);
     if (p === '/pricing-leaks') return Promise.resolve({
       report: { generated_at: new Date().toISOString(), window_days: 30, vendors: [], total_monthly_cents: 0, leaks: [], total_savings_cents: 0, total_at_risk_cents: 0, people: [], unattributed: [] },

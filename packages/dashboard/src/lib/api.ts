@@ -199,13 +199,37 @@ export interface ApiSpendConnector {
 /** GET /pricing-leaks/connectors (Settings → AI vendors). */
 export interface ApiSpendConnectors { connectors: ApiSpendConnector[]; secrets_available: boolean }
 export interface ApiSpendPrices { seat: Record<string, number>; personal: Record<string, number> }
-export interface ApiSpendSettings { prices: ApiSpendPrices; updated_by?: string; updated_at?: string }
+/** Runaway cost alerts: on unless runaway_cost is false; emails empty = the approval notification recipients. */
+export interface ApiSpendAlertSettings { runaway_cost?: boolean; emails: string[] }
+export interface ApiSpendSettings { prices: ApiSpendPrices; alerts?: ApiSpendAlertSettings; updated_by?: string; updated_at?: string }
 export interface ApiPricingLeaks {
   report: ApiSpendReport;
   connectors: ApiSpendConnector[];
   settings: ApiSpendSettings;
   default_prices: ApiSpendPrices;
   secrets_available: boolean; // EFFIGENT_SECRETS_KEY is set: vendor keys can be stored
+  first_seen?: Record<string, string>; // leak id -> when it was first seen (the rollup's leak log)
+  email_available?: boolean; // this control plane sends email
+}
+/** GET /pricing-leaks/metrics: Spend over time. Days are UTC dates (RFC 3339 midnight). */
+export interface ApiUsagePoint { day: string; vendor: string; cost_cents: number; requests: number; tokens: number; people: number; estimated?: boolean }
+export interface ApiActivityPoint { day: string; vendor: string; events: number; machines: number; agents: string[] }
+export interface ApiSpendReportDay {
+  day: string; vendor: string; seats: number; active_seats: number; seat_cents: number; usage_cents: number; monthly_cents: number; estimated?: boolean; connected: boolean;
+}
+export interface ApiSpendLeakDay { day: string; type: ApiLeakType; vendor: string; leaks: number; savings_cents: number; at_risk_cents: number }
+export interface ApiSpendMetrics {
+  days: number; from: string; to: string;
+  usage: ApiUsagePoint[]; activity: ApiActivityPoint[]; report: ApiSpendReportDay[]; leaks: ApiSpendLeakDay[];
+}
+/** A logged leak (GET /pricing-leaks/alerts lists the runaway cost ones and where each alert went). */
+export interface ApiSpendAlert {
+  id: string; type: ApiLeakType; vendor: string; person: string; name?: string; title: string; evidence: string[]; confidence: string;
+  monthly_savings_cents: number; at_risk_cents: number; first_seen_at: string; last_seen_at: string;
+  resolved_at?: string; notified_at?: string; notify_result?: Record<string, string>;
+}
+export interface ApiSpendAlerts {
+  alerts: ApiSpendAlert[]; runaway_cost: boolean; emails: string[]; default_emails: string[]; email_available: boolean; webhook_event: string;
 }
 /** People (GET /people): who is who, by work email, and the identities each goes by. */
 export type ApiIdentityKind = 'os_user' | 'git_email' | 'host' | 'github' | 'email' | 'api_key';

@@ -8,6 +8,8 @@ import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { ApiError, apiErrorText, type ApiLeak, type ApiLeakType, type ApiPricingLeaks, type ApiSpendConnector, type ApiSpendPrices } from '@/lib/api.ts';
 import { Card, CardHead, Empty, Loading, PageGuide, PageHead, ReadOnlyNote, Seg } from '@/components/ui.tsx';
+import { SpendTrend } from '@/components/SpendTrend.tsx';
+import { SpendAlerts } from '@/components/SpendAlerts.tsx';
 
 const TYPES: { id: ApiLeakType; label: string; icon: string; badge: string; what: string }[] = [
   { id: 'runaway_cost', label: 'Runaway cost', icon: 'burst', badge: 'b-red', what: 'Far above the team’s median, or a sudden daily spike (often an agent looping in CI)' },
@@ -43,6 +45,9 @@ export function PricingLeaks({ dev }: { dev: boolean }) {
   const [data, setData] = useState<ApiPricingLeaks | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | ApiLeakType>('all');
+  // ?leak=<id>: opened from an alert (email, Slack, webhook review_url)
+  // (the table renders after the data loads, so reading the URL here can't mismatch the server HTML)
+  const [focus] = useState<string | null>(() => (typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('leak')));
   const ro = !canWrite;
 
   const load = useCallback(() => api.get<ApiPricingLeaks>('/pricing-leaks')
@@ -71,6 +76,11 @@ export function PricingLeaks({ dev }: { dev: boolean }) {
   const anyData = (rep?.vendors ?? []).length > 0;
   const maxMonthly = Math.max(1, ...(rep?.vendors ?? []).map((v) => v.monthly_cents));
   const savings = (t: ApiLeakType) => leaks.filter((l) => l.type === t).reduce((s, l) => s + l.monthly_savings_cents, 0);
+  const focused = !!focus && leaks.some((l) => l.id === focus);
+  useEffect(() => {
+    if (focused) document.getElementById(`leak-${focus}`)?.scrollIntoView({ block: 'center' });
+  }, [focused, focus]);
+  const since = (id: string) => data?.first_seen?.[id];
 
   return (
     <div className="page">
@@ -124,11 +134,12 @@ export function PricingLeaks({ dev }: { dev: boolean }) {
                   <thead><tr><th>Leak</th><th>Who</th><th>Evidence</th><th className="num">Saves / month</th></tr></thead>
                   <tbody>
                     {shown.map((l) => (
-                      <tr key={l.id}>
+                      <tr key={l.id} id={`leak-${l.id}`} style={l.id === focus ? { background: 'var(--accent-bg)' } : undefined}>
                         <td style={{ verticalAlign: 'top', minWidth: 200 }}>
                           <span className={`badge ${TYPE[l.type]?.badge ?? 'b-muted'}`}><Ic n={TYPE[l.type]?.icon ?? 'alert'} size={12} /> {TYPE[l.type]?.label ?? l.type}</span>
+                          {data.first_seen && isNew(since(l.id), rep!.generated_at) && <span className="badge b-blue" style={{ marginLeft: 6 }}>new</span>}
                           <div className="cell-main" style={{ marginTop: 6, whiteSpace: 'normal' }}>{l.title}</div>
-                          <div className="muted" style={{ fontSize: 12 }}>{l.confidence} confidence</div>
+                          <div className="muted" style={{ fontSize: 12 }}>{l.confidence} confidence{since(l.id) && <> · since {new Date(since(l.id)!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</>}</div>
                         </td>
                         <td style={{ verticalAlign: 'top', maxWidth: 220 }}><Who leak={l} /></td>
                         <td style={{ verticalAlign: 'top' }}>
@@ -177,12 +188,19 @@ export function PricingLeaks({ dev }: { dev: boolean }) {
             )}
           </Card>
 
+          <SpendTrend />
+          <SpendAlerts ro={ro} />
           <Prices key={data.settings.updated_at ?? 'none'} prices={data.settings.prices} defaults={data.default_prices} ro={ro} onSaved={load} onError={setErr} />
           {dev && !fixture && <div className="muted" style={{ fontSize: 12.5 }}>Dev bypass: point the console at a local control plane to see real data.</div>}
         </>
       )}
     </div>
   );
+}
+
+/** First seen in the last day (or not rolled up yet: just found). */
+function isNew(firstSeen: string | undefined, now: string) {
+  return !firstSeen || Date.parse(now) - Date.parse(firstSeen) < 86_400_000;
 }
 
 function connectedNote(cs: ApiSpendConnector[]) {
