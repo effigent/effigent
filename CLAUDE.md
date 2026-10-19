@@ -16,7 +16,7 @@ Keep this file current when architecture, data model or deployment change.
 | `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync, `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork). Subcommands: `enroll`, `run` (zero-gap launcher). | Linux host next to Tetragon (dev: Docker Desktop VM) |
 | `cmd/effigent-cp`, `internal/controlplane/*` | Control plane (Go): `store/` Postgres (schema `cp`, embedded migrations tracked in `cp.schema_migrations`), `server/` endpoint protocol `/ep/v1/*` + console API `/api/v1/*`, `compile/` central policies per machine, `spend/` Pricing Leaks (see 2d). Image: `Dockerfile.cp`. | AWS App Runner `effigent-cp` (628713530358, us-east-1) at https://api.effigent.ai — redeploy with `AWS_PROFILE=effigent deploy/aws/deploy-cp.sh` |
 | `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
-| `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). No sample data by default: pages without a backend (Approvals, Allow/Deny Lists, Identity) show "Coming soon" empty states; the Agent Graph is built client-side from real events (`src/lib/live-graph.ts`). **Demo Mode** (Settings / user menu; localStorage `effigent.demoMode`) swaps in a sample workspace from `src/lib/fixture-api.ts` on every page and never calls the real API. | Vercel, app.effigent.ai |
+| `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). No sample data by default: pages without a backend (Allow/Deny Lists) show "Coming soon" empty states; the Agent Graph is built client-side from real events (`src/lib/live-graph.ts`). **Demo Mode** (Settings / user menu; localStorage `effigent.demoMode`) swaps in a sample workspace from `src/lib/fixture-api.ts` on every page and never calls the real API. | Vercel, app.effigent.ai |
 | `packages/site` | Marketing site + docs, Next.js static export. | S3 + CloudFront, effigent.ai |
 | `test/endpoint` | Endpoint e2e against Tetragon (37 checks). On a Mac with effigentd installed run `PORT=7787 ./test/endpoint/e2e.sh` (the installed daemon holds 7777). | Docker Desktop |
 | `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
@@ -201,19 +201,32 @@ Full write-up: `docs/pricing-leaks.md`.
   (People directory + price overrides). No secrets key → keys refused (503), CSV still works.
 - Sync: on saving a key, `POST /api/v1/pricing-leaks/sync`, and hourly checks for connectors
   older than `SpendSyncEvery` (24h). Claimed atomically (`sync_status`), last 30 days, one tx.
-- Identity: a machine's person = `cp.endpoints.owner`, else a People alias for its hostname,
-  else for its only OS user (from approvals); vendor identities are email (Copilot: GitHub
-  login, Anthropic API usage: key name). Unmatched values stay `kind:value` and machines
-  without a person are listed as `unattributed`. effigentd's side is `cp.events` counted
-  per endpoint, agent and day (`spend.AgentVendor` maps agent names to vendors).
-- Console API (people only, `s.console`): `GET /api/v1/pricing-leaks`,
+- Identity (migration 010): effigentd events carry `os_user` (Tetragon uid → name on the host; the
+  hook's OS user), `git_email` (repo/global git config of the cwd, read from files), `session_id`,
+  `model`, `transcript_path` (hook payload) — `internal/endpoint/ident`, `hooks.Meta`. Ingest
+  upserts `cp.agent_activity_daily` (machine, agent, OS user, git email, model) in the batch's
+  transaction; Pricing Leaks reads it, never scans `cp.events`. People mapping `cp.people` +
+  `cp.person_identities` (`os_user` [`user@host`], `git_email`, `host`, `github`, `email`,
+  `api_key`; one owner per identity). Activity → person: mapped OS user, git email (mapped or a
+  known work email), machine owner, mapped hostname, else `host:<name>` (unattributed); leaks
+  carry `attribution`. `spend.Suggest` proposes mappings (never auto-applied). A host mapping
+  doesn't change `cp.endpoints.owner` (central policies compile against the owner).
+- Vendor poller: per connector `next_poll_at` / `failures`; `runSpendSyncs` ticks every minute,
+  each poll under a per tenant+vendor session advisory lock (`Store.SpendPollLock`, the
+  RetentionLock pattern) and re-checked as due under it; 15 min doubling backoff. Manual sync
+  shares the lock (`already_running`).
+- Console API (people only, `s.console`): `GET /api/v1/pricing-leaks`, `GET /pricing-leaks/connectors`,
   `PUT|DELETE /pricing-leaks/connectors/{vendor}`, `POST /pricing-leaks/sync`,
   `POST /pricing-leaks/import` (`{vendor, kind, csv}`, ≤ 20 MB), `DELETE /pricing-leaks/import/{vendor}`,
-  `PUT /pricing-leaks/settings`. Audit `pricing_leaks.*`. Console page `/pricing-leaks`
-  (Demo Mode data in `lib/pricing-leaks-fixture.ts`).
-- Not yet exercised against the live vendor APIs (unit tests use fakes from the documented
-  shapes; OpenAI's were written without its docs). Deploy order: control plane (migration 009)
-  → console.
+  `PUT /pricing-leaks/settings` (prices); `GET /api/v1/people`, `PUT|DELETE /people/{email}`,
+  `POST|DELETE /people/identities`. Audit `pricing_leaks.*`, `people.*`. Console: Monitor →
+  Pricing Leaks (`/pricing-leaks`), Workspace → People (`/identity`), Settings → AI vendors
+  (`components/SpendVendors.tsx`); Demo Mode data in `lib/pricing-leaks-fixture.ts`, `lib/people-fixture.ts`.
+- TODO / unverified: not yet exercised against the live vendor APIs (unit tests use fakes from
+  the documented shapes; OpenAI's were written without its docs); hook `os_user` is self-asserted;
+  Claude Code's PreToolUse may not send `model`; container uids aren't resolved. Not built yet:
+  spend rollup tables + metrics endpoints beyond the report, alerts (runaway cost → `s.emit` +
+  notify). Deploy order: control plane (migrations 009, 010) → console → effigentd release.
 
 ## 3. Auth
 
