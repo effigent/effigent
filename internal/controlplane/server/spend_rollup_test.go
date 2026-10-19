@@ -78,8 +78,8 @@ func TestPricingLeaksRollupAndAlerts(t *testing.T) {
 	}
 	// a webhook made without an event list gets the defaults: no runaway cost alerts
 	var plain webhookView
-	if code, raw := call("POST", "/webhooks", map[string]any{"name": "approvals", "url": hook.URL}, &plain); code != 201 ||
-		slices.Contains(plain.Events, spendAlertEvent) {
+	if code, raw := call("POST", "/webhooks", map[string]any{"name": "approvals", "url": hook.URL}, &plain); code != 201 || plain.ID == "" ||
+		!slices.Equal(plain.Events, defaultWebhookEvents) || slices.Contains(plain.Events, spendAlertEvent) {
 		t.Fatalf("default webhook: %d %s", code, raw)
 	}
 	if err := st.PutNotificationSettings(ctx, tenant, store.NotificationSettings{Emails: []string{"ops@acme.io"}}); err != nil {
