@@ -12,7 +12,7 @@ export function Nav({ cta = true }: { cta?: boolean }) {
       </Link>
       <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 36, fontSize: 14, color: 'var(--ink-2)', fontWeight: 500 }}>
         <Link href="/#how">How it works</Link>
-        <Link href="/#pricing-leaks">Pricing Leaks</Link>
+        <Link href="/docs/pricing-leaks">Pricing Leaks</Link>
         <Link href="/docs">Docs</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security</Link>
