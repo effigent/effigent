@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 const STATES: Array<[string, string]> = [
   ['paused', 'A require_approval rule matched. The hook holds the tool call; the agent waits.'],
-  ['approval_pending', 'The request is in the console inbox of the reviewers the rule names.'],
+  ['approval_pending', 'The request reaches the reviewers the rule names: in Slack, by email and in the console.'],
   ['approved / approval_denied', 'A reviewer decided, with an optional note. Both are recorded with their name.'],
   ['expired', 'Nobody decided within the rule’s TTL. The action does not run.'],
   ['cancelled', 'The session ended or was suspended while the request was open.'],
@@ -85,11 +85,11 @@ fp1:9c3e41d2…b07a
       </DocSection>
 
       <DocSection>
-        <H2>Limits worth knowing</H2>
+        <H2>Where approvals run</H2>
         <ul className="doc-list">
-          <li>Pausing needs a hook. Claude Code (PreToolUse) and Cursor (beforeShellExecution) have one. For agents without hooks, a <code>require_approval</code> rule is reported as observe-only on that endpoint. See <Link href="/docs/enforcement">coverage</Link>.</li>
-          <li>The hook sees the agent&apos;s own tool call, not what a script started by that call does later. Child processes are the kernel&apos;s job, and the kernel can block, not pause.</li>
-          <li>If the machine is offline, the request queues until it reconnects. The action stays paused and still expires on time.</li>
+          <li>Approvals run in the agent hooks of Claude Code, Codex and Gemini CLI, so the agent waits in its own session while the reviewer decides in Slack, by email or in the console.</li>
+          <li>The kernel layer treats approval lists as deny lists for everything the agent starts on its own, so a script can&apos;t run what the agent itself would need approval for. See <Link href="/docs/enforcement">Enforcement</Link>.</li>
+          <li>If the control plane can&apos;t be reached, a paused action is denied, never silently allowed. The agent gets a message telling it what to do instead.</li>
         </ul>
       </DocSection>
 

@@ -12,8 +12,8 @@ export function Nav({ cta = true }: { cta?: boolean }) {
       </Link>
       <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 36, fontSize: 14, color: 'var(--ink-2)', fontWeight: 500 }}>
         <Link href="/#how">How it works</Link>
+        <Link href="/#pricing-leaks">Pricing Leaks</Link>
         <Link href="/docs">Docs</Link>
-        <Link href="/docs/enforcement">Coverage</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security</Link>
       </div>
@@ -22,9 +22,9 @@ export function Nav({ cta = true }: { cta?: boolean }) {
           Log in
         </a>
         {cta && (
-          <Link href="/docs/quickstart" className="btn btn-primary" style={{ padding: '9px 18px', fontSize: 13.5, display: 'inline-block' }}>
-            Enroll a machine
-          </Link>
+          <a href={`${DASHBOARD_URL}/sign-up`} className="btn btn-primary" style={{ padding: '9px 18px', fontSize: 13.5, display: 'inline-block', whiteSpace: 'nowrap' }}>
+            Get started
+          </a>
         )}
       </div>
     </div>
@@ -34,10 +34,11 @@ export function Nav({ cta = true }: { cta?: boolean }) {
 export function Footer() {
   return (
     <div className="site-footer" style={{ borderTop: '1px solid var(--line)', padding: '28px 56px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, fontSize: 13, color: 'var(--ink-4)' }}>
-      <div>© 2026 Effigent — control plane for coding agents</div>
+      <div>© 2026 Effigent — the AI Agent Control Plane</div>
       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
         <Link href="/docs">Docs</Link>
         <Link href="/developers">Agent setup</Link>
+        <Link href="/docs/enforcement">Coverage</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/about">About</Link>
         <Link href="/security">Security</Link>
@@ -92,8 +93,8 @@ export const DOCS: Array<[string, string, string]> = [
   ['Quickstart', '/docs/quickstart', 'Install effigentd, enroll a machine, and watch your first agent session in monitor mode.'],
   ['Policies', '/docs/policies', 'Scope, rules, decisions and precedence — and how one policy becomes kernel rules and hook checks.'],
   ['Approvals', '/docs/approvals', 'How a paused action reaches a reviewer, what an approval is bound to, and when it expires.'],
-  ['Enforcement & coverage', '/docs/enforcement', 'The layers, the per-OS coverage matrix, fail-closed start, offline behaviour and emergency suspend.'],
-  ['Kubernetes & containers', '/docs/kubernetes', 'effigentd on every Kubernetes node with Helm, or on a plain Docker host: requirements, install, upgrade, uninstall and limits.'],
+  ['Enforcement & coverage', '/docs/enforcement', 'Kernel and hook enforcement, what each covers per agent, enforcement from the first instruction, offline behaviour and emergency suspend.'],
+  ['Kubernetes & containers', '/docs/kubernetes', 'effigentd on every Kubernetes node with Helm, or on a plain Docker host: requirements, install, upgrade, uninstall and operations.'],
   ['API', '/docs/api', 'effigentd’s local API, the event stream it sends to the control plane, and what the console exposes.'],
 ];
 

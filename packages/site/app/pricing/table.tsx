@@ -46,7 +46,7 @@ const TIERS: Tier[] = [
     tagline: 'Teams enforcing policy across machines.',
     seats: '20 seats',
     endpoints: '40 endpoints',
-    features: ['Everything in Starter', 'Team-scoped policies & reviewers', 'Policy simulation', '1-year audit history & export', 'Priority support'],
+    features: ['Everything in Starter', 'Team-scoped policies & reviewers', 'Pricing Leaks: AI seat and spend findings', 'Policy simulation', '1-year audit history & export', 'Priority support'],
     cta: 'Go Pro',
     href: `${DASHBOARD_URL}/sign-up`,
     highlight: true,
@@ -158,7 +158,7 @@ export function PricingTable() {
       </div>
 
       <div style={{ textAlign: 'center', marginTop: 28, fontSize: 13, color: 'var(--ink-3)' }}>
-        A seat is a person in the console or an owner of enrolled machines. An endpoint is one machine running effigentd. Every plan supports Linux and macOS and every agent effigentd recognises.
+        A seat is a person in the console or an owner of enrolled machines. An endpoint is one machine running effigentd. Every plan covers Linux, macOS, Windows and Kubernetes, and every agent effigentd recognises.
       </div>
     </div>
   );

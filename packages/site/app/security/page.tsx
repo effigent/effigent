@@ -45,8 +45,8 @@ const PILLARS = [
   },
   {
     hue: '200',
-    title: 'Hosted, with your data kept apart',
-    body: 'The hosted control plane isolates every workspace: every record is scoped to a tenant and every query runs through that scope. Running the control plane in your own infrastructure is on our roadmap; effigentd will behave the same against either.',
+    title: 'Hosted or self-hosted, with your data kept apart',
+    body: 'The hosted control plane isolates every workspace: every record is scoped to a tenant and every query runs through that scope. On Enterprise you can run the control plane in your own infrastructure; effigentd behaves the same against either.',
   },
 ];
 
@@ -74,7 +74,7 @@ const FAQ: [string, string][] = [
   ['What happens when the control plane is unreachable?', 'Blocking continues with the last policy, and events are kept on the machine until it reconnects. Actions that need an approval are denied until an approver can be reached.'],
   ['Can an agent turn effigentd off?', 'Not through its API, which is read-only without a token, and not as the developer user. If an agent can run sudo it can do what root can, so deny sudo for agents that don’t need it. Anyone with root can stop the daemon; the missing heartbeat shows in the console.'],
   ['Can we get our data out, or deleted?', 'Yes. Events and the audit trail export as CSV, stream through signed webhooks, and archived days download from the console. Ask us and we remove a machine’s or a whole workspace’s data from live systems; archives are deleted when their one-year lock ends.'],
-  ['Does it work on macOS and Windows?', 'Yes, with a different mechanism: on Linux the kernel blocks; on macOS and Windows blocking and approvals go through the agents’ own hooks (Claude Code, Codex, Gemini CLI). The coverage matrix lists exactly what that means per action.'],
+  ['Does it work on macOS and Windows?', 'Yes. The same policy, approvals and audit trail apply on Linux, macOS and Windows. effigentd enforces through the kernel (eBPF) and through the agents’ own hooks (Claude Code, Codex, Gemini CLI). The coverage table shows how each kind of action is enforced.'],
 ];
 
 const cell = { padding: '12px 14px', borderTop: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.55, verticalAlign: 'top' as const };
@@ -85,7 +85,7 @@ export default function SecurityPage() {
       <Nav />
       <PageHero
         eyebrow="Security & trust"
-        title="A security tool should be clear about its own limits."
+        title="Built to be trusted on developer machines."
         sub="Effigent sits on developer machines with root and sees what agents do there. Here is where your data lives, how it is protected, what effigentd sends and never sends, and what we can share for your review."
       />
 
@@ -107,7 +107,7 @@ export default function SecurityPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
           <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 18 }}>
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>SOC 2 — in progress</div>
-            <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.65 }}>We are working toward a SOC 2 report. Until it is issued, the controls below are what we run today, and we answer your questions directly.</div>
+            <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.65 }}>We are working toward a SOC 2 report. Meanwhile, the controls below are the ones we run, and we answer your questions directly.</div>
           </div>
           <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 18 }}>
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Available under NDA</div>

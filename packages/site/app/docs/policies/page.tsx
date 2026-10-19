@@ -17,7 +17,7 @@ const CLASSES: Array<[string, string, string]> = [
 ];
 
 const MODES: Array<[string, string]> = [
-  ['monitor', 'Observe only. Matches are reported as would_block.'],
+  ['monitor', 'Record everything, block nothing. Matches are reported as would_block.'],
   ['learn', 'Monitor, plus record every binary each agent runs. GET /learned turns that into a ready-made allowlist.'],
   ['denylist', 'The kernel blocks exec of listed binaries and opens of listed files.'],
   ['allowlist', 'The kernel blocks exec of anything not listed. An empty allowlist is rejected, because it would block every exec.'],
@@ -103,12 +103,12 @@ export default function Policies() {
       <DocSection>
         <H2>Where each rule is enforced</H2>
         <p className="doc-p">
-          One policy is split between two layers on the machine. Rules on binaries and file paths compile into a kernel policy scoped to each agent&apos;s processes (Linux). Rules that need the full command line, an MCP tool name or an approval run in the agent&apos;s pre-tool hook. The console shows the compiled result for each policy before you publish it.
+          One policy is split between two layers on the machine. Rules on binaries and file paths compile into a kernel policy scoped to each agent&apos;s processes. Rules that need the full command line, an MCP tool name or an approval run in the agent&apos;s pre-tool hook. The console shows the compiled result for each policy before you publish it.
         </p>
         <ul className="doc-list">
           <li>Kernel exec rules match the <b>resolved binary path</b>, with symlinks followed. Use absolute paths; on merged-/usr systems <code>/bin/curl</code> is reported as <code>/usr/bin/curl</code>.</li>
-          <li>The kernel blocks per binary, not per argument: <code>node good.js</code> and <code>node evil.js</code> are the same binary. Argument rules are enforced by hooks, and only observed by the kernel.</li>
-          <li>On machines or agents without a layer that can enforce a rule, the console marks it observe-only for that endpoint. See <Link href="/docs/enforcement">Enforcement &amp; coverage</Link>.</li>
+          <li>Rules on commands and arguments (<code>git push --force*</code>) run in the agent&apos;s hook, which sees the full command line. Rules on binaries, files and destinations run in the kernel for every process the agent starts.</li>
+          <li>When you publish, the console reports how each rule compiles for every machine. See <Link href="/docs/enforcement">Enforcement &amp; coverage</Link>.</li>
         </ul>
       </DocSection>
 
