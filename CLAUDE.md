@@ -14,7 +14,7 @@ Keep this file current when architecture, data model or deployment change.
 | Path | What | Runs on |
 |---|---|---|
 | `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync, `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork). Subcommands: `enroll`, `run` (zero-gap launcher). | Linux host next to Tetragon (dev: Docker Desktop VM) |
-| `cmd/effigent-cp`, `internal/controlplane/*` | Control plane (Go): `store/` Postgres (schema `cp`, embedded migrations tracked in `cp.schema_migrations`), `server/` endpoint protocol `/ep/v1/*` + console API `/api/v1/*`. Image: `Dockerfile.cp`. | AWS App Runner `effigent-cp` (628713530358, us-east-1) at https://api.effigent.ai — redeploy with `AWS_PROFILE=effigent deploy/aws/deploy-cp.sh` |
+| `cmd/effigent-cp`, `internal/controlplane/*` | Control plane (Go): `store/` Postgres (schema `cp`, embedded migrations tracked in `cp.schema_migrations`), `server/` endpoint protocol `/ep/v1/*` + console API `/api/v1/*`, `compile/` central policies per machine, `spend/` Pricing Leaks (see 2d). Image: `Dockerfile.cp`. | AWS App Runner `effigent-cp` (628713530358, us-east-1) at https://api.effigent.ai — redeploy with `AWS_PROFILE=effigent deploy/aws/deploy-cp.sh` |
 | `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
 | `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). No sample data by default: pages without a backend (Approvals, Allow/Deny Lists, Identity) show "Coming soon" empty states; the Agent Graph is built client-side from real events (`src/lib/live-graph.ts`). **Demo Mode** (Settings / user menu; localStorage `effigent.demoMode`) swaps in a sample workspace from `src/lib/fixture-api.ts` on every page and never calls the real API. | Vercel, app.effigent.ai |
 | `packages/site` | Marketing site + docs, Next.js static export. | S3 + CloudFront, effigent.ai |
@@ -185,6 +185,36 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
 - `integrations/windmill/`: resource type, scripts, and the Slack/Teams approval flow
   (tested against Windmill CE v1.837 locally; Slack/Teams buttons not exercised).
 
+## 2d. Pricing Leaks (AI tool spend)
+
+Full write-up: `docs/pricing-leaks.md`.
+- `internal/controlplane/spend` (pure, no DB): vendor clients behind `spend.Client`
+  (Cursor, Anthropic Admin API incl. Claude Code usage report, GitHub Copilot seats/billing,
+  OpenAI usage/costs; `Server.SpendBaseURLs` points them at fakes in tests), `ParseCSV`
+  (seats/usage exports, columns by header name), `Directory` (identity), `Analyze` (the four
+  leaks: `unused_seat`, `duplicate_tool`, `shadow_spend`, `runaway_cost`; thresholds at the
+  top of `detect.go`), `DefaultPrices` (seat and personal-plan prices in cents, overridable
+  per tenant). Money is always US cents.
+- Migration 009: `cp.spend_connectors` (per tenant+vendor; admin key sealed with
+  `EFFIGENT_SECRETS_KEY`, field `spend_<vendor>_key`, only the last 4 chars ever returned),
+  `cp.spend_seats` / `cp.spend_usage` (source `api` | `csv`; API wins), `cp.spend_settings`
+  (People directory + price overrides). No secrets key → keys refused (503), CSV still works.
+- Sync: on saving a key, `POST /api/v1/pricing-leaks/sync`, and hourly checks for connectors
+  older than `SpendSyncEvery` (24h). Claimed atomically (`sync_status`), last 30 days, one tx.
+- Identity: a machine's person = `cp.endpoints.owner`, else a People alias for its hostname,
+  else for its only OS user (from approvals); vendor identities are email (Copilot: GitHub
+  login, Anthropic API usage: key name). Unmatched values stay `kind:value` and machines
+  without a person are listed as `unattributed`. effigentd's side is `cp.events` counted
+  per endpoint, agent and day (`spend.AgentVendor` maps agent names to vendors).
+- Console API (people only, `s.console`): `GET /api/v1/pricing-leaks`,
+  `PUT|DELETE /pricing-leaks/connectors/{vendor}`, `POST /pricing-leaks/sync`,
+  `POST /pricing-leaks/import` (`{vendor, kind, csv}`, ≤ 20 MB), `DELETE /pricing-leaks/import/{vendor}`,
+  `PUT /pricing-leaks/settings`. Audit `pricing_leaks.*`. Console page `/pricing-leaks`
+  (Demo Mode data in `lib/pricing-leaks-fixture.ts`).
+- Not yet exercised against the live vendor APIs (unit tests use fakes from the documented
+  shapes; OpenAI's were written without its docs). Deploy order: control plane (migration 009)
+  → console.
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -211,6 +241,7 @@ go run ./cmd/effigentd --state-dir ~/.effigent
 ./test/endpoint/e2e.sh                              # endpoint e2e (standalone, not enrolled)
 ./test/claude/run.sh                                # real Claude Code (needs ~/.effigent-claude.env)
 ./test/hooks/approval.sh                            # approval flow: real hook process -> hooks-mode daemon -> local control plane
+go test ./internal/controlplane/server/ -run PricingLeaks -args -effigent.db=postgres://effigent:effigent@localhost:5433/effigent  # DB tests (or EFFIGENT_TEST_DATABASE_URL)
 # console against a local control plane (dev only): add to the dev command
 #   NEXT_PUBLIC_EFFIGENT_API_URL=http://127.0.0.1:8080 NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN=devadmin NEXT_PUBLIC_EFFIGENT_DEV_TENANT=org:dev
 #   (control plane: EFFIGENT_ADMIN_TENANTS=org:dev EFFIGENT_CONSOLE_ORIGIN=http://localhost:3000)
