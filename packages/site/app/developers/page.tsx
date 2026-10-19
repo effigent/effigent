@@ -14,7 +14,7 @@ const AGENTS = [
     name: 'Claude Code',
     tag: 'Kernel + PreToolUse hook',
     blurb:
-      'The fullest coverage. effigentd registers a PreToolUse hook, so every Bash, Read, Edit, WebFetch and MCP tool call is checked before it runs, with the full command or path. require_approval rules pause the call in the terminal until a reviewer answers. The kernel layer covers everything the tool call starts afterwards.',
+      'The fullest coverage. effigentd registers a PreToolUse hook, so every Bash, Read, Edit, WebFetch and MCP tool call is checked before it runs, with the full command or path. require_approval rules pause the call in the terminal until a reviewer answers. On Linux the kernel layer covers everything the tool call starts afterwards.',
     code: `> push the rebase to main
 
 ⏺ Bash(git push --force origin main)

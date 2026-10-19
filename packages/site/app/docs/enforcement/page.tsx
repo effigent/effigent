@@ -32,8 +32,8 @@ export default function Enforcement() {
       <DocSection>
         <H2>The two layers</H2>
         <ul className="doc-list">
-          <li><b>Agent hooks.</b> Claude Code, Codex and Gemini CLI call a hook before each tool runs, on Linux, macOS and Windows. effigentd installs it in the agents&apos; machine-wide settings. The hook sees the full command, file path, URL or MCP tool name, so it can allow, deny, or pause the call for approval. One policy covers all three agents: their tools are mapped onto the same names.</li>
-          <li><b>Kernel (eBPF).</b> effigentd loads a policy scoped to each agent&apos;s process tree through eBPF and BPF LSM (Tetragon). It sees every exec, file open and outbound connection from the agent and all of its children, including scripts the agent wrote, package hooks and MCP servers. It blocks exec by resolved binary path, file opens by path, and connections by destination (<code>network_deny</code>, <code>network_allow</code>, and hostnames in <code>domain_deny</code>, which effigentd resolves to addresses).</li>
+          <li><b>Agent hooks.</b> Claude Code, Codex and Gemini CLI call a hook before each tool runs, on Linux, macOS and Windows. effigentd installs it in the agents&apos; machine-wide settings (<code>effigentd install-hooks</code>; the macOS and Windows installers run it). The hook sees the full command, file path, URL or MCP tool name, so it can allow, deny, or pause the call for approval. One policy covers all three agents: their tools are mapped onto the same names.</li>
+          <li><b>Kernel (eBPF, Linux).</b> effigentd loads a policy scoped to each agent&apos;s process tree through eBPF and BPF LSM (Tetragon). It sees every exec, file open and outbound connection from the agent and all of its children, including scripts the agent wrote, package hooks and MCP servers. It blocks exec by resolved binary path, file opens by path, and connections by destination (<code>network_deny</code>, <code>network_allow</code>, and hostnames in <code>domain_deny</code>, which effigentd resolves to addresses).</li>
           <li><b>Process tree.</b> effigentd recognises each agent by binary or launch arguments, follows every process it starts, and attributes each event to that agent, user and machine.</li>
         </ul>
       </DocSection>
@@ -64,7 +64,7 @@ export default function Enforcement() {
           </table>
         </div>
         <p className="doc-p" style={{ marginTop: 16 }}>
-          Every agent gets the kernel layer for itself and every process it starts: exec, file and network rules, attribution and audit. Add any other agent in policy by binary name or launch arguments and it is governed the same way. Details per agent are in the <Link href="/developers">agent setup guide</Link>.
+          On Linux, every agent gets the kernel layer for itself and every process it starts: exec, file and network rules, attribution and audit. Add any other agent in policy by binary name or launch arguments and it is governed the same way. Details per agent are in the <Link href="/developers">agent setup guide</Link>.
         </p>
       </DocSection>
 

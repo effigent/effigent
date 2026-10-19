@@ -692,7 +692,7 @@ export default function Page() {
               <Eyebrow hue="150">Pricing Leaks</Eyebrow>
               <H2>Find the AI spend <b>nobody is using</b>.</H2>
               <div style={{ fontSize: 15.5, color: 'var(--ink-2)', lineHeight: 1.65, marginBottom: 18 }}>
-                Effigent connects to the admin and billing APIs of your AI coding tools and joins seats, usage and cost with what effigentd sees actually running on each machine. Every finding comes with an estimated monthly saving, so Effigent can pay for itself. A runaway cost, like an agent looping in CI, is flagged after the next daily vendor sync, so within a day, and emailed and sent to the webhooks subscribed to it.
+                Effigent connects to the admin and billing APIs of your AI coding tools and joins seats, usage and cost with what effigentd sees actually running on each machine. Findings come with an estimated monthly saving (shadow spend with the spend at risk), so Effigent can pay for itself. A runaway cost, like an agent looping in CI, is flagged after the next daily vendor sync, so within a day, and emailed and sent to the webhooks subscribed to it.
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 26 }}>
                 {spendVendors.map((v) => <Chip key={v}>{v}</Chip>)}

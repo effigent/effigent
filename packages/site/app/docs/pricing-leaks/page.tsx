@@ -102,7 +102,7 @@ export default function PricingLeaksDocs() {
   "tenant": "org:…",
   "data": {
     "leak": {
-      "id": "runaway_cost:anthropic:apikey:ci-nightly",
+      "id": "runaway_cost:anthropic:key:ci-nightly",
       "vendor": "anthropic",
       "title": "Claude Code API key spike",
       "evidence": ["Spike today: $412 vs a $71/day average the week before"],

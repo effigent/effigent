@@ -109,7 +109,7 @@ export const leakKinds: Array<{ title: string; hue: string; text: string; signal
   { title: 'Unused seats', hue: '25', text: 'Licences assigned to people whose machines haven’t run that agent in weeks.', signal: 'seat list × agent activity per machine' },
   { title: 'Duplicate tools', hue: '75', text: 'The same developer paying for several coding agents while really using one.', signal: 'seats across vendors × the agent that actually runs' },
   { title: 'Shadow spend', hue: '290', text: 'Agents running on personal cards or accounts outside your organisation’s plans.', signal: 'agents on machines × no matching org seat' },
-  { title: 'Runaway costs', hue: '250', text: 'An agent looping in CI, or one user far above the team median.', signal: 'daily usage × team median × CI activity' },
+  { title: 'Runaway costs', hue: '250', text: 'An agent looping in CI, or one user far above the team median.', signal: 'daily usage × team median × daily spikes' },
 ];
 
 /** Hero graph: one agent session on one machine, edges colored by outcome. */

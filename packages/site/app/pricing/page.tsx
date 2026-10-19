@@ -28,7 +28,7 @@ export default function PricingPage() {
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'oklch(0.42 0.13 150)', fontWeight: 650, marginBottom: 6 }}>Pricing Leaks</div>
             <div style={{ fontSize: 18, fontWeight: 720, marginBottom: 6, color: 'oklch(0.3 0.08 150)' }}>Effigent can pay for itself.</div>
             <div style={{ fontSize: 14, color: 'oklch(0.35 0.05 150)', lineHeight: 1.6 }}>
-              Connect the admin and billing APIs of Cursor, Anthropic (Claude Code), GitHub Copilot and OpenAI. Effigent joins seats, usage and cost with what actually runs on each machine and flags unused seats, duplicate tools, shadow spend and runaway agent costs, each with an estimated monthly saving.
+              Connect the admin and billing APIs of Cursor, Anthropic (Claude Code), GitHub Copilot and OpenAI. Effigent joins seats, usage and cost with what actually runs on each machine and flags unused seats, duplicate tools, shadow spend and runaway agent costs, with an estimated monthly saving (or, for shadow spend, the spend at risk).
             </div>
           </div>
           <Link href="/#pricing-leaks" className="btn btn-primary" style={{ padding: '11px 20px', fontSize: 14, display: 'inline-block', whiteSpace: 'nowrap' }}>See how it works</Link>
@@ -41,7 +41,7 @@ export default function PricingPage() {
           ['What counts as an endpoint?', 'One machine running effigentd: a laptop, a workstation, a VM or a CI runner. Agents on that machine are not counted separately; run as many as you like. If you use short-lived CI runners, tell us how you run them and we will count them in a way that makes sense.'],
           ['What counts as a seat?', 'A person: someone who signs in to the console (to write policy or approve) or who owns enrolled machines. One developer with a laptop and a dev VM is one seat and two endpoints.'],
           ['What happens when we go over a limit?', 'Enforcement never stops because of billing. New machines past the limit can’t enroll until you upgrade or remove one, and the console tells you before that happens.'],
-          ['What is Pricing Leaks?', 'A report that joins what you pay AI coding tool vendors (seats, usage and cost from their admin APIs) with what effigentd sees running on each machine. It lists unused seats, developers paying for several agents but using one, agents running outside your organisation’s accounts, and agents far above the team median, each with an estimated monthly saving.'],
+          ['What is Pricing Leaks?', 'A report that joins what you pay AI coding tool vendors (seats, usage and cost from their admin APIs) with what effigentd sees running on each machine. It lists unused seats, developers paying for several agents but using one, agents running outside your organisation’s accounts, and agents far above the team median, with an estimated monthly saving (or, for agents outside your accounts, the spend at risk).'],
           ['Can we run the control plane ourselves?', 'Yes, on Enterprise. effigentd works the same against the hosted or a self-hosted control plane.'],
           ['Can I switch between monthly and annual?', 'Any time. Annual is billed once and works out to two months free; switching mid-cycle prorates automatically.'],
         ].map(([q, a]) => (

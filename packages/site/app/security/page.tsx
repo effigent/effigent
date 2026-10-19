@@ -74,7 +74,7 @@ const FAQ: [string, string][] = [
   ['What happens when the control plane is unreachable?', 'Blocking continues with the last policy, and events are kept on the machine until it reconnects. Actions that need an approval are denied until an approver can be reached.'],
   ['Can an agent turn effigentd off?', 'Not through its API, which is read-only without a token, and not as the developer user. If an agent can run sudo it can do what root can, so deny sudo for agents that don’t need it. Anyone with root can stop the daemon; the missing heartbeat shows in the console.'],
   ['Can we get our data out, or deleted?', 'Yes. Events and the audit trail export as CSV, stream through signed webhooks, and archived days download from the console. Ask us and we remove a machine’s or a whole workspace’s data from live systems; archives are deleted when their one-year lock ends.'],
-  ['Does it work on macOS and Windows?', 'Yes. The same policy, approvals and audit trail apply on Linux, macOS and Windows. effigentd enforces through the kernel (eBPF) and through the agents’ own hooks (Claude Code, Codex, Gemini CLI). The coverage table shows how each kind of action is enforced.'],
+  ['Does it work on macOS and Windows?', 'Yes. The same policy, approvals and audit trail apply on Linux, macOS and Windows. effigentd enforces through the agents’ own hooks (Claude Code, Codex, Gemini CLI) and, on Linux, through the kernel (eBPF). The coverage table shows how each kind of action is enforced.'],
 ];
 
 const cell = { padding: '12px 14px', borderTop: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.55, verticalAlign: 'top' as const };
