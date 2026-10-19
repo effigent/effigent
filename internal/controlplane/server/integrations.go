@@ -29,6 +29,7 @@ import (
 var webhookEvents = []string{
 	"approval.requested", "approval.decided", "action.blocked",
 	"endpoint.enrolled", "endpoint.revoked", "policy.published",
+	"pricing_leaks.runaway_cost",
 }
 
 var defaultWebhookEvents = []string{"approval.requested", "approval.decided"}

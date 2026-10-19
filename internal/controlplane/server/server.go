@@ -45,6 +45,9 @@ type Server struct {
 	// SpendSyncEvery is how often connectors sync on their own (default 24h).
 	SpendBaseURLs  map[string]string
 	SpendSyncEvery time.Duration
+	// SpendRollupEvery: how often each tenant's report is rolled up (and its
+	// runaway cost alerts checked) when its data hasn't changed (default 1h).
+	SpendRollupEvery time.Duration
 
 	limits         *limits
 	whOnce         sync.Once
@@ -80,7 +83,8 @@ func (s *Server) Handler() http.Handler {
 					s.runRetention(context.Background())
 				}
 			}()
-			go s.runSpendSyncs(context.Background()) // Pricing Leaks: nightly vendor syncs
+			go s.runSpendSyncs(context.Background())   // Pricing Leaks: nightly vendor syncs
+			go s.runSpendRollups(context.Background()) // ...report history and runaway cost alerts
 		})
 		if s.Auth != nil && s.Auth.APIKeys == nil {
 			s.Auth.APIKeys = func(ctx context.Context, secret string) (string, string, []string, error) {
@@ -145,6 +149,8 @@ func (s *Server) Handler() http.Handler {
 	// and CSV imports are managed by people only.
 	mux.HandleFunc("GET /api/v1/pricing-leaks", s.console(read, s.pricingLeaks))
 	mux.HandleFunc("GET /api/v1/pricing-leaks/connectors", s.console(read, s.spendConnectors))
+	mux.HandleFunc("GET /api/v1/pricing-leaks/metrics", s.console(read, s.spendMetrics))
+	mux.HandleFunc("GET /api/v1/pricing-leaks/alerts", s.console(read, s.spendAlerts))
 	mux.HandleFunc("PUT /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.putSpendConnector))
 	mux.HandleFunc("DELETE /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.deleteSpendConnector))
 	mux.HandleFunc("POST /api/v1/pricing-leaks/sync", s.console(write, s.syncSpendNow))

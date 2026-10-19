@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/effigent/effigent/internal/controlplane/notify"
 	"github.com/effigent/effigent/internal/controlplane/spend"
 	"github.com/effigent/effigent/internal/controlplane/store"
 )
@@ -52,41 +53,52 @@ type connectorView struct {
 }
 
 func (s *Server) pricingLeaks(w http.ResponseWriter, r *http.Request, p Principal) {
-	ctx := r.Context()
-	now := time.Now().UTC()
+	rep, list, set, err := s.spendReport(r.Context(), p.Tenant, time.Now().UTC())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	// when each leak was first seen (the rollup's leak log; new leaks aren't in it yet)
+	firstSeen, err := s.Store.OpenSpendLeaks(r.Context(), p.Tenant)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"report": rep, "connectors": list, "settings": set, "default_prices": spend.DefaultPrices,
+		"secrets_available": len(s.SecretsKey) == 32, "first_seen": firstSeen,
+		"email_available": s.Notify.EmailEnabled(),
+	})
+}
+
+// spendReport computes a tenant's Pricing Leaks report as of now: the page
+// and the rollup job (spend_rollup.go) share it, so history matches the page.
+func (s *Server) spendReport(ctx context.Context, tenant string, now time.Time) (spend.Report, []connectorView, store.SpendSettings, error) {
 	since := spend.Day(now).AddDate(0, 0, -(spendWindowDays - 1))
-	conns, err := s.Store.ListSpendConnectors(ctx, p.Tenant)
+	conns, err := s.Store.ListSpendConnectors(ctx, tenant)
 	if err != nil {
-		s.fail(w, err)
-		return
+		return spend.Report{}, nil, store.SpendSettings{}, err
 	}
-	set, err := s.Store.GetSpendSettings(ctx, p.Tenant)
+	set, err := s.Store.GetSpendSettings(ctx, tenant)
 	if err != nil {
-		s.fail(w, err)
-		return
+		return spend.Report{}, nil, set, err
 	}
-	seats, usage, err := s.Store.SpendData(ctx, p.Tenant, since)
+	seats, usage, err := s.Store.SpendData(ctx, tenant, since)
 	if err != nil {
-		s.fail(w, err)
-		return
+		return spend.Report{}, nil, set, err
 	}
-	machines, obs, err := s.Store.SpendObservations(ctx, p.Tenant, since)
+	machines, obs, err := s.Store.SpendObservations(ctx, tenant, since)
 	if err != nil {
-		s.fail(w, err)
-		return
+		return spend.Report{}, nil, set, err
 	}
-	people, err := s.Store.SpendPeople(ctx, p.Tenant)
+	people, err := s.Store.SpendPeople(ctx, tenant)
 	if err != nil {
-		s.fail(w, err)
-		return
+		return spend.Report{}, nil, set, err
 	}
 	list, connected := connectorViews(conns, seats, usage)
 	rep := spend.Analyze(spend.Input{Now: now, WindowDays: spendWindowDays, Seats: seats, Usage: usage, Machines: machines, Obs: obs,
 		People: people, Prices: spend.DefaultPrices.Merge(set.Prices), Connected: connected})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"report": rep, "connectors": list, "settings": set, "default_prices": spend.DefaultPrices,
-		"secrets_available": len(s.SecretsKey) == 32,
-	})
+	return rep, list, set, nil
 }
 
 // spendConnectors is the vendor connections card in Settings: connectors
@@ -461,22 +473,65 @@ func cleanSpendSettings(in store.SpendSettings) (store.SpendSettings, error) {
 	return out, nil
 }
 
+// cleanSpendAlerts validates the alert settings.
+func cleanSpendAlerts(in store.SpendAlerts) (store.SpendAlerts, error) {
+	out := store.SpendAlerts{RunawayCost: in.RunawayCost, Emails: []string{}}
+	seen := map[string]bool{}
+	for _, e := range in.Emails {
+		e = strings.TrimSpace(e)
+		if e == "" || seen[strings.ToLower(e)] {
+			continue
+		}
+		if err := notify.ValidEmail(e); err != nil {
+			return out, err
+		}
+		seen[strings.ToLower(e)] = true
+		out.Emails = append(out.Emails, e)
+	}
+	if len(out.Emails) > 20 {
+		return out, errors.New("at most 20 alert recipients")
+	}
+	return out, nil
+}
+
+// putSpendSettings saves the prices and/or the alert settings; an omitted
+// part is kept.
 func (s *Server) putSpendSettings(w http.ResponseWriter, r *http.Request, p Principal) {
-	var req store.SpendSettings
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "body must be {\"prices\": {\"seat\": {}, \"personal\": {}}}")
+	var req struct {
+		Prices *spend.Prices      `json:"prices"`
+		Alerts *store.SpendAlerts `json:"alerts"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil || (req.Prices == nil && req.Alerts == nil) {
+		writeErr(w, http.StatusBadRequest, "body must be {\"prices\": {\"seat\": {}, \"personal\": {}}, \"alerts\": {\"runaway_cost\": true, \"emails\": []}}")
 		return
 	}
-	c, err := cleanSpendSettings(req)
+	c, err := s.Store.GetSpendSettings(r.Context(), p.Tenant)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		s.fail(w, err)
 		return
+	}
+	details := map[string]any{}
+	if req.Prices != nil {
+		clean, err := cleanSpendSettings(store.SpendSettings{Prices: *req.Prices})
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		c.Prices = clean.Prices
+		details["seat_prices"], details["personal_prices"] = c.Prices.Seat, c.Prices.Personal
+	}
+	if req.Alerts != nil {
+		if c.Alerts, err = cleanSpendAlerts(*req.Alerts); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		details["runaway_alerts"], details["alert_emails"] = c.Alerts.RunawayOn(), c.Alerts.Emails
 	}
 	if err := s.Store.PutSpendSettings(r.Context(), p.Tenant, p.UserID, c); err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.audit(r, p, "pricing_leaks.settings.update", "pricing_leaks", map[string]any{"seat_prices": c.Prices.Seat, "personal_prices": c.Prices.Personal})
+	s.audit(r, p, "pricing_leaks.settings.update", "pricing_leaks", details)
 	c, err = s.Store.GetSpendSettings(r.Context(), p.Tenant)
 	if err != nil {
 		s.fail(w, err)

@@ -118,6 +118,9 @@ func (s *Store) DeleteSpendConnector(ctx context.Context, tenant, vendor string)
 	if _, err := tx.Exec(ctx, `delete from cp.spend_usage where tenant_ref = $1 and vendor = $2 and source = 'api'`, tenant, vendor); err != nil {
 		return err
 	}
+	if err := markSpendChanged(ctx, tx, tenant); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -129,19 +132,7 @@ func (s *Store) DeleteSpendConnector(ctx context.Context, tenant, vendor string)
 // SpendPollLock takes the poll lock for one connector. ok=false: another
 // poll holds it.
 func (s *Store) SpendPollLock(ctx context.Context, tenant, vendor string) (release func(), ok bool, err error) {
-	conn, err := s.db.Acquire(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	key := "cp.spend.poll:" + tenant + "/" + vendor
-	if err := conn.QueryRow(ctx, `select pg_try_advisory_lock(hashtext($1))`, key).Scan(&ok); err != nil || !ok {
-		conn.Release()
-		return nil, false, err
-	}
-	return func() {
-		_, _ = conn.Exec(context.Background(), `select pg_advisory_unlock(hashtext($1))`, key)
-		conn.Release()
-	}, true, nil
+	return s.tryLock(ctx, "cp.spend.poll:"+tenant+"/"+vendor)
 }
 
 // DueSpendPolls lists connectors (every tenant) whose next poll is due,
@@ -230,6 +221,9 @@ func (s *Store) FinishSpendSync(ctx context.Context, tenant, vendor string, from
 		where tenant_ref = $1 and vendor = $2`, tenant, vendor, errMsg, counts, every.Seconds()); err != nil {
 		return err
 	}
+	if err := markSpendChanged(ctx, tx, tenant); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -249,6 +243,9 @@ func (s *Store) ImportSpendCSV(ctx context.Context, tenant, vendor string, r spe
 	if err := upsertUsage(ctx, tx, tenant, vendor, "csv", r.Usage); err != nil {
 		return err
 	}
+	if err := markSpendChanged(ctx, tx, tenant); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -257,8 +254,10 @@ func (s *Store) ClearSpendCSV(ctx context.Context, tenant, vendor string) error 
 	if _, err := s.db.Exec(ctx, `delete from cp.spend_seats where tenant_ref = $1 and vendor = $2 and source = 'csv'`, tenant, vendor); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(ctx, `delete from cp.spend_usage where tenant_ref = $1 and vendor = $2 and source = 'csv'`, tenant, vendor)
-	return err
+	if _, err := s.db.Exec(ctx, `delete from cp.spend_usage where tenant_ref = $1 and vendor = $2 and source = 'csv'`, tenant, vendor); err != nil {
+		return err
+	}
+	return markSpendChanged(ctx, s.db, tenant)
 }
 
 func replaceSeats(ctx context.Context, tx pgx.Tx, tenant, vendor, source string, seats []spend.Seat) error {
@@ -402,13 +401,24 @@ func (s *Store) SpendObservations(ctx context.Context, tenant string, since time
 	return machines, obs, rows.Err()
 }
 
-// SpendSettings is the tenant's price overrides (people live in cp.people
-// since migration 010).
+// SpendSettings is the tenant's price overrides and alert settings (people
+// live in cp.people since migration 010).
 type SpendSettings struct {
 	Prices    spend.Prices `json:"prices"`
+	Alerts    SpendAlerts  `json:"alerts"`
 	UpdatedBy string       `json:"updated_by,omitempty"`
 	UpdatedAt *time.Time   `json:"updated_at,omitempty"`
 }
+
+// SpendAlerts: runaway cost alerts (on unless turned off) and who gets them
+// by email (empty: the approval notification recipients).
+type SpendAlerts struct {
+	RunawayCost *bool    `json:"runaway_cost,omitempty"`
+	Emails      []string `json:"emails"`
+}
+
+// RunawayOn reports whether runaway cost alerts are on.
+func (a SpendAlerts) RunawayOn() bool { return a.RunawayCost == nil || *a.RunawayCost }
 
 func (s *Store) GetSpendSettings(ctx context.Context, tenant string) (SpendSettings, error) {
 	var c SpendSettings
@@ -417,7 +427,7 @@ func (s *Store) GetSpendSettings(ctx context.Context, tenant string) (SpendSetti
 	var at time.Time
 	err := s.db.QueryRow(ctx, `select config, updated_by, updated_at from cp.spend_settings where tenant_ref = $1`, tenant).Scan(&raw, &by, &at)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return SpendSettings{Prices: spend.Prices{Seat: map[string]int64{}, Personal: map[string]int64{}}}, nil
+		return SpendSettings{Prices: spend.Prices{Seat: map[string]int64{}, Personal: map[string]int64{}}, Alerts: SpendAlerts{Emails: []string{}}}, nil
 	} else if err != nil {
 		return c, err
 	}
@@ -430,6 +440,9 @@ func (s *Store) GetSpendSettings(ctx context.Context, tenant string) (SpendSetti
 	if c.Prices.Personal == nil {
 		c.Prices.Personal = map[string]int64{}
 	}
+	if c.Alerts.Emails == nil {
+		c.Alerts.Emails = []string{}
+	}
 	c.UpdatedBy, c.UpdatedAt = by, &at
 	return c, nil
 }
@@ -440,7 +453,9 @@ func (s *Store) PutSpendSettings(ctx context.Context, tenant, by string, c Spend
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(ctx, `insert into cp.spend_settings (tenant_ref, config, updated_by, updated_at) values ($1, $2, $3, now())
-		on conflict (tenant_ref) do update set config = $2, updated_by = $3, updated_at = now()`, tenant, raw, by)
-	return err
+	if _, err = s.db.Exec(ctx, `insert into cp.spend_settings (tenant_ref, config, updated_by, updated_at) values ($1, $2, $3, now())
+		on conflict (tenant_ref) do update set config = $2, updated_by = $3, updated_at = now()`, tenant, raw, by); err != nil {
+		return err
+	}
+	return markSpendChanged(ctx, s.db, tenant)
 }
