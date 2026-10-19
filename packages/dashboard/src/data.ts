@@ -10,6 +10,7 @@ import type {
 
 export const AGENT_TYPES: Record<AgentType, { label: string; vendor: string; kind: string; color: string; icon: string }> = {
   'claude-code': { label: 'Claude Code', vendor: 'Anthropic', kind: 'Coding Agent', color: '#e07a52', icon: 'burst' },
+  'claude-cowork': { label: 'Claude Cowork', vendor: 'Anthropic', kind: 'Desktop Agent', color: '#e07a52', icon: 'burst' },
   'cursor-agent': { label: 'Cursor', vendor: 'Anysphere', kind: 'Coding Agent', color: '#cfd6e6', icon: 'cube' },
   codex: { label: 'Codex', vendor: 'OpenAI', kind: 'Coding Agent', color: '#3fc9a0', icon: 'hex' },
   'gemini-cli': { label: 'Gemini CLI', vendor: 'Google', kind: 'Coding Agent', color: '#6c9bff', icon: 'spark' },

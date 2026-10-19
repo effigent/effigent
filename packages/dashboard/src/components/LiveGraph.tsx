@@ -96,6 +96,7 @@ export function nodeSub(n: LiveNode, endpointById: Map<string, EndpointRow>): st
     const ep = endpointById.get(n.endpoint ?? '');
     return ep ? `${ep.os}${ep.revoked ? ' · revoked' : ''}` : 'Machine';
   }
+  if (n.kind === 'agent' && n.unmanaged) return `${n.sub} · not under policy`;
   if (n.kind === 'agent' && n.declared) return `${n.sub} · name set by effigentd run`;
   if (isGroupNode(n.id) || n.kind === 'mcp') return n.sub;
   if (n.kind === 'target' && (n.targetKind === 'routine' || n.targetKind === 'more')) return n.sub;

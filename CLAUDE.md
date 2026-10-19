@@ -263,6 +263,15 @@ npm run -w @effigent/site build                     # site
     `GEMINI_CLI_SYSTEM_SETTINGS_PATH` can point elsewhere. Gemini's admin policy TOML
     (`…/gemini-cli/policies`) is the harder backstop — not written by effigentd yet.
   - Cursor and the others: detection only (no hook).
+  - Claude Cowork (Claude desktop app): runs Claude Code inside its own Linux VM (Apple
+    Virtualization framework; `claude-code-vm/<ver>/claude`, `vm_bundles/claudevm.bundle`), even without
+    `requireCoworkFullVmSandbox` — the Mac's managed settings and our hook don't exist there and the VM's
+    127.0.0.1 isn't the daemon's (verified 2026-10-19: `cat /etc/shadow` ran on the VM's own file, only
+    Cowork's `agent-proxy` refused example.com). Not enforceable. `internal/endpoint/vmwatch` (hooks mode,
+    macOS, every 10s: `ps` for `com.apple.Virtualization.VirtualMachine`, `lsof` for Claude's VM images)
+    reports each Cowork VM as agent `claude-cowork`, `mode: unmanaged` (`agent_start`/`agent_exit`); the
+    console marks it "not under policy". Docker Desktop's VM is not matched. Remote Cowork sessions run in
+    Anthropic's cloud and are invisible to the endpoint; Windows (Hyper-V) Cowork isn't detected yet.
 - `effigentd run --agent NAME -- cmd` trusts NAME (it picks the policy rule; it is not checked against cmd). A launch inside an already-tracked agent tree stays under the outer agent (no relabel escape). The console marks a root whose command isn't NAME's program as "name set by effigentd run" (`launchedAs` in `lib/live-graph.ts`; e.g. the Grok-VM test 2026-10-18 ran `--agent codex -- sh -c …`).
 - Detected (not launched via `effigentd run`) agents are unenforced for ~0.8–1.1s while policies load.
 - On a Mac dev box effigentd can't scan the Docker VM's /proc, so agents started before the daemon aren't tracked.

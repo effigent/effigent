@@ -27,6 +27,7 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/procscan"
 	"github.com/effigent/effigent/internal/endpoint/sink"
 	"github.com/effigent/effigent/internal/endpoint/tetragon"
+	"github.com/effigent/effigent/internal/endpoint/vmwatch"
 )
 
 var (
@@ -249,6 +250,8 @@ func daemon() {
 
 	if hooksOnly {
 		logger.Printf("sensor: agent hooks only (no kernel enforcement on %s)", runtime.GOOS)
+		// Agents in their own VM (Claude Cowork) are out of the hooks' reach: report them.
+		go vmwatch.Run(ctx, 10*time.Second, vmwatch.Default(), emit, logger.Printf)
 		<-ctx.Done()
 		return
 	}

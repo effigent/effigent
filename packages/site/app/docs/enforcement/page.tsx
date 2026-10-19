@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: 'Which coding-agent actions Effigent blocks, pauses or only observes on Linux and macOS, how the kernel and hook layers split the work, fail-closed start, offline behaviour and emergency suspend.',
 };
 
-const AGENTS: Array<[string, string, string]> = [
+const AGENTS: Array<[string, string, string, string?]> = [
   ['Claude Code', 'binary claude · args @anthropic-ai/claude-code', 'PreToolUse'],
   ['Cursor', 'binary cursor-agent', 'beforeShellExecution'],
   ['Codex', 'binary codex · args @openai/codex', '—'],
@@ -16,6 +16,7 @@ const AGENTS: Array<[string, string, string]> = [
   ['Aider', 'binary aider', '—'],
   ['opencode', 'binary opencode', '—'],
   ['Goose', 'binary goose', '—'],
+  ['Claude Cowork', 'Claude app’s virtual machine (macOS)', '—', 'reported, not enforced'],
 ];
 
 export default function Enforcement() {
@@ -56,14 +57,14 @@ export default function Enforcement() {
           <table className="doc-tbl">
             <thead><tr><th>Agent</th><th>Detected by</th><th>Hook</th><th>Linux kernel</th></tr></thead>
             <tbody>
-              {AGENTS.map(([a, d, h]) => (
-                <tr key={a}><td style={{ fontWeight: 600, color: 'var(--ink)' }}>{a}</td><td><code>{d}</code></td><td>{h === '—' ? '—' : <code>{h}</code>}</td><td>exec · file · network</td></tr>
+              {AGENTS.map(([a, d, h, k]) => (
+                <tr key={a}><td style={{ fontWeight: 600, color: 'var(--ink)' }}>{a}</td><td><code>{d}</code></td><td>{h === '—' ? '—' : <code>{h}</code>}</td><td>{k ?? 'exec · file · network'}</td></tr>
               ))}
             </tbody>
           </table>
         </div>
         <p className="doc-p" style={{ marginTop: 16 }}>
-          Agents without a hook get the kernel column on Linux and are observe-only on macOS. That is the honest state today; the console marks it per endpoint. Details per agent are in the <Link href="/developers">agent setup guide</Link>.
+          Agents without a hook get the kernel column on Linux and are observe-only on macOS. That is the honest state today; the console marks it per endpoint. Claude Cowork in the Claude desktop app runs Claude Code inside its own virtual machine, where the Mac&apos;s managed settings and effigentd&apos;s hook don&apos;t exist: effigentd reports each Cowork VM as an agent that is <b>not under policy</b>, but can&apos;t see or stop its commands, web requests or changes to the folders shared with it. Cowork sessions that run in Anthropic&apos;s cloud never touch the machine. Use Cowork&apos;s own admin controls (network egress, or turning Cowork off on managed devices) for those. Details per agent are in the <Link href="/developers">agent setup guide</Link>.
         </p>
       </DocSection>
 

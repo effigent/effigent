@@ -123,7 +123,9 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
       const la = launchedAs(e);
       summary = la
         ? `${la.declared ? `named “${la.name}” by effigentd run — the command is not ${la.name}` : `started with effigentd run`}: ${la.command}`
-        : `${e.type}${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`;
+        : b.mode === 'unmanaged' && e.type === 'agent_start'
+          ? `running in its own virtual machine — not under policy${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`
+          : `${e.type}${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`;
       break;
     }
     default: summary = b.message || e.type;

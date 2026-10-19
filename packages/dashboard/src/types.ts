@@ -28,7 +28,7 @@ export type ApprovalState = 'approval_pending' | 'approved' | 'approval_denied' 
 export type Outcome = 'allowed' | 'blocked' | 'pending' | 'would_block' | 'system';
 
 /** Agent names from policy/default.yaml `agents:`. */
-export type AgentType = 'claude-code' | 'cursor-agent' | 'codex' | 'gemini-cli' | 'aider' | 'opencode' | 'goose';
+export type AgentType = 'claude-code' | 'claude-cowork' | 'cursor-agent' | 'codex' | 'gemini-cli' | 'aider' | 'opencode' | 'goose';
 
 export type Env = 'production' | 'staging' | 'development';
 

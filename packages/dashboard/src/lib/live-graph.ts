@@ -69,6 +69,8 @@ export interface LiveNode {
   items?: { label: string; full: string; count: number }[];
   /** Agent nodes started as `effigentd run --agent NAME -- cmd` where cmd isn't that agent: the command. */
   declared?: string;
+  /** Agent nodes effigentd sees but can't enforce (Claude Cowork in its own VM): why. */
+  unmanaged?: string;
   /** Targets: the layout group, "command" | "file" | "network" | "tool" | "routine" | "mcp:<server>". */
   group?: string;
   /** "+N more" nodes: how many targets they stand for. */
@@ -328,6 +330,10 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
     if (la?.declared) {
       an.declared = la.command;
       an.full = `${agent} @ ${host} — the name was set by “effigentd run --agent ${la.name}”; the command was: ${la.command}`;
+    }
+    if (e.type === 'agent_start' && e.body?.mode === 'unmanaged') {
+      an.unmanaged = e.body.message || 'not under policy';
+      an.full = `${agent} @ ${host} — ${an.unmanaged}`;
     }
     link(mid, aid, 'runs', 'flow', at);
     if (!c || !outcome) continue;
