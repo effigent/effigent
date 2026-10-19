@@ -59,6 +59,9 @@ func statusCmd(args []string) {
 			fmt.Printf("%s Not enrolled (local policy only)\n", mark(false))
 		}
 		fmt.Printf("    Agents being watched right now: %v\n", h["agents"])
+		if n, _ := h["unmanaged_agents"].(float64); n > 0 {
+			fmt.Printf("%s Claude Cowork is running in its own virtual machine (%v): reported, not under policy\n", mark(false), n)
+		}
 	}
 	if h["sensor"] != "hooks" && !yes("tetragon_connected") {
 		os.Exit(1)

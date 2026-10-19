@@ -57,12 +57,8 @@ func TestLsofNames(t *testing.T) {
 func TestWatcherStartExit(t *testing.T) {
 	var now []VM
 	var got []event.Event
-	w := &watcher{
-		list: func(context.Context) ([]VM, error) { return now, nil },
-		emit: func(e event.Event) { got = append(got, e) },
-		logf: func(string, ...any) {},
-		seen: map[uint32]VM{},
-	}
+	w := New(func(context.Context) ([]VM, error) { return now, nil },
+		func(e event.Event) { got = append(got, e) }, func(string, ...any) {})
 	ctx := context.Background()
 	w.check(ctx)
 	if len(got) != 0 {
@@ -71,6 +67,9 @@ func TestWatcherStartExit(t *testing.T) {
 	now = []VM{{PID: 7, UID: 501, Binary: "/x/" + darwinVMBinary}}
 	w.check(ctx)
 	w.check(ctx) // still running: no second start
+	if w.Running() != 1 {
+		t.Fatalf("running: %d", w.Running())
+	}
 	if len(got) != 1 || got[0].Type != event.AgentStart || got[0].Agent != Agent || got[0].Mode != "unmanaged" ||
 		got[0].Process == nil || got[0].Process.UID != 501 || got[0].Message == "" {
 		t.Fatalf("start: %+v", got)

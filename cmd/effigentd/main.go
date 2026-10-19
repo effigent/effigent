@@ -213,6 +213,12 @@ func daemon() {
 		}
 	}
 
+	// Agents in their own VM (Claude Cowork) are out of the hooks' reach: report them.
+	var vms *vmwatch.Watcher
+	if hooksOnly {
+		vms = vmwatch.New(vmwatch.Default(), emit, logger.Printf)
+	}
+
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
@@ -224,6 +230,9 @@ func daemon() {
 					"bpf_lsm":            bpfLSMEnabled(),
 					"policy_version":     policyVersion.Load(),
 					"version":            version,
+				}
+				if vms != nil {
+					out["unmanaged_agents"] = vms.Running()
 				}
 				if cp != nil {
 					out["endpoint_id"], out["control_plane"], out["tenant"] = cp.EndpointID, cp.Server, cp.Tenant
@@ -250,8 +259,7 @@ func daemon() {
 
 	if hooksOnly {
 		logger.Printf("sensor: agent hooks only (no kernel enforcement on %s)", runtime.GOOS)
-		// Agents in their own VM (Claude Cowork) are out of the hooks' reach: report them.
-		go vmwatch.Run(ctx, 10*time.Second, vmwatch.Default(), emit, logger.Printf)
+		go vms.Run(ctx, 10*time.Second)
 		<-ctx.Done()
 		return
 	}

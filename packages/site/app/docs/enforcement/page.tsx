@@ -16,7 +16,7 @@ const AGENTS: Array<[string, string, string, string?]> = [
   ['Aider', 'binary aider', '—'],
   ['opencode', 'binary opencode', '—'],
   ['Goose', 'binary goose', '—'],
-  ['Claude Cowork', 'Claude app’s virtual machine (macOS)', '—', 'reported, not enforced'],
+  ['Claude Cowork', 'Claude app’s virtual machine (macOS) · reported only', '—', '—'],
 ];
 
 export default function Enforcement() {

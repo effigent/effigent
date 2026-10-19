@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/event"
@@ -41,18 +42,32 @@ type Lister func(ctx context.Context) ([]VM, error)
 // Default is the lister for this OS, nil where there is none yet.
 func Default() Lister {
 	if runtime.GOOS == "darwin" {
-		return listDarwin
+		return (&darwinLister{other: map[uint32]string{}}).list
 	}
 	return nil
 }
 
-// Run reports each agent VM once when it appears (agent_start) and when it
-// goes away (agent_exit), checking every interval until ctx is done.
-func Run(ctx context.Context, every time.Duration, list Lister, emit func(event.Event), logf func(string, ...any)) {
-	if list == nil {
+// Watcher reports each agent VM once when it appears (agent_start) and when
+// it goes away (agent_exit).
+type Watcher struct {
+	list   Lister
+	emit   func(event.Event)
+	logf   func(string, ...any)
+	mu     sync.Mutex
+	seen   map[uint32]VM
+	failed bool
+}
+
+// New returns a watcher; list may be nil (nothing to watch on this OS).
+func New(list Lister, emit func(event.Event), logf func(string, ...any)) *Watcher {
+	return &Watcher{list: list, emit: emit, logf: logf, seen: map[uint32]VM{}}
+}
+
+// Run checks every interval until ctx is done.
+func (w *Watcher) Run(ctx context.Context, every time.Duration) {
+	if w.list == nil {
 		return
 	}
-	w := &watcher{list: list, emit: emit, logf: logf, seen: map[uint32]VM{}}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -65,15 +80,14 @@ func Run(ctx context.Context, every time.Duration, list Lister, emit func(event.
 	}
 }
 
-type watcher struct {
-	list   Lister
-	emit   func(event.Event)
-	logf   func(string, ...any)
-	seen   map[uint32]VM
-	failed bool
+// Running is how many agent VMs are running now.
+func (w *Watcher) Running() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.seen)
 }
 
-func (w *watcher) check(ctx context.Context) {
+func (w *Watcher) check(ctx context.Context) {
 	vms, err := w.list(ctx)
 	if err != nil {
 		if !w.failed { // say it once, not every interval
@@ -83,6 +97,8 @@ func (w *watcher) check(ctx context.Context) {
 		return
 	}
 	w.failed = false
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	now := time.Now()
 	live := map[uint32]bool{}
 	for _, vm := range vms {
@@ -112,24 +128,40 @@ func proc(vm VM) *event.Proc {
 // The Apple Virtualization framework runs each VM in this XPC service.
 const darwinVMBinary = "com.apple.Virtualization.VirtualMachine"
 
-func listDarwin(ctx context.Context) ([]VM, error) {
+type darwinLister struct {
+	other map[uint32]string // VM pids that aren't Cowork's (Docker Desktop…) → binary, so lsof runs once per VM
+}
+
+func (d *darwinLister) list(ctx context.Context) ([]VM, error) {
 	out, err := exec.CommandContext(ctx, "/bin/ps", "-axww", "-o", "pid=,uid=,comm=").Output()
 	if err != nil {
 		return nil, err
 	}
 	var vms []VM
+	live := map[uint32]bool{}
 	for _, vm := range parsePS(out) {
 		if !strings.HasSuffix(vm.Binary, "/"+darwinVMBinary) {
+			continue
+		}
+		live[vm.PID] = true
+		if d.other[vm.PID] == vm.Binary {
 			continue
 		}
 		// Docker Desktop, UTM and others use the same service: only a VM with
 		// Claude's disk images open is Cowork's.
 		files, err := exec.CommandContext(ctx, "/usr/sbin/lsof", "-n", "-P", "-Fn", "-p", strconv.Itoa(int(vm.PID))).Output()
 		if err != nil && len(files) == 0 {
-			continue // exited in between, or lsof can't read it
+			continue // exited in between, or lsof can't read it: try again next time
 		}
 		if IsCowork(lsofNames(files)) {
 			vms = append(vms, vm)
+		} else {
+			d.other[vm.PID] = vm.Binary
+		}
+	}
+	for pid := range d.other {
+		if !live[pid] {
+			delete(d.other, pid)
 		}
 	}
 	return vms, nil
