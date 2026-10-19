@@ -153,7 +153,8 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   the receiver's token and is never returned (`url_hint`). Signed
   `X-Effigent-Signature: t=<unix>,v1=hex(HMAC-SHA256(secret, "t.body"))`, secret shown once.
   Events: approval.requested, approval.decided, action.blocked (opt-in, 60/min cap,
-  `dropped` counter), endpoint.enrolled, endpoint.revoked, policy.published, test.
+  `dropped` counter), endpoint.enrolled, endpoint.revoked, policy.published,
+  pricing_leaks.runaway_cost (opt-in, see 2d), test.
   `emit()` only enqueues (`cp.webhook_deliveries`); the worker (started by `Handler()`)
   claims due rows with `for update skip locked` + a 60s lease and retries 10s, 1m, 5m,
   30m, 2h, 6h; 4xx except 408/429 are final. `EFFIGENT_DEV_INSECURE_WEBHOOKS=1` (local
@@ -199,8 +200,8 @@ Full write-up: `docs/pricing-leaks.md`.
   `EFFIGENT_SECRETS_KEY`, field `spend_<vendor>_key`, only the last 4 chars ever returned),
   `cp.spend_seats` / `cp.spend_usage` (source `api` | `csv`; API wins), `cp.spend_settings`
   (People directory + price overrides). No secrets key → keys refused (503), CSV still works.
-- Sync: on saving a key, `POST /api/v1/pricing-leaks/sync`, and hourly checks for connectors
-  older than `SpendSyncEvery` (24h). Claimed atomically (`sync_status`), last 30 days, one tx.
+- Sync: on saving a key, `POST /api/v1/pricing-leaks/sync`, and the vendor poller below
+  (every `SpendSyncEvery`, 24h). Last 30 days, one tx.
 - Identity (migration 010): effigentd events carry `os_user` (Tetragon uid → name on the host; the
   hook's OS user), `git_email` (repo/global git config of the cwd, read from files), `session_id`,
   `model`, `transcript_path` (hook payload) — `internal/endpoint/ident`, `hooks.Meta`. Ingest
@@ -218,15 +219,34 @@ Full write-up: `docs/pricing-leaks.md`.
 - Console API (people only, `s.console`): `GET /api/v1/pricing-leaks`, `GET /pricing-leaks/connectors`,
   `PUT|DELETE /pricing-leaks/connectors/{vendor}`, `POST /pricing-leaks/sync`,
   `POST /pricing-leaks/import` (`{vendor, kind, csv}`, ≤ 20 MB), `DELETE /pricing-leaks/import/{vendor}`,
-  `PUT /pricing-leaks/settings` (prices); `GET /api/v1/people`, `PUT|DELETE /people/{email}`,
+  `PUT /pricing-leaks/settings` (`{prices?, alerts?}`, an omitted part is kept),
+  `GET /pricing-leaks/metrics`, `GET /pricing-leaks/alerts`; `GET /api/v1/people`, `PUT|DELETE /people/{email}`,
   `POST|DELETE /people/identities`. Audit `pricing_leaks.*`, `people.*`. Console: Monitor →
-  Pricing Leaks (`/pricing-leaks`), Workspace → People (`/identity`), Settings → AI vendors
+  Pricing Leaks (`/pricing-leaks`: leaks, Spend over time `components/SpendTrend.tsx`, Alerts
+  `components/SpendAlerts.tsx`, `?leak=<id>` focuses a row), Workspace → People (`/identity`), Settings → AI vendors
   (`components/SpendVendors.tsx`); Demo Mode data in `lib/pricing-leaks-fixture.ts`, `lib/people-fixture.ts`.
 - TODO / unverified: not yet exercised against the live vendor APIs (unit tests use fakes from
   the documented shapes; OpenAI's were written without its docs); hook `os_user` is self-asserted;
-  Claude Code's PreToolUse may not send `model`; container uids aren't resolved. Not built yet:
-  spend rollup tables + metrics endpoints beyond the report, alerts (runaway cost → `s.emit` +
-  notify). Deploy order: control plane (migrations 009, 010) → console → effigentd release.
+  Claude Code's PreToolUse may not send `model`; container uids aren't resolved; the console
+  chart/alerts were checked with typecheck + build + Demo Mode data, not in a browser. Deploy
+  order: control plane (migrations 009, 010, 011) → console → effigentd release.
+- History + alerts (migration 011, `server/spend_rollup.go`, `store/spend_rollup.go`):
+  `cp.spend_rollups.changed_at` is bumped by every spend write (sync, CSV import/clear, connector
+  delete, settings); `runSpendRollups` ticks every minute and rolls up tenants whose data changed
+  or that weren't rolled up for `SpendRollupEvery` (1h), under a per-tenant session advisory lock
+  (`SpendRollupLock`). A rollup computes the page's own report (`spendReport`) and in one tx
+  replaces today's `cp.spend_report_daily` (per vendor) and `cp.spend_leaks_daily` (per leak type
+  + vendor) rows and updates the leak log `cp.spend_leaks` (first/last seen, resolved; a resolved
+  leak that reappears is a new episode). Seat history starts at the first rollup (seats are
+  replaced on every sync); `GET /pricing-leaks/metrics?days=7…365` (default 90) → `{usage}` (daily
+  vendor cost from `cp.spend_usage`, from the first sync), `{activity}` (machines/events per billed
+  vendor from `cp.agent_activity_daily`), `{report, leaks}` (rolled up). Alerts: runaway cost only
+  (`spend.AlertTypes`), claimed exactly once across instances (`update … notified_at … returning`),
+  repeated every 7 days while open (`spend.AlertRepeat`); webhook event `pricing_leaks.runaway_cost`
+  (`{leak, review_url}`), email per recipient (`alerts.emails`, else the notification emails), Slack
+  only with `EFFIGENT_SLACK=1`; audit `pricing_leaks.alert` (actor via `system`) with where it went.
+  Alerts off (`alerts.runaway_cost: false`) → the leak is still claimed and recorded `alerts: off`,
+  nothing is sent, and turning them back on doesn't replay it.
 
 ## 3. Auth
 

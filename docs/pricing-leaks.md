@@ -6,10 +6,12 @@ agents ran, on which days, for whom), and reports four kinds of leak with an est
 saving in US dollars.
 
 Code: `internal/controlplane/spend` (pure: vendor clients, CSV parsing, identity, detection),
-`internal/controlplane/store/spend.go` + `people.go`, migrations `009_spend.sql` and `010_people.sql`,
-`internal/controlplane/server/pricing_leaks.go` + `people.go`; effigentd's identity fields in
+`internal/controlplane/store/spend.go` + `people.go` + `spend_rollup.go`, migrations `009_spend.sql`,
+`010_people.sql` and `011_spend_rollup.sql`, `internal/controlplane/server/pricing_leaks.go` + `people.go`
++ `spend_rollup.go`; effigentd's identity fields in
 `internal/endpoint/ident`; console `views/PricingLeaks.tsx` (Monitor → Pricing Leaks),
-`views/Identity.tsx` (Workspace → People), `components/SpendVendors.tsx` (Settings → AI vendors).
+`components/SpendTrend.tsx` + `SpendAlerts.tsx` (on that page), `views/Identity.tsx` (Workspace → People),
+`components/SpendVendors.tsx` (Settings → AI vendors).
 
 ## Data sources
 
@@ -128,18 +130,56 @@ wins over `vendor`.
 - Vendor errors are stored on the connector (`last_error`, the key scrubbed from it) with a
   hint on 401/403/429.
 
+## History, Spend over time and alerts (migration 011)
+
+- **Trigger.** Every spend write (sync, CSV import/clear, connector delete, settings) bumps
+  `cp.spend_rollups.changed_at` for the tenant. `runSpendRollups` ticks every minute (first pass
+  after one tick) and rolls up tenants whose data changed since the last rollup or that weren't
+  rolled up for `Server.SpendRollupEvery` (default 1 h), under a per-tenant session advisory lock
+  (`cp.spend.rollup:<tenant>`). A failure is stored in `last_error` and retried after `SpendRollupEvery` or when the data
+  changes.
+- **Rollup.** The report is the page's own (`Server.spendReport`). One transaction replaces
+  today's rows in `cp.spend_report_daily` (per vendor: seats, active seats, seat/usage/monthly
+  cents, estimated, connected) and `cp.spend_leaks_daily` (per leak type + vendor: count, savings,
+  at risk), upserts every current leak into the log `cp.spend_leaks` (first/last seen, evidence,
+  confidence, savings) and marks absent ones resolved. A resolved leak that reappears gets a new
+  `first_seen_at` and is announced again (a new episode).
+- **History limits.** Seats are replaced on every sync, so seat history starts at the first
+  rollup. Daily vendor cost comes straight from `cp.spend_usage` (30 days back from the first
+  sync) and machine activity from `cp.agent_activity_daily`.
+- **Spend over time** — `GET /pricing-leaks/metrics?days=N` (7–365, default 90):
+  `{days, from, to, usage, activity, report, leaks}`. `usage` (`spend.DailyUsage`): per day and
+  vendor, cost (an organisation-level row wins for the day), requests, tokens, people, estimated.
+  `activity` (`spend.DailyActivity`): per day and billed vendor (`spend.AgentVendor`), events,
+  machines, agents. Console: stacked daily cost bars per vendor and machines-per-vendor lines,
+  30/90/180 days, table view, rolled-up leak history.
+- **Alerts.** Runaway cost only (`spend.AlertTypes`). After each rollup, `ClaimSpendAlerts`
+  claims open leaks never announced, or announced over `spend.AlertRepeat` (7 days) ago, with
+  one `update … set notified_at = now() … returning`, so several control plane instances announce
+  each once. Channels: webhook event `pricing_leaks.runaway_cost` (`{leak, review_url}`, opt-in per
+  webhook), email to each of `settings.alerts.emails` (else the notification settings' emails),
+  Slack where `EFFIGENT_SLACK=1` and Slack is connected. The result per channel is stored in
+  `notify_result` and the audit entry `pricing_leaks.alert` (actor via `system`). With alerts off
+  (`settings.alerts.runaway_cost: false`) the leak is still claimed and recorded `{"alerts":"off"}`
+  and nothing is sent, so turning alerts back on doesn't replay old leaks. `review_url` =
+  `EFFIGENT_CONSOLE_ORIGIN/pricing-leaks?leak=<id>`, which highlights the leak.
+- `GET /pricing-leaks/alerts?limit=` → `{alerts (the runaway cost log, open and resolved, with
+  notified_at / notify_result), runaway_cost, emails, default_emails, email_available, webhook_event}`.
+
 ## API (`/api/v1/pricing-leaks`, console users; writes need admin / security_admin)
 
 | Method | Path | |
 |---|---|---|
-| GET | `/pricing-leaks` | `{report, connectors, settings, default_prices, secrets_available}` |
+| GET | `/pricing-leaks` | `{report, connectors, settings, default_prices, secrets_available, first_seen (leak id → time), email_available}` |
+| GET | `/pricing-leaks/metrics` | `?days=7…365` → Spend over time (above) |
+| GET | `/pricing-leaks/alerts` | the runaway cost alert log + alert settings (above) |
 | GET | `/pricing-leaks/connectors` | `{connectors, secrets_available}` (Settings → AI vendors) |
 | PUT | `/pricing-leaks/connectors/{vendor}` | `{key, org?}` → `{vendor, configured, key_hint, sync_started}` |
 | DELETE | `/pricing-leaks/connectors/{vendor}` | removes key and synced data |
 | POST | `/pricing-leaks/sync` | 202 `{started, already_running}` |
 | POST | `/pricing-leaks/import` | `{vendor, kind: "seats"\|"usage", csv}` → counts + warnings |
 | DELETE | `/pricing-leaks/import/{vendor}` | clears that vendor's CSV rows |
-| PUT | `/pricing-leaks/settings` | `{prices: {seat, personal}}` |
+| PUT | `/pricing-leaks/settings` | `{prices?: {seat, personal}, alerts?: {runaway_cost, emails}}`; an omitted part is kept |
 | GET | `/people` | `{people: [{email, name, identities}], suggestions, sightings (resolved: person, via), unattributed, kinds, window_days}` |
 | PUT | `/people/{email}` | `{name, identities: [{kind, value}]}` replaces the person's identities; 409 if one is someone else's |
 | DELETE | `/people/{email}` | removes the person and their identities |
@@ -147,7 +187,7 @@ wins over `vendor`.
 | DELETE | `/people/identities?kind=&value=` | unmaps one identity |
 
 Audit: `pricing_leaks.connector.update|delete`, `pricing_leaks.sync`, `pricing_leaks.import`,
-`pricing_leaks.import.delete`, `pricing_leaks.settings.update`, `people.create|update|delete`,
+`pricing_leaks.import.delete`, `pricing_leaks.settings.update`, `pricing_leaks.alert` (system), `people.create|update|delete`,
 `people.identity.add|delete` (before/after identity lists).
 
 ## Verification status
@@ -161,11 +201,15 @@ Audit: `pricing_leaks.connector.update|delete`, `pricing_leaks.sync`, `pricing_l
   Cursor's `isChargeable` / charged-cents fields, vendor CSV header spellings.
 - Identity: `os_user` from hooks is what the hook process reports (a user could set it);
   Claude Code's PreToolUse payload may not include `model`; Tetragon uids inside containers are
-  not resolved (the container's users aren't the host's). The People page and Settings card were
-  checked with the dashboard typecheck + build and Demo Mode fixtures, not in a browser.
+  not resolved (the container's users aren't the host's). The People page, Settings card, Spend
+  over time chart and Alerts card were checked with the dashboard typecheck + build and Demo Mode
+  fixtures, not in a browser.
+- Rollup and alerts: `TestPricingLeaksRollupAndAlerts` (Postgres) covers due-ness, one webhook
+  per episode, no repeat, resolve → reappear, alerts off, metrics shape and audit. Email delivery
+  of alerts is not exercised by a test (no SMTP in tests; the result is `off: …`).
 
 ## Deploy order
 
-Control plane (migrations 009 + 010) → console → effigentd release (older effigentd keeps
+Control plane (migrations 009, 010, 011) → console → effigentd release (older effigentd keeps
 working; its events just carry no `os_user` / `git_email`, so attribution falls back to the
 machine).
