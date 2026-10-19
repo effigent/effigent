@@ -95,6 +95,7 @@ export const DOCS: Array<[string, string, string]> = [
   ['Approvals', '/docs/approvals', 'How a paused action reaches a reviewer, what an approval is bound to, and when it expires.'],
   ['Enforcement & coverage', '/docs/enforcement', 'Kernel and hook enforcement, what each covers per agent, enforcement from the first instruction, offline behaviour and emergency suspend.'],
   ['Kubernetes & containers', '/docs/kubernetes', 'effigentd on every Kubernetes node with Helm, or on a plain Docker host: requirements, install, upgrade, uninstall and operations.'],
+  ['Pricing Leaks', '/docs/pricing-leaks', 'Connect your AI vendors, match their seats and costs to the people running agents, and get the monthly saving and runaway-cost alerts.'],
   ['API', '/docs/api', 'effigentd’s local API, the event stream it sends to the control plane, and what the console exposes.'],
 ];
 
