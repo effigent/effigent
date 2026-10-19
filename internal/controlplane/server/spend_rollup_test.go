@@ -76,6 +76,12 @@ func TestPricingLeaksRollupAndAlerts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// a webhook made without an event list gets the defaults: no runaway cost alerts
+	var plain webhookView
+	if code, raw := call("POST", "/webhooks", map[string]any{"name": "approvals", "url": hook.URL}, &plain); code != 201 ||
+		slices.Contains(plain.Events, spendAlertEvent) {
+		t.Fatalf("default webhook: %d %s", code, raw)
+	}
 	if err := st.PutNotificationSettings(ctx, tenant, store.NotificationSettings{Emails: []string{"ops@acme.io"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +153,9 @@ func TestPricingLeaksRollupAndAlerts(t *testing.T) {
 	}
 	if n := deliveries(); n != 1 {
 		t.Fatalf("runaway alert: %d webhook deliveries, want 1", n)
+	}
+	if ds, err := st.ListDeliveries(ctx, tenant, plain.ID, 100); err != nil || len(ds) != 0 {
+		t.Fatalf("a webhook not subscribed to %s got it: %+v %v", spendAlertEvent, ds, err)
 	}
 	select {
 	case body := <-received:

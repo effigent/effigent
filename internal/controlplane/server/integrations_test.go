@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,19 @@ import (
 type received struct {
 	Type, Sig, Body string
 	Data            map[string]any
+}
+
+// TestDefaultWebhookEvents: a webhook created without a list gets the
+// approval events only; runaway cost alerts must be picked explicitly.
+func TestDefaultWebhookEvents(t *testing.T) {
+	if !slices.Contains(webhookEvents, spendAlertEvent) {
+		t.Fatalf("%s must be a webhook event one can subscribe to", spendAlertEvent)
+	}
+	for _, e := range []string{spendAlertEvent, "action.blocked"} {
+		if slices.Contains(defaultWebhookEvents, e) {
+			t.Errorf("%s must be opt-in, not a default webhook event", e)
+		}
+	}
 }
 
 func TestIntegrations(t *testing.T) {
