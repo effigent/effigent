@@ -63,4 +63,12 @@ type Event struct {
 	Rule      string    `json:"rule,omitempty"`
 	Container string    `json:"container,omitempty"`
 	Message   string    `json:"message,omitempty"`
+
+	// Who is behind the action (best effort, all optional; older effigentd
+	// builds don't send them). Used by the control plane's people mapping.
+	OSUser         string `json:"os_user,omitempty"`         // OS user of the agent (hook caller, or the kernel uid's name)
+	SessionID      string `json:"session_id,omitempty"`      // the agent's full session id (hooks)
+	GitEmail       string `json:"git_email,omitempty"`       // git user.email for that user in the working directory
+	Model          string `json:"model,omitempty"`           // model the agent reported in its hook payload, if any
+	TranscriptPath string `json:"transcript_path,omitempty"` // the agent's transcript file (hooks), a path only
 }

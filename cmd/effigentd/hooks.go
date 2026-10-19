@@ -18,6 +18,7 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/engine"
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/hooks"
+	"github.com/effigent/effigent/internal/endpoint/ident"
 	"github.com/effigent/effigent/internal/endpoint/redact"
 	"github.com/effigent/effigent/internal/shared/action"
 )
@@ -59,6 +60,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 			return ag.failClosed("the hook input could not be read"), nil
 		}
 		in := call.Orig
+		who := hookIdentity(c)
 		// There is no kernel to report agents starting, so a session's first
 		// tool call stands in for it (the console counts agents from these).
 		mu.Lock()
@@ -72,13 +74,13 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		}
 		mu.Unlock()
 		if !known && in.SessionID != "" {
-			eng.Emit(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: ag.name,
-				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID)})
+			eng.Emit(who.on(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: ag.name,
+				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID)}))
 		}
 		// One event per tool call, so the console sees everything the agent
 		// did; a policy match makes it blocked / would_block / file_open.
-		ev := event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: ag.name,
-			Kind: "tool", Target: call.Summary(), Rule: "hook", Message: "session " + short(in.SessionID)}
+		ev := who.on(event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: ag.name,
+			Kind: "tool", Target: call.Summary(), Rule: "hook", Message: "session " + short(in.SessionID)})
 		if hooks.Claude == nil {
 			// No decision logic in this build: watch mode. Record the call,
 			// block nothing, and leave the user's own permission prompts as is.
@@ -110,6 +112,20 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		eng.Emit(ev)
 		return ag.output(d), nil
 	}
+}
+
+// identity is who is behind a hook call, copied onto its events.
+type identity struct{ osUser, session, gitEmail, model, transcript string }
+
+func hookIdentity(c api.HookCall) identity {
+	m := hooks.Meta(c.Payload)
+	return identity{osUser: c.OSUser, session: m.SessionID, gitEmail: ident.Default.GitEmail(c.OSUser, m.Cwd),
+		model: m.Model, transcript: m.TranscriptPath}
+}
+
+func (w identity) on(ev event.Event) event.Event {
+	ev.OSUser, ev.SessionID, ev.GitEmail, ev.Model, ev.TranscriptPath = w.osUser, w.session, w.gitEmail, w.model, w.transcript
+	return ev
 }
 
 // pausedCall is an agent tool call that needs approval, independent of the
