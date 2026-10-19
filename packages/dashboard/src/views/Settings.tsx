@@ -8,6 +8,7 @@ import { SlackApp } from '@/components/SlackApp.tsx';
 import { useLive } from '@/live.tsx';
 import { API_BASE, ApiError, apiErrorText, type ApiNotifications } from '@/lib/api.ts';
 import { Integrations } from '@/components/Integrations.tsx';
+import { SpendVendors } from '@/components/SpendVendors.tsx';
 import { Storage } from '@/components/Storage.tsx';
 import { Card, CardHead, DemoNote, PageGuide, PageHead, ReadOnlyNote, Switch, ThemeSelect } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
@@ -35,11 +36,15 @@ export function Settings({ dev }: { dev: boolean }) {
   return (
     <div className="page">
       <PageHead info={HELP.settings} title="Settings" sub="Notifications, integrations and workspace options. Each card saves on its own." />
-      <PageGuide id="settings" steps={[<><b>Approvals</b>: connect Slack and email so approvers can decide from the message</>, <><b>Integrations</b>: API keys and webhooks for Windmill, Tines or scripts</>, <><b>Workspace</b>: your role, and the control plane you are connected to</>]} />
+      <PageGuide id="settings" steps={[<><b>Approvals</b>: connect Slack and email so approvers can decide from the message</>, <><b>Integrations</b>: API keys and webhooks for Windmill, Tines or scripts; <b>AI vendors</b> for Pricing Leaks</>, <><b>Workspace</b>: your role, and the control plane you are connected to</>]} />
 
       <div className="grid-2">
         <div id="approvals" style={{ scrollMarginTop: 88 }}><ApprovalNotifications /></div>
         <div id="integrations" style={{ scrollMarginTop: 88 }}><Integrations /></div>
+      </div>
+      <div id="ai-vendors" style={{ scrollMarginTop: 88 }}><SpendVendors /></div>
+
+      <div className="grid-2">
 
         <Card>
           <CardHead title="Enforcement defaults" sub="Applied by effigentd when no policy says otherwise."><DemoNote title={NOT_STORED} label="Not saved yet" /></CardHead>

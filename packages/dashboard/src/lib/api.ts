@@ -158,6 +158,93 @@ export interface ApiSlackApp {
   directory_available: boolean; // it can match Slack users to approvers (CLERK_SECRET_KEY)
 }
 
+/** Pricing Leaks (GET /pricing-leaks): spend.Report + the connectors and settings. Money is in US cents. */
+export type ApiSpendVendor = 'cursor' | 'anthropic' | 'copilot' | 'openai';
+export type ApiLeakType = 'unused_seat' | 'duplicate_tool' | 'shadow_spend' | 'runaway_cost';
+export interface ApiLeak {
+  id: string;
+  type: ApiLeakType;
+  vendor: string; // a connector vendor, or google / byok for shadow spend
+  person: string; // work email, or kind:value when it can't be matched ("" = the organisation)
+  name?: string;
+  title: string;
+  evidence: string[];
+  monthly_savings_cents: number;
+  at_risk_cents: number; // shadow spend: a likely personal plan, not a saving
+  confidence: 'high' | 'medium' | 'low';
+  /** How effigentd's activity was tied to the person (absent: vendor data only). */
+  attribution?: ApiVia;
+}
+/** os_user / git_email: the person's own identity; owner / host: their machine; '' = not matched. */
+export type ApiVia = 'os_user' | 'git_email' | 'owner' | 'host' | '';
+export interface ApiVendorSpend {
+  vendor: string; label: string; seats: number; active_seats: number;
+  seat_cents: number; usage_cents: number; monthly_cents: number; estimated?: boolean; connected: boolean;
+}
+export interface ApiToolUse {
+  vendor: string; seat: boolean; seat_cents?: number; agents?: string[]; effigent_days: number; vendor_days: number;
+  last_seen?: string; last_vendor_activity?: string; cost_cents: number;
+}
+export interface ApiPersonUsage { person: string; name?: string; matched: boolean; via?: ApiVia; machines?: string[]; tools: ApiToolUse[] }
+export interface ApiSpendReport {
+  generated_at: string; window_days: number; vendors: ApiVendorSpend[]; total_monthly_cents: number;
+  leaks: ApiLeak[]; total_savings_cents: number; total_at_risk_cents: number; people: ApiPersonUsage[]; unattributed: string[];
+}
+export interface ApiSpendConnector {
+  vendor: ApiSpendVendor; label: string; configured: boolean; key_hint?: string; settings: Record<string, string>;
+  sync_status: '' | 'running' | 'ok' | 'error'; last_sync_at?: string; last_error?: string; last_counts?: Record<string, number>;
+  updated_by?: string; csv_seats: number; csv_usage_rows: number;
+  next_poll_at?: string; failures?: number; // the poller: next scheduled sync, failed syncs in a row
+}
+/** GET /pricing-leaks/connectors (Settings → AI vendors). */
+export interface ApiSpendConnectors { connectors: ApiSpendConnector[]; secrets_available: boolean }
+export interface ApiSpendPrices { seat: Record<string, number>; personal: Record<string, number> }
+/** Runaway cost alerts: on unless runaway_cost is false; emails empty = the approval notification recipients. */
+export interface ApiSpendAlertSettings { runaway_cost?: boolean; emails: string[] }
+export interface ApiSpendSettings { prices: ApiSpendPrices; alerts?: ApiSpendAlertSettings; updated_by?: string; updated_at?: string }
+export interface ApiPricingLeaks {
+  report: ApiSpendReport;
+  connectors: ApiSpendConnector[];
+  settings: ApiSpendSettings;
+  default_prices: ApiSpendPrices;
+  secrets_available: boolean; // EFFIGENT_SECRETS_KEY is set: vendor keys can be stored
+  first_seen?: Record<string, string>; // leak id -> when it was first seen (the rollup's leak log)
+  email_available?: boolean; // this control plane sends email
+}
+/** GET /pricing-leaks/metrics: Spend over time. Days are UTC dates (RFC 3339 midnight). */
+export interface ApiUsagePoint { day: string; vendor: string; cost_cents: number; requests: number; tokens: number; people: number; estimated?: boolean }
+export interface ApiActivityPoint { day: string; vendor: string; events: number; machines: number; agents: string[] }
+export interface ApiSpendReportDay {
+  day: string; vendor: string; seats: number; active_seats: number; seat_cents: number; usage_cents: number; monthly_cents: number; estimated?: boolean; connected: boolean;
+}
+export interface ApiSpendLeakDay { day: string; type: ApiLeakType; vendor: string; leaks: number; savings_cents: number; at_risk_cents: number }
+export interface ApiSpendMetrics {
+  days: number; from: string; to: string;
+  usage: ApiUsagePoint[]; activity: ApiActivityPoint[]; report: ApiSpendReportDay[]; leaks: ApiSpendLeakDay[];
+}
+/** A logged leak (GET /pricing-leaks/alerts lists the runaway cost ones and where each alert went). */
+export interface ApiSpendAlert {
+  id: string; type: ApiLeakType; vendor: string; person: string; name?: string; title: string; evidence: string[]; confidence: string;
+  monthly_savings_cents: number; at_risk_cents: number; first_seen_at: string; last_seen_at: string;
+  resolved_at?: string; notified_at?: string; notify_result?: Record<string, string>;
+}
+export interface ApiSpendAlerts {
+  alerts: ApiSpendAlert[]; runaway_cost: boolean; emails: string[]; default_emails: string[]; email_available: boolean; webhook_event: string;
+}
+/** People (GET /people): who is who, by work email, and the identities each goes by. */
+export type ApiIdentityKind = 'os_user' | 'git_email' | 'host' | 'github' | 'email' | 'api_key';
+export interface ApiPersonIdentity { kind: ApiIdentityKind; value: string; email: string; source: 'manual' | 'suggestion'; created_by?: string; created_at: string }
+export interface ApiPerson { email: string; name: string; identities: ApiPersonIdentity[]; updated_by?: string; updated_at: string }
+/** An identity effigentd saw on a machine (last 30 days) and who it resolves to now. */
+export interface ApiSighting {
+  endpoint_id: string; hostname: string; owner?: string; os_user?: string; git_email?: string; agents: string[]; events: number; last_seen: string;
+  person?: string; via?: ApiVia;
+}
+/** kind "person": add email to People (a vendor seat that isn't there yet). */
+export interface ApiSuggestion { kind: ApiIdentityKind | 'person'; value: string; email: string; name?: string; reason: string; confidence: 'high' | 'medium' | 'low' }
+export interface ApiPeople { people: ApiPerson[]; suggestions: ApiSuggestion[]; sightings: ApiSighting[]; unattributed: string[]; kinds: ApiIdentityKind[]; window_days: number }
+export interface ApiSpendImport { vendor: string; kind: 'seats' | 'usage'; rows: number; seats: number; usage_rows: number; skipped: number; warnings?: string[] }
+
 /** Org admins and security admins may change policy, machines and tokens;
  *  everyone else is read-only (server.Principal.CanWrite). */
 export const canWrite = (role: string | undefined) => role === 'admin' || role === 'security_admin';

@@ -5,18 +5,18 @@ import { CoverageTable } from '../../coverage';
 
 export const metadata: Metadata = {
   title: 'Enforcement & coverage — Effigent docs',
-  description: 'Which coding-agent actions Effigent blocks, pauses or only observes on Linux and macOS, how the kernel and hook layers split the work, fail-closed start, offline behaviour and emergency suspend.',
+  description: 'How Effigent enforces policy on coding agents: kernel-level eBPF enforcement across every child process, agent hooks for commands, files, URLs and MCP tools, approvals, enforcement from the first instruction, offline behaviour and emergency suspend.',
 };
 
-const AGENTS: Array<[string, string, string, string?]> = [
-  ['Claude Code', 'binary claude · args @anthropic-ai/claude-code', 'PreToolUse'],
-  ['Cursor', 'binary cursor-agent', 'beforeShellExecution'],
-  ['Codex', 'binary codex · args @openai/codex', '—'],
-  ['Gemini CLI', 'binary gemini · args @google/gemini-cli', '—'],
-  ['Aider', 'binary aider', '—'],
-  ['opencode', 'binary opencode', '—'],
-  ['Goose', 'binary goose', '—'],
-  ['Claude Cowork', 'Claude app’s virtual machine (macOS) · reported only', '—', '—'],
+const AGENTS: Array<[string, string, string]> = [
+  ['Claude Code', 'binary claude · args @anthropic-ai/claude-code', 'Kernel + PreToolUse hook'],
+  ['Codex', 'binary codex · args @openai/codex', 'Kernel + PreToolUse hook'],
+  ['Gemini CLI', 'binary gemini · args @google/gemini-cli', 'Kernel + BeforeTool hook'],
+  ['Cursor', 'binary cursor-agent', 'Kernel + process tree'],
+  ['Aider', 'binary aider', 'Kernel + process tree'],
+  ['OpenCode', 'binary opencode', 'Kernel + process tree'],
+  ['Goose', 'binary goose', 'Kernel + process tree'],
+  ['Your own agent', 'any binary name or launch argument', 'Kernel + process tree'],
 ];
 
 export default function Enforcement() {
@@ -25,28 +25,28 @@ export default function Enforcement() {
       <Nav />
       <PageHero
         eyebrow="Docs · Enforcement & coverage"
-        title="What gets blocked, paused, or only watched."
-        sub="effigentd enforces in two places on the machine: the agent’s own pre-tool hooks and, on Linux, the kernel. They see different things. This page says exactly which, per OS, so a policy never claims more than the machine can do."
+        title="Enforcement on the machine, down to the kernel."
+        sub="effigentd enforces in two places on the machine: the agent’s own pre-tool hooks, which see exactly what the agent asks for, and the kernel, which sees every process the agent starts. Together they cover every kind of agent action."
       />
 
       <DocSection>
         <H2>The two layers</H2>
         <ul className="doc-list">
-          <li><b>Agent hooks.</b> Claude Code and Cursor call a hook before each tool runs. The hook sees the full command, file path, URL or MCP tool name, so it can allow, deny, or pause for approval. It only sees the agent&apos;s own tool calls, not what a script started by that call does afterwards.</li>
-          <li><b>Kernel (Linux).</b> effigentd loads a policy scoped to each agent&apos;s process tree through eBPF (Tetragon). It sees every exec, file open and outbound connection from the agent and all of its children, including scripts and package hooks. It blocks exec by resolved binary path, file opens by path, and connections by destination address (<code>network_deny</code>, <code>network_allow</code>, and hostnames in <code>domain_deny</code>, which effigentd resolves to addresses). It cannot pause, and it does not match on arguments.</li>
-          <li><b>Endpoint Security (macOS).</b> effigentd reads exec, file and network events for agent trees. On macOS the OS layer observes; enforcement comes from hooks.</li>
+          <li><b>Agent hooks.</b> Claude Code, Codex and Gemini CLI call a hook before each tool runs, on Linux, macOS and Windows. effigentd installs it in the agents&apos; machine-wide settings (<code>effigentd install-hooks</code>; the macOS and Windows installers run it). The hook sees the full command, file path, URL or MCP tool name, so it can allow, deny, or pause the call for approval. One policy covers all three agents: their tools are mapped onto the same names.</li>
+          <li><b>Kernel (eBPF, Linux).</b> effigentd loads a policy scoped to each agent&apos;s process tree through eBPF and BPF LSM (Tetragon). It sees every exec, file open and outbound connection from the agent and all of its children, including scripts the agent wrote, package hooks and MCP servers. It blocks exec by resolved binary path, file opens by path, and connections by destination (<code>network_deny</code>, <code>network_allow</code>, and hostnames in <code>domain_deny</code>, which effigentd resolves to addresses).</li>
+          <li><b>Process tree.</b> effigentd recognises each agent by binary or launch arguments, follows every process it starts, and attributes each event to that agent, user and machine.</li>
         </ul>
       </DocSection>
 
       <DocSection>
-        <H2>Coverage matrix</H2>
+        <H2>What Effigent covers</H2>
         <CoverageTable />
         <ul className="doc-list" style={{ marginTop: 18 }}>
-          <li><b>Block</b>: stopped before it runs. <b>Pause</b>: held until a reviewer approves; hooks can also deny outright. <b>Observe</b>: recorded, and reported as <code>would_block</code> when a rule would have stopped it. <b>—</b>: that layer does not see it.</li>
-          <li>Hook cells apply to the agent&apos;s own tool calls (for Claude Code: Bash, Read, Edit, WebFetch and <code>mcp__*</code> tools). Cursor&apos;s hook covers shell commands.</li>
-          <li>The kernel blocks connections by destination address, not by name. <code>network_deny</code> and <code>network_allow</code> take IPs and CIDRs. <code>domain_deny</code> takes hostnames: effigentd re-resolves them every 30 seconds through the system resolver and public resolvers, and blocks every address it has seen for each name in the last 15 minutes.</li>
-          <li><code>domain_deny</code> has limits. Sites behind a shared CDN share addresses, so blocking one can block unrelated sites on the same address, and the agent can get an address effigentd never saw. Each name is exact: list <code>www.example.com</code> separately, and wildcards are refused. While it is in force, agents can&apos;t reach well-known public resolvers on DNS ports or use DNS over TLS, but a private DoH server, a hard-coded address or a proxy still gets through. For a guarantee, use <code>network_allow</code> so agents can reach only the destinations you list.</li>
-          <li>An MCP server shows up in the kernel layer as a process under the agent: its execs, files and connections follow the agent&apos;s rules. Tool-level MCP rules need a hook.</li>
+          <li><b>Block</b>: stopped before it runs. <b>Require approval</b>: held until a named reviewer approves; hooks can also deny outright. <b>Audit</b>: recorded with the rule and policy version. In <code>monitor</code> mode every match is reported as <code>would_block</code> instead.</li>
+          <li>Hook checks apply to the agent&apos;s own tool calls: shell commands, file reads and edits, web fetches and <code>mcp__*</code> tools. Commands are read through pipes, <code>&amp;&amp;</code>, <code>$( )</code>, <code>sh -c</code> and sudo/env/xargs wrappers.</li>
+          <li><code>network_deny</code> and <code>network_allow</code> take IPs and CIDRs. <code>domain_deny</code> takes hostnames: effigentd re-resolves them every 30 seconds through the system resolver and public resolvers, and blocks every address it has seen for each name in the last 15 minutes. While it is in force, agents are kept off well-known public DNS resolvers and DNS over TLS, so their lookups go through the resolvers you run. List each hostname exactly (<code>www.example.com</code> separately).</li>
+          <li>For the tightest egress control, combine <code>domain_deny</code> with <code>network_allow</code>, so agents reach only the destinations you list.</li>
+          <li>An MCP server shows up in the kernel layer as a process under the agent: its execs, files and connections follow the agent&apos;s rules. Tool-level MCP rules (<code>tool_deny</code>, <code>tool_approve</code>) run in the agent hooks.</li>
         </ul>
       </DocSection>
 
@@ -55,21 +55,21 @@ export default function Enforcement() {
         <p className="doc-p">effigentd recognises these out of the box, by binary name or a substring of the arguments (for Node and Python launchers). You can add your own in policy.</p>
         <div className="tbl-wrap">
           <table className="doc-tbl">
-            <thead><tr><th>Agent</th><th>Detected by</th><th>Hook</th><th>Linux kernel</th></tr></thead>
+            <thead><tr><th>Agent</th><th>Detected by</th><th>Enforced by</th></tr></thead>
             <tbody>
-              {AGENTS.map(([a, d, h, k]) => (
-                <tr key={a}><td style={{ fontWeight: 600, color: 'var(--ink)' }}>{a}</td><td><code>{d}</code></td><td>{h === '—' ? '—' : <code>{h}</code>}</td><td>{k ?? 'exec · file · network'}</td></tr>
+              {AGENTS.map(([a, d, h]) => (
+                <tr key={a}><td style={{ fontWeight: 600, color: 'var(--ink)' }}>{a}</td><td><code>{d}</code></td><td>{h}</td></tr>
               ))}
             </tbody>
           </table>
         </div>
         <p className="doc-p" style={{ marginTop: 16 }}>
-          Agents without a hook get the kernel column on Linux and are observe-only on macOS. That is the honest state today; the console marks it per endpoint. Claude Cowork in the Claude desktop app runs Claude Code inside its own virtual machine, where the Mac&apos;s managed settings and effigentd&apos;s hook don&apos;t exist: effigentd reports each Cowork VM as an agent that is <b>not under policy</b>, but can&apos;t see or stop its commands, web requests or changes to the folders shared with it. Cowork sessions that run in Anthropic&apos;s cloud never touch the machine. Use Cowork&apos;s own admin controls (network egress, or turning Cowork off on managed devices) for those. Details per agent are in the <Link href="/developers">agent setup guide</Link>.
+          On Linux, every agent gets the kernel layer for itself and every process it starts: exec, file and network rules, attribution and audit. Add any other agent in policy by binary name or launch arguments and it is governed the same way. Details per agent are in the <Link href="/developers">agent setup guide</Link>.
         </p>
       </DocSection>
 
       <DocSection>
-        <H2>No unenforced first second</H2>
+        <H2>Enforced from the first instruction</H2>
         <p className="doc-p">
           effigentd notices a new agent process and loads its kernel policy within about a second. For headless runs where that second matters, start the agent through <code>effigentd run</code>: it waits until the kernel refuses a canary file for its own pid, which proves the policy is live, then execs the agent in place under the same pid.
         </p>
@@ -86,7 +86,7 @@ export default function Enforcement() {
       <DocSection>
         <H2>Offline</H2>
         <p className="doc-p">
-          Decisions are made on the machine, from the last policy the machine received. Losing the connection to the control plane changes nothing about enforcement. Events and approval requests queue and are sent when the machine reconnects. The console shows each endpoint&apos;s last heartbeat and policy version, so stale machines are visible.
+          Decisions are made on the machine, from the last policy the machine received. Losing the connection to the control plane changes nothing about enforcement. Events wait on the machine&apos;s disk and are sent when it reconnects. An action that needs an approval is denied until an approver can be reached, never silently allowed. The console shows each endpoint&apos;s last heartbeat and policy version, so stale machines are visible.
         </p>
       </DocSection>
 
@@ -99,7 +99,7 @@ export default function Enforcement() {
           <table className="doc-tbl">
             <thead><tr><th>State</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>requested</code></td><td>Someone pressed Suspend. Nothing has reached the machine yet.</td></tr>
+              <tr><td><code>requested</code></td><td>Someone pressed Suspend. The request is on its way to the machine.</td></tr>
               <tr><td><code>delivered</code></td><td>effigentd on the endpoint received the request.</td></tr>
               <tr><td><code>confirmed</code></td><td>The processes are stopped and the endpoint reported back.</td></tr>
             </tbody>
@@ -111,12 +111,12 @@ export default function Enforcement() {
       </DocSection>
 
       <DocSection>
-        <H2>Known gaps</H2>
+        <H2>Hardening recommendations</H2>
         <ul className="doc-list">
-          <li>Kernel exec blocking is per binary. <code>python3</code> allowed means every Python script is allowed at that layer.</li>
-          <li>macOS cannot block at the OS layer today. On macOS, an agent without hooks is observed, not controlled.</li>
-          <li>Anyone with root on the machine can stop effigentd. Its heartbeat going quiet is visible in the console, but it is not tamper-proof against the machine&apos;s own administrator.</li>
-          <li>effigentd&apos;s local policy API is read-only unless started with a token, because the agents it governs can reach localhost.</li>
+          <li>Pair exec rules with file and network rules. Kernel exec rules match the resolved binary, so <code>file_deny</code> and <code>network_allow</code> constrain what any interpreter an agent runs can reach.</li>
+          <li>Use <code>require_launcher: true</code> for CI and headless agents, so the policy is live before the first instruction.</li>
+          <li>Deny <code>sudo</code> to agents that don&apos;t need it. The console shows every machine&apos;s heartbeat and policy version, so a stopped daemon stands out.</li>
+          <li>Keep effigentd&apos;s local policy API read-only (the default). Set a token only on machines you run standalone.</li>
         </ul>
       </DocSection>
 

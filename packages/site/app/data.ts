@@ -37,37 +37,40 @@ export const problems = [
 });
 
 export const engineParts = [
-  { name: 'effigentd', desc: 'One daemon per machine. Recognises agents by binary and arguments and follows their process trees.' },
-  { name: 'Kernel sensor (Linux)', desc: 'eBPF via Tetragon. Blocks exec by resolved path and file opens by path, scoped to the agent’s pids.' },
-  { name: 'Endpoint Security (macOS)', desc: 'Sees exec, file and network events from agent trees. Observes; it does not block.' },
-  { name: 'Agent hooks', desc: 'Claude Code PreToolUse and Cursor beforeShellExecution see the full command, so they can deny or pause it.' },
+  { name: 'effigentd', desc: 'One daemon per laptop, server or Kubernetes node. Recognises agents by binary and arguments and follows their whole process trees.' },
+  { name: 'Kernel enforcement', desc: 'eBPF and BPF LSM via Tetragon. Blocks exec, file opens and connections for the agent and every process it starts.' },
+  { name: 'Agent hooks', desc: 'Pre-tool hooks for Claude Code, Codex and Gemini CLI see the full command, file, URL or MCP tool, so they can deny it or pause it for approval.' },
   { name: 'Policy evaluator', desc: 'The same evaluator runs on the endpoint and in the console, so a simulated decision matches the enforced one.' },
-  { name: 'Approvals', desc: 'A paused action waits for a named reviewer. The approval is single-use and bound to that exact action.' },
-  { name: 'Audit trail', desc: 'Every decision with its policy version, rule, endpoint, OS user and approver. Tamper-evident.' },
-  { name: 'Control plane', desc: 'Policies, endpoints, approvals and audit in one console. Hosted, or run it yourself.' },
+  { name: 'Approvals', desc: 'A paused action waits for a named reviewer in Slack, email or the console. The approval is single-use and bound to that exact action.' },
+  { name: 'Audit trail', desc: 'Every decision with its policy version, rule, endpoint, OS user and approver. Append-only and hash-chained.' },
+  { name: 'Pricing Leaks', desc: 'Joins seat, usage and cost data from AI vendors’ admin APIs with what actually runs on each machine.' },
+  { name: 'Control plane', desc: 'Signed policies, endpoints, approvals, spend and audit in one console. Policies keep working offline.' },
 ];
 
-/** What each layer can do per action type. Matches /docs/enforcement. */
-export type Cover = 'block' | 'pause' | 'observe' | 'none';
-export const COVERAGE_COLS = ['Linux kernel', 'macOS', 'Claude Code hook', 'Cursor hook'] as const;
-export const COVERAGE: Array<{ what: string; example: string; cells: [Cover, Cover, Cover, Cover] }> = [
-  { what: 'Run a binary', example: '/usr/bin/curl', cells: ['block', 'observe', 'pause', 'pause'] },
-  { what: 'Specific arguments', example: 'git push --force origin main', cells: ['observe', 'observe', 'pause', 'pause'] },
-  { what: 'Child processes & scripts', example: 'postinstall → sh → nc', cells: ['block', 'observe', 'none', 'none'] },
-  { what: 'Open a file', example: '~/.ssh/id_ed25519', cells: ['block', 'observe', 'pause', 'none'] },
-  { what: 'Outbound connection', example: 'paste.example.net:443', cells: ['block', 'observe', 'pause', 'none'] },
-  { what: 'MCP tool call', example: 'github.delete_branch', cells: ['observe', 'observe', 'pause', 'none'] },
+/** What Effigent covers, per action: which layer enforces it and the decisions
+ *  available. Shared by the home page and /docs/enforcement. */
+export type Decision = 'block' | 'approve' | 'audit' | 'attribute';
+export const COVERAGE: Array<{ what: string; example: string; by: string; decisions: Decision[] }> = [
+  { what: 'Run a program', example: '/usr/bin/curl', by: 'Kernel + agent hooks', decisions: ['block', 'approve', 'audit'] },
+  { what: 'A specific command', example: 'git push --force origin main', by: 'Agent hooks', decisions: ['block', 'approve', 'audit'] },
+  { what: 'Child processes & scripts', example: 'python3 fix.py → sh → nc', by: 'Kernel (eBPF)', decisions: ['block', 'audit'] },
+  { what: 'Open a file', example: '~/.ssh/id_ed25519', by: 'Kernel + agent hooks', decisions: ['block', 'approve', 'audit'] },
+  { what: 'Outbound connection', example: 'paste.example.net:443', by: 'Kernel + agent hooks', decisions: ['block', 'approve', 'audit'] },
+  { what: 'MCP & agent tool call', example: 'mcp__github__delete_branch', by: 'Agent hooks', decisions: ['block', 'approve', 'audit'] },
+  { what: 'Agent session', example: 'claude-code · pid 48211', by: 'effigentd process tree', decisions: ['attribute', 'audit'] },
 ];
-export const COVER_STYLE: Record<Cover, { label: string; fg: string; bg: string; border: string }> = {
+export const DECISION_STYLE: Record<Decision, { label: string; fg: string; bg: string; border: string }> = {
   block: { label: 'Block', fg: 'oklch(0.45 0.16 25)', bg: 'oklch(0.97 0.02 25)', border: 'oklch(0.85 0.07 25)' },
-  pause: { label: 'Pause', fg: 'oklch(0.45 0.11 70)', bg: 'oklch(0.975 0.03 85)', border: 'oklch(0.86 0.08 85)' },
-  observe: { label: 'Observe', fg: 'oklch(0.42 0.1 250)', bg: 'oklch(0.97 0.02 250)', border: 'oklch(0.86 0.05 250)' },
-  none: { label: '—', fg: 'oklch(0.6 0.01 260)', bg: 'transparent', border: 'transparent' },
+  approve: { label: 'Require approval', fg: 'oklch(0.45 0.11 70)', bg: 'oklch(0.975 0.03 85)', border: 'oklch(0.86 0.08 85)' },
+  audit: { label: 'Audit', fg: 'oklch(0.42 0.1 250)', bg: 'oklch(0.97 0.02 250)', border: 'oklch(0.86 0.05 250)' },
+  attribute: { label: 'Attribute', fg: 'oklch(0.4 0.13 150)', bg: 'oklch(0.97 0.03 150)', border: 'oklch(0.82 0.08 150)' },
 };
 
 export const installTabs = [
   { key: 'linux', label: 'Linux' },
   { key: 'macos', label: 'macOS' },
+  { key: 'windows', label: 'Windows' },
+  { key: 'kubernetes', label: 'Kubernetes' },
   { key: 'headless', label: 'Headless & CI' },
   { key: 'policy', label: 'Local policy' },
   { key: 'check', label: 'Check it' },
@@ -75,9 +78,13 @@ export const installTabs = [
 
 export const INSTALL_CODE: Record<string, string> = {
   linux:
-    '# Kernel enforcement (eBPF via Tetragon) + agent hooks.\n# Copy the exact line from Console → Enforcement → Install on an endpoint.\ncurl -fsSL <install-url> | sudo sh -s -- --enroll <enrollment-token>\n\neffigentd status        # sensor, policy version, tracked agents',
+    '# Kernel enforcement (eBPF via Tetragon) + agent hooks.\n# Copy the exact line from Console → Enforcement → Install on an endpoint.\ncurl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token <enrollment-token>\n\neffigentd status        # sensor, policy version, tracked agents',
   macos:
-    '# Endpoint Security (observe) + agent hooks (deny / pause).\n# Copy the exact line from Console → Enforcement → Install on an endpoint.\ncurl -fsSL <install-url> | sudo sh -s -- --enroll <enrollment-token>\n\neffigentd status        # sensor, policy version, tracked agents',
+    '# Agent hooks for Claude Code, Codex and Gemini CLI (deny / pause / audit).\n# Copy the exact line from Console → Enforcement → Install on an endpoint.\ncurl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token <enrollment-token>\n\neffigentd status        # policy version, hooks, tracked agents',
+  windows:
+    '# Elevated PowerShell. Installs the service and the agent hooks.\niwr https://effigent.ai/install.ps1 -OutFile install.ps1\n.\\install.ps1 -Token <enrollment-token>\n\n# Intune (Win32 app): powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token eft_…',
+  kubernetes:
+    '# One effigentd per node (DaemonSet), next to Tetragon.\nhelm repo add effigent https://effigent.ai/charts\nkubectl create namespace effigent\nkubectl -n effigent create secret generic effigent-enrollment --from-literal=token=<enrollment-token>\nhelm install effigent effigent/effigent -n effigent\n\n# Tetragon chart, values and upgrades: /docs/kubernetes',
   headless:
     '# Start the agent only after its kernel policy is live.\n# effigentd waits until the kernel refuses a canary file for this pid,\n# then execs the agent in place — no instruction runs unenforced.\neffigentd run --agent claude-code --strict -- claude -p "fix the failing test"\n\n# --strict   refuse to start if enforcement is not confirmed\n# --timeout  how long to wait for it (default 10s)',
   policy:
@@ -86,8 +93,24 @@ export const INSTALL_CODE: Record<string, string> = {
     '# effigentd’s local API (read-only unless EFFIGENT_API_TOKEN is set)\ncurl -s 127.0.0.1:7777/health\ncurl -s 127.0.0.1:7777/agents     # tracked agents + their loaded kernel policy\ncurl -s 127.0.0.1:7777/learned    # binaries each agent ran → seed for exec_allow',
 };
 
-/** Agents effigentd recognises out of the box (policy/default.yaml). */
-export const supportedAgents = ['Claude Code', 'Cursor', 'Codex', 'Gemini CLI', 'Aider', 'opencode', 'Goose'];
+/** Agents effigentd recognises out of the box (internal/endpoint/policy/default.yaml).
+ *  Drives the "recognised out of the box" count — keep it to that file. hermes is
+ *  left out until its matcher there is verified (see the comment on it). */
+export const supportedAgents = ['Claude Code', 'Codex', 'Cursor', 'Gemini CLI', 'Aider', 'OpenCode', 'Goose'];
+/** Agents shown in the "works with" strips: the recognised set, GitHub Copilot
+ *  (Pricing Leaks connector) and any custom agent added in policy. */
+export const agentChips = [...supportedAgents, 'GitHub Copilot', 'Any custom agent'];
+/** Where effigentd runs. */
+export const platforms = ['Linux', 'macOS', 'Windows', 'Kubernetes', 'Docker', 'CI runners'];
+
+/** Pricing Leaks: vendor connectors and the four kinds of finding. */
+export const spendVendors = ['Cursor', 'Anthropic · Claude Code', 'GitHub Copilot', 'OpenAI · Codex'];
+export const leakKinds: Array<{ title: string; hue: string; text: string; signal: string }> = [
+  { title: 'Unused seats', hue: '25', text: 'Licences assigned to people whose machines haven’t run that agent in weeks.', signal: 'seat list × agent activity per machine' },
+  { title: 'Duplicate tools', hue: '75', text: 'The same developer paying for several coding agents while really using one.', signal: 'seats across vendors × the agent that actually runs' },
+  { title: 'Shadow spend', hue: '290', text: 'Agents running on personal cards or accounts outside your organisation’s plans.', signal: 'agents on machines × no matching org seat' },
+  { title: 'Runaway costs', hue: '250', text: 'An agent looping in CI, or one user far above the team median.', signal: 'daily usage × team median × daily spikes' },
+];
 
 /** Hero graph: one agent session on one machine, edges colored by outcome. */
 const RUNTIME_NODES: Array<{ label: string; count: number; outcome: Outcome }> = [

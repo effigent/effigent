@@ -30,6 +30,7 @@ const EVENTS: { id: string; label: string }[] = [
   { id: 'endpoint.enrolled', label: 'Machine enrolled' },
   { id: 'endpoint.revoked', label: 'Machine revoked' },
   { id: 'policy.published', label: 'Policy published' },
+  { id: 'pricing_leaks.runaway_cost', label: 'Runaway AI spend (Pricing Leaks)' },
 ];
 
 const OLD_CP = 'The control plane does not support integrations yet — it needs to be updated.';

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { Identity } from '@/views/Identity.tsx';
 
-export const metadata: Metadata = { title: 'Identity & Access' };
+export const metadata: Metadata = { title: 'People' };
 
 type SP = Promise<Record<string, string | string[] | undefined>>;
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -38,7 +37,7 @@ var testRouting = store.RoutingConfig{
 
 func TestRouteFor(t *testing.T) {
 	cases := []struct {
-		a           store.Approval
+		a          store.Approval
 		route, grp string
 	}{
 		{store.Approval{Rule: "command_approve", Summary: "Bash: aws s3 cp x s3://y"}, "r-aws", "ops"},
@@ -191,10 +190,7 @@ func (s *smtpSink) take() []string {
 
 // TestApprovalRouting needs a throwaway Postgres database (see TestCentralPolicyEndToEnd).
 func TestApprovalRouting(t *testing.T) {
-	dbURL := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {

@@ -405,6 +405,7 @@ export const navSections: { title: string; soon?: boolean; items: { href: string
     { href: '/', label: 'Overview', icon: 'home', hint: 'Status at a glance, and your next setup step' },
     { href: '/graph', label: 'Agent Graph', icon: 'network', hint: 'What each agent ran, opened and reached — grouped by risk' },
     { href: '/audit', label: 'Activity & Audit', icon: 'clipboard', hint: 'Every agent event and every admin change, exportable' },
+    { href: '/pricing-leaks', label: 'Pricing Leaks', icon: 'database', hint: 'Unused seats, duplicate tools, shadow spend and runaway AI costs' },
   ] },
   { title: 'Control', items: [
     { href: '/policies', label: 'Policies', icon: 'shield', hint: 'Decide what agents may do: rules, exceptions, AI help' },
@@ -415,11 +416,11 @@ export const navSections: { title: string; soon?: boolean; items: { href: string
   ] },
   { title: 'Workspace', items: [
     { href: '/team', label: 'Team & Approvers', icon: 'users', hint: 'Who is in the workspace and who decides which approvals' },
-    { href: '/settings', label: 'Settings', icon: 'gear', hint: 'Slack & email, API keys & webhooks, your role' },
+    { href: '/identity', label: 'People', icon: 'idcard', hint: 'Who is behind each agent: OS users, git emails, machines and vendor accounts per person' },
+    { href: '/settings', label: 'Settings', icon: 'gear', hint: 'Slack & email, API keys & webhooks, AI vendors, your role' },
   ] },
   { title: 'Coming soon', soon: true, items: [
     { href: '/lists', label: 'Shared lists', icon: 'listCheck', hint: 'Org-wide lists every policy can reference (preview)' },
-    { href: '/identity', label: 'People', icon: 'idcard', hint: 'Who is behind each agent (preview)' },
   ] },
 ];
 export const nav = navSections.flatMap((s) => s.items);

@@ -5,7 +5,7 @@ import { API_URL } from '../../config';
 
 export const metadata: Metadata = {
   title: 'Quickstart — Effigent docs',
-  description: 'Install effigentd on a Linux machine with one command, enroll it with your organization, publish a policy and confirm it blocks.',
+  description: 'Install effigentd on Linux, macOS or Windows with one command, enroll it with your organization, publish a policy and confirm it blocks.',
 };
 
 export default function Quickstart() {
@@ -23,10 +23,10 @@ export default function Quickstart() {
         <ul className="doc-list">
           <li><b>Linux with systemd</b>, x86_64 or arm64. Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+ and Amazon Linux 2023 all work. Kubernetes or a Docker host without systemd: see <Link href="/docs/kubernetes">Kubernetes &amp; containers</Link>.</li>
           <li><b>A kernel with BTF</b> (5.8 or newer; every distro above ships one). Check: <code>ls /sys/kernel/btf/vmlinux</code>.</li>
-          <li><b>BPF LSM</b> for blocking. Without it effigentd still watches and reports every agent, but can&apos;t refuse anything. Check: <code>cat /sys/kernel/security/lsm</code> must include <code>bpf</code>. Step 4 shows how to turn it on.</li>
+          <li><b>BPF LSM</b> for kernel blocking. Check: <code>cat /sys/kernel/security/lsm</code> includes <code>bpf</code>. Step 4 shows how to turn it on.</li>
           <li><b>Root</b> (<code>sudo</code>) to install.</li>
           <li><b>Outbound HTTPS</b> to <code>{API_URL}</code> (policy and events), <code>effigent.ai</code> and <code>github.com</code> (downloads).</li>
-          <li>macOS isn&apos;t supported by the installer yet.</li>
+          <li><b>macOS or Windows?</b> The same token works. On a Mac, run the same command as step 2: the installer sets up effigentd and the Claude Code, Codex and Gemini CLI hooks. On Windows, run <code>.\install.ps1 -Token eft_…</code> from <code>https://effigent.ai/install.ps1</code> in an elevated PowerShell (Intune-ready). Then continue at step 5.</li>
         </ul>
       </DocSection>
 
@@ -172,7 +172,7 @@ ls /var/lib/effigent                   # endpoint.json (enrollment), policy.json
         <ul className="doc-list" style={{ marginTop: 14 }}>
           <li><b>&quot;enrollment token is invalid, expired or used up&quot;</b>: create a new token. Each one works once unless you set <code>max_uses</code>.</li>
           <li><b>Status shows &quot;Blocking unavailable&quot;</b>: see step 4. Events still flow meanwhile.</li>
-          <li><b>Policy version stays at 0</b>: no policy published yet for your organization, or the machine can&apos;t reach <code>{API_URL}</code>. It keeps enforcing its last signed policy while offline.</li>
+          <li><b>Policy version stays at 0</b>: no policy has been published for your organization, or the machine can&apos;t reach <code>{API_URL}</code>. It keeps enforcing its last signed policy while offline.</li>
           <li><b>Remove a machine</b>: <code>curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --uninstall</code>, then revoke it with <code>DELETE /api/v1/endpoints/&lt;id&gt;</code> and delete <code>/var/lib/effigent</code>.</li>
         </ul>
       </DocSection>

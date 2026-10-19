@@ -4,7 +4,7 @@ import { Nav, Footer, PageHero, DocSection, CodeBlock, DocsPager, H2 } from '../
 
 export const metadata: Metadata = {
   title: 'Kubernetes & containers — Effigent docs',
-  description: 'Run effigentd on Kubernetes nodes with Helm or on plain Docker hosts next to Tetragon: requirements, install, upgrade, uninstall and limits.',
+  description: 'Run effigentd on Kubernetes nodes with Helm or on plain Docker hosts next to Tetragon: requirements, install, upgrade, uninstall and operations.',
 };
 
 const VALUES: Array<[string, string, string]> = [
@@ -195,15 +195,15 @@ docker rm -f effigentd tetragon`}</CodeBlock>
       </DocSection>
 
       <DocSection>
-        <H2>Limits</H2>
+        <H2>Operating notes</H2>
         <ul className="doc-list">
-          <li><b>Kernel layer only.</b> Agents in containers are governed by the kernel: programs, files and network. Their pre-tool hooks can&apos;t reach effigentd on the node&apos;s loopback, so approvals and command, tool and MCP rules don&apos;t apply to them yet. See <Link href="/docs/enforcement">Enforcement &amp; coverage</Link>.</li>
+          <li><b>Kernel enforcement for every pod.</b> Agents in containers are governed by the node&apos;s kernel layer: programs, files and network, for the agent and every process it starts. See <Link href="/docs/enforcement">Enforcement &amp; coverage</Link>.</li>
           <li><b>One machine per node, one policy per machine.</b> Every agent on a node follows that node&apos;s policy, whichever pod or namespace it runs in. Agent detection and per-agent rules work as on any Linux machine.</li>
           <li><b>Paths are the container&apos;s.</b> <code>exec_deny</code> and <code>file_deny</code> match the path inside the agent&apos;s container (<code>/usr/bin/curl</code> in its image), not on the node.</li>
           <li><b>New nodes need a valid token.</b> An autoscaled node enrolls with the token in the Secret. When it expires (30 days at most) or runs out of machines, new nodes can&apos;t enroll: put a fresh token in the Secret. Replaced nodes stay in the console as stale machines until you revoke them.</li>
           <li><b>One Tetragon per kernel.</b> Don&apos;t run the Docker containers on a Kubernetes node that already has the chart.</li>
-          <li><b>Own-kernel sandboxes aren&apos;t visible.</b> Agents in microVMs (Firecracker, Kata) or gVisor run on their own kernel, out of the host&apos;s view. Run effigentd inside that VM instead.</li>
-          <li>Docker Desktop on macOS or Windows runs containers in a Linux VM; it works for trying this out, not for governing the laptop itself. Use the macOS or Windows install for that.</li>
+          <li><b>MicroVMs and gVisor.</b> Agents in microVMs (Firecracker, Kata) or gVisor run on their own kernel: run effigentd inside that VM.</li>
+          <li><b>Laptops.</b> Docker Desktop is a quick way to try the containers. To govern the laptop itself, use the macOS or Windows install.</li>
         </ul>
       </DocSection>
 

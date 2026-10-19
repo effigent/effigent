@@ -103,7 +103,7 @@ EFFIGENT_BACKEND_TOKEN=<token> effigentd \\
           <li><b>Audit</b>: the append-only decision log, exportable.</li>
         </ul>
         <p className="doc-p">
-          The API reference and tokens are in the console under Settings. If you need an endpoint that isn&apos;t there yet, tell us what you are trying to automate.
+          The API reference and tokens are in the console under Settings. Want to automate something else? Tell us what you are building.
         </p>
       </DocSection>
 

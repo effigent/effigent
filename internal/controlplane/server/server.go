@@ -41,6 +41,13 @@ type Server struct {
 	// Directory maps a Slack approver's email to their console role (Clerk);
 	// nil = Slack clicks are refused unless the workspace allows any Slack member.
 	Directory Directory
+	// SpendBaseURLs points Pricing Leaks vendor clients elsewhere (tests);
+	// SpendSyncEvery is how often connectors sync on their own (default 24h).
+	SpendBaseURLs  map[string]string
+	SpendSyncEvery time.Duration
+	// SpendRollupEvery: how often each tenant's report is rolled up (and its
+	// runaway cost alerts checked) when its data hasn't changed (default 1h).
+	SpendRollupEvery time.Duration
 
 	limits         *limits
 	whOnce         sync.Once
@@ -76,6 +83,8 @@ func (s *Server) Handler() http.Handler {
 					s.runRetention(context.Background())
 				}
 			}()
+			go s.runSpendSyncs(context.Background())   // Pricing Leaks: nightly vendor syncs
+			go s.runSpendRollups(context.Background()) // ...report history and runaway cost alerts
 		})
 		if s.Auth != nil && s.Auth.APIKeys == nil {
 			s.Auth.APIKeys = func(ctx context.Context, secret string) (string, string, []string, error) {
@@ -136,6 +145,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/exceptions/options", s.console(read, s.exceptionOptions))
 	mux.HandleFunc("POST /api/v1/exceptions", s.scoped("policy", write, s.createException))
 	mux.HandleFunc("DELETE /api/v1/exceptions/{id}", s.scoped("policy", write, s.deleteException))
+	// Pricing Leaks: AI tool spend joined with what effigentd sees. Vendor keys
+	// and CSV imports are managed by people only.
+	mux.HandleFunc("GET /api/v1/pricing-leaks", s.console(read, s.pricingLeaks))
+	mux.HandleFunc("GET /api/v1/pricing-leaks/connectors", s.console(read, s.spendConnectors))
+	mux.HandleFunc("GET /api/v1/pricing-leaks/metrics", s.console(read, s.spendMetrics))
+	mux.HandleFunc("GET /api/v1/pricing-leaks/alerts", s.console(read, s.spendAlerts))
+	mux.HandleFunc("PUT /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.putSpendConnector))
+	mux.HandleFunc("DELETE /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.deleteSpendConnector))
+	mux.HandleFunc("POST /api/v1/pricing-leaks/sync", s.console(write, s.syncSpendNow))
+	mux.HandleFunc("POST /api/v1/pricing-leaks/import", s.console(write, s.importSpendCSV))
+	mux.HandleFunc("DELETE /api/v1/pricing-leaks/import/{vendor}", s.console(write, s.clearSpendCSV))
+	mux.HandleFunc("PUT /api/v1/pricing-leaks/settings", s.console(write, s.putSpendSettings))
+	mux.HandleFunc("GET /api/v1/people", s.console(read, s.listPeople))
+	mux.HandleFunc("PUT /api/v1/people/{email}", s.console(write, s.putPerson))
+	mux.HandleFunc("DELETE /api/v1/people/{email}", s.console(write, s.deletePerson))
+	mux.HandleFunc("POST /api/v1/people/identities", s.console(write, s.addPersonIdentity))
+	mux.HandleFunc("DELETE /api/v1/people/identities", s.console(write, s.deletePersonIdentity))
 	// integrations: API keys and webhooks are managed by people only
 	mux.HandleFunc("GET /api/v1/api-keys", s.console(read, s.listAPIKeys))
 	mux.HandleFunc("POST /api/v1/api-keys", s.console(write, s.createAPIKey))

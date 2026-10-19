@@ -18,6 +18,7 @@ import (
 
 	"github.com/effigent/effigent/internal/endpoint/domains"
 	"github.com/effigent/effigent/internal/endpoint/event"
+	"github.com/effigent/effigent/internal/endpoint/ident"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 	"github.com/effigent/effigent/internal/endpoint/redact"
 )
@@ -421,11 +422,18 @@ func (e *Engine) mcpLabel(execID string) string {
 
 func (e *Engine) base(r event.Raw, root *Root, t event.Type, sev string) event.Event {
 	p := r.Process
-	return event.Event{
+	ev := event.Event{
 		Time: r.Time, Node: r.Node, Type: t, Severity: sev,
 		Agent: root.Agent, AgentPID: root.PID, Mode: string(root.Mode),
 		Via: e.via(r), Process: &p, Container: r.Container,
 	}
+	// Who runs it (attribution only): a host process's uid is a user of this
+	// machine; inside a container it belongs to the container's own users.
+	if r.Container == "" && p.Binary != "" {
+		ev.OSUser = ident.Default.OSUser(p.UID)
+		ev.GitEmail = ident.Default.GitEmail(ev.OSUser, p.CWD)
+	}
+	return ev
 }
 
 func (e *Engine) learn(agent, binary string) {

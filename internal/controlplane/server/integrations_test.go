@@ -13,7 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,11 +27,21 @@ type received struct {
 	Data            map[string]any
 }
 
-func TestIntegrations(t *testing.T) {
-	url := os.Getenv("EFFIGENT_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("EFFIGENT_TEST_DATABASE_URL not set")
+// TestDefaultWebhookEvents: a webhook created without a list gets the
+// approval events only; runaway cost alerts must be picked explicitly.
+func TestDefaultWebhookEvents(t *testing.T) {
+	if !slices.Contains(webhookEvents, spendAlertEvent) {
+		t.Fatalf("%s must be a webhook event one can subscribe to", spendAlertEvent)
 	}
+	for _, e := range []string{spendAlertEvent, "action.blocked"} {
+		if slices.Contains(defaultWebhookEvents, e) {
+			t.Errorf("%s must be opt-in, not a default webhook event", e)
+		}
+	}
+}
+
+func TestIntegrations(t *testing.T) {
+	url := testDatabaseURL(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, url)
 	if err != nil {
