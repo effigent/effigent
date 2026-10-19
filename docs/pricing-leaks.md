@@ -57,8 +57,8 @@ Each day of agent activity goes to a person by, in order (`spend.Directory.ObsPe
 
 So a shared machine splits by OS user / git email, and the owner only gets what can't be told
 apart. Every leak based on effigentd's activity says how its person was matched
-(`attribution`: `os_user`, `git_email`, `owner`, `host`); a machine-level match (owner, host) adds
-an evidence line saying so.
+(`attribution`: `os_user`, `git_email`, `owner`, `host`); a leak resting on a machine-level match
+(owner, host) assumes one person per machine, so it is at most medium confidence and says so.
 
 **People** (`cp.people`, `cp.person_identities`, Workspace → People): per work email, the
 identities the person goes by — `os_user`, `git_email`, `host`, `github`, `email`, `api_key`.

@@ -77,7 +77,7 @@ type Leak struct {
 	Confidence  string `json:"confidence"`
 	// Attribution: how effigentd's activity was tied to the person (Via*:
 	// os_user, git_email, owner, host, "" = not matched). Leaks that rest on
-	// a machine-level match say so in their evidence.
+	// a machine-level match (owner, host) are at most medium confidence.
 	Attribution string `json:"attribution,omitempty"`
 }
 
@@ -316,8 +316,11 @@ func Analyze(in Input) Report {
 		}
 		if l.Type != RunawayCost && a.covered[l.Person] { // runaway rests on vendor data only
 			l.Attribution = a.via[l.Person]
-			if viaRank(l.Attribution) == 2 {
-				l.Evidence = append(l.Evidence, "effigentd's activity is attributed by "+ViaLabel[l.Attribution]+" (one person per machine); map their OS user or git email on the People page if the machine is shared")
+			if viaRank(l.Attribution) == 2 { // assumes one person per machine
+				if l.Confidence == confidenceHigh {
+					l.Confidence = confidenceMedium
+				}
+				l.Evidence = append(l.Evidence, "effigentd's activity is attributed by "+ViaLabel[l.Attribution]+" (one person per machine); map their OS user or git email on the People page to confirm")
 			}
 		}
 		r.TotalSavingsCents += l.MonthlySavingsCents

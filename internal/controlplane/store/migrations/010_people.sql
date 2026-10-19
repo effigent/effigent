@@ -26,7 +26,9 @@ create table if not exists cp.person_identities (
 );
 create index if not exists person_identities_email on cp.person_identities (tenant_ref, email);
 
--- People kept in the Pricing Leaks settings (migration 009) move here.
+-- People kept in the Pricing Leaks settings (migration 009) move here. Aliases
+-- without a kind: prefix are best-effort: an email becomes "email", anything else
+-- "os_user" (a bare hostname alias needs re-mapping as host: on the People page).
 insert into cp.people (tenant_ref, email, name)
 select s.tenant_ref, lower(trim(p->>'email')), coalesce(p->>'name', '')
 from cp.spend_settings s, jsonb_array_elements(coalesce(s.config->'people', '[]'::jsonb)) p

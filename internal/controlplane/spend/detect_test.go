@@ -90,12 +90,12 @@ func TestAnalyzeScenario(t *testing.T) {
 		typ, vendor, person, conf string
 		save, risk                int64
 	}{
-		{UnusedSeat, Cursor, "noa@acme.io", confidenceHigh, 4000, 0},          // effigentd covers Noa, Cursor shows nothing
+		{UnusedSeat, Cursor, "noa@acme.io", confidenceMedium, 4000, 0},        // effigentd covers Noa (by machine owner: medium), Cursor shows nothing
 		{UnusedSeat, Cursor, "idle@acme.io", confidenceMedium, 4000, 0},       // no machine: vendor evidence only
-		{UnusedSeat, Copilot, "dana@acme.io", confidenceHigh, 1900, 0},        // login dana-k → Dana via alias
+		{UnusedSeat, Copilot, "dana@acme.io", confidenceMedium, 1900, 0},      // login dana-k → Dana via alias; her machine by hostname
 		{UnusedSeat, Copilot, "github:ghost-user", confidenceMedium, 3900, 0}, // enterprise price, unmatched login
-		{DuplicateTool, Cursor, "dana@acme.io", confidenceHigh, 4000, 0},      // Claude Code daily, Cursor on one day
-		{ShadowSpend, OpenAI, "noa@acme.io", confidenceHigh, 0, 2000},         // codex, not on the OpenAI org
+		{DuplicateTool, Cursor, "dana@acme.io", confidenceMedium, 4000, 0},    // Claude Code daily, Cursor on one day
+		{ShadowSpend, OpenAI, "noa@acme.io", confidenceMedium, 0, 2000},       // codex, not on the OpenAI org
 		{ShadowSpend, "byok", "host:build-7", confidenceLow, 0, 0},            // aider on an unowned box
 		{RunawayCost, Anthropic, "raj@acme.io", confidenceHigh, 70000, 0},     // 100000 - 3 × the 10000 median
 		{RunawayCost, Anthropic, "key:ci-bot", confidenceMedium, 7800, 0},     // spike today

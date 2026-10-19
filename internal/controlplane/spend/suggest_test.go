@@ -52,8 +52,8 @@ func TestAnalyzeSharedMachine(t *testing.T) {
 	for _, l := range r.Leaks {
 		if l.Type == ShadowSpend && l.Person == "a@acme.io" && l.Vendor == Cursor {
 			gotShadowA = true
-			if l.Attribution != ViaOSUser {
-				t.Errorf("attribution %q", l.Attribution)
+			if l.Attribution != ViaOSUser || l.Confidence != confidenceHigh { // the person's own OS user: no machine-level cap
+				t.Errorf("attribution %q confidence %q", l.Attribution, l.Confidence)
 			}
 		}
 		if l.Type == UnusedSeat && l.Person == "b@acme.io" {
