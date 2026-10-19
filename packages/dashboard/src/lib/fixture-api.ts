@@ -7,6 +7,7 @@
  */
 import { ENDPOINTS, EVENTS } from '@/data.ts';
 import { createPricingLeaksFixture } from './pricing-leaks-fixture.ts';
+import { createPeopleFixture } from './people-fixture.ts';
 import { API_BASE, ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiNotifications, type ApiPolicyVersion } from './api.ts';
 
 const DEMO_POLICY = `# effigentd policy (Demo Mode — sample workspace, not published anywhere)
@@ -86,6 +87,7 @@ export function createFixtureApi(): Api {
     audit.push({ seq: audit.length + 1, at: new Date().toISOString(), actor: me.user_id, actor_via: 'clerk', actor_role: me.role, action, target, details, ip: '127.0.0.1', prev_hash: '', hash: `demo${audit.length}` });
 
   const spend = createPricingLeaksFixture(now);
+  const people = createPeopleFixture(now);
 
   const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
   const delay = <T>(v: T) => new Promise<T>((r) => setTimeout(() => r(clone(v)), 120));
@@ -142,11 +144,19 @@ export function createFixtureApi(): Api {
         { list: 'domain_deny', value: 'pastebin.com', agents: [''] }, { list: 'command_approve', value: 'git push*', agents: [''] }] }) as Promise<T>;
       if (p === '/webhooks') return delay(webhooks) as Promise<T>;
       if (/^\/webhooks\/[^/]+\/deliveries$/.test(p)) return delay([]) as Promise<T>;
-      const spendPage = spend.get(p);
+      const spendPage = spend.get(p) ?? people.get(p);
       if (spendPage) return delay(spendPage) as Promise<T>;
       return Promise.reject(new ApiError(404, 'not found'));
     },
     send<T>(method: string, path: string, body?: unknown): Promise<T> {
+      if (path.startsWith('/people/')) {
+        const r = people.send(method, path, body);
+        if (r instanceof ApiError) return Promise.reject(r);
+        if (r !== undefined) {
+          log(path.startsWith('/people/identities') ? `people.identity.${method === 'DELETE' ? 'delete' : 'add'}` : `people.${method === 'DELETE' ? 'delete' : 'update'}`, path.split('?')[0], null);
+          return delay(r) as Promise<T>;
+        }
+      }
       if (path.startsWith('/pricing-leaks/')) {
         const r = spend.send(method, path, body);
         if (r instanceof ApiError) return Promise.reject(r);

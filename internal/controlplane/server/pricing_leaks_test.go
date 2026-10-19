@@ -377,6 +377,10 @@ func TestPricingLeaksEndToEnd(t *testing.T) {
 	if conn(p, spend.OpenAI).CSVDays != 1 {
 		t.Errorf("csv counts: %+v", conn(p, spend.OpenAI))
 	}
+	var cs page
+	if code, raw := call("GET", "/pricing-leaks/connectors", nil, &cs); code != 200 || conn(cs, spend.Cursor).KeyHint != "7f3a" || conn(cs, spend.OpenAI).CSVDays != 1 || strings.Contains(raw, cursorKey) {
+		t.Errorf("connectors: %d %s", code, raw)
+	}
 	if len(p.Report.Unattributed) != 1 || p.Report.Unattributed[0] != "build-7" {
 		t.Errorf("unattributed %v", p.Report.Unattributed)
 	}

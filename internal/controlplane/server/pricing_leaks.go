@@ -80,6 +80,35 @@ func (s *Server) pricingLeaks(w http.ResponseWriter, r *http.Request, p Principa
 		s.fail(w, err)
 		return
 	}
+	list, connected := connectorViews(conns, seats, usage)
+	rep := spend.Analyze(spend.Input{Now: now, WindowDays: spendWindowDays, Seats: seats, Usage: usage, Machines: machines, Obs: obs,
+		People: people, Prices: spend.DefaultPrices.Merge(set.Prices), Connected: connected})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"report": rep, "connectors": list, "settings": set, "default_prices": spend.DefaultPrices,
+		"secrets_available": len(s.SecretsKey) == 32,
+	})
+}
+
+// spendConnectors is the vendor connections card in Settings: connectors
+// only, without computing the report.
+func (s *Server) spendConnectors(w http.ResponseWriter, r *http.Request, p Principal) {
+	conns, err := s.Store.ListSpendConnectors(r.Context(), p.Tenant)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	seats, usage, err := s.Store.SpendData(r.Context(), p.Tenant, spend.Day(time.Now().UTC()).AddDate(0, 0, -(spendWindowDays-1)))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	list, _ := connectorViews(conns, seats, usage)
+	writeJSON(w, http.StatusOK, map[string]any{"connectors": list, "secrets_available": len(s.SecretsKey) == 32})
+}
+
+// connectorViews lists every vendor's connection (key, last sync, CSV rows)
+// and which vendors we have company-plan data for.
+func connectorViews(conns []store.SpendConnector, seats []spend.Seat, usage []spend.UsageDay) ([]connectorView, []string) {
 	views := map[string]*connectorView{}
 	for _, v := range spend.Vendors {
 		views[v] = &connectorView{Vendor: v, Label: spend.VendorLabel[v], Settings: map[string]string{}}
@@ -113,12 +142,7 @@ func (s *Server) pricingLeaks(w http.ResponseWriter, r *http.Request, p Principa
 	for _, v := range spend.Vendors {
 		list = append(list, *views[v])
 	}
-	rep := spend.Analyze(spend.Input{Now: now, WindowDays: spendWindowDays, Seats: seats, Usage: usage, Machines: machines, Obs: obs,
-		People: people, Prices: spend.DefaultPrices.Merge(set.Prices), Connected: keys(connected)})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"report": rep, "connectors": list, "settings": set, "default_prices": spend.DefaultPrices,
-		"secrets_available": len(s.SecretsKey) == 32,
-	})
+	return list, keys(connected)
 }
 
 func keys(m map[string]bool) []string {

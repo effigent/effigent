@@ -172,7 +172,11 @@ export interface ApiLeak {
   monthly_savings_cents: number;
   at_risk_cents: number; // shadow spend: a likely personal plan, not a saving
   confidence: 'high' | 'medium' | 'low';
+  /** How effigentd's activity was tied to the person (absent: vendor data only). */
+  attribution?: ApiVia;
 }
+/** os_user / git_email: the person's own identity; owner / host: their machine; '' = not matched. */
+export type ApiVia = 'os_user' | 'git_email' | 'owner' | 'host' | '';
 export interface ApiVendorSpend {
   vendor: string; label: string; seats: number; active_seats: number;
   seat_cents: number; usage_cents: number; monthly_cents: number; estimated?: boolean; connected: boolean;
@@ -181,7 +185,7 @@ export interface ApiToolUse {
   vendor: string; seat: boolean; seat_cents?: number; agents?: string[]; effigent_days: number; vendor_days: number;
   last_seen?: string; last_vendor_activity?: string; cost_cents: number;
 }
-export interface ApiPersonUsage { person: string; name?: string; matched: boolean; machines?: string[]; tools: ApiToolUse[] }
+export interface ApiPersonUsage { person: string; name?: string; matched: boolean; via?: ApiVia; machines?: string[]; tools: ApiToolUse[] }
 export interface ApiSpendReport {
   generated_at: string; window_days: number; vendors: ApiVendorSpend[]; total_monthly_cents: number;
   leaks: ApiLeak[]; total_savings_cents: number; total_at_risk_cents: number; people: ApiPersonUsage[]; unattributed: string[];
@@ -190,10 +194,12 @@ export interface ApiSpendConnector {
   vendor: ApiSpendVendor; label: string; configured: boolean; key_hint?: string; settings: Record<string, string>;
   sync_status: '' | 'running' | 'ok' | 'error'; last_sync_at?: string; last_error?: string; last_counts?: Record<string, number>;
   updated_by?: string; csv_seats: number; csv_usage_rows: number;
+  next_poll_at?: string; failures?: number; // the poller: next scheduled sync, failed syncs in a row
 }
-export interface ApiSpendPerson { email: string; name?: string; aliases: string[] }
+/** GET /pricing-leaks/connectors (Settings → AI vendors). */
+export interface ApiSpendConnectors { connectors: ApiSpendConnector[]; secrets_available: boolean }
 export interface ApiSpendPrices { seat: Record<string, number>; personal: Record<string, number> }
-export interface ApiSpendSettings { people: ApiSpendPerson[]; prices: ApiSpendPrices; updated_by?: string; updated_at?: string }
+export interface ApiSpendSettings { prices: ApiSpendPrices; updated_by?: string; updated_at?: string }
 export interface ApiPricingLeaks {
   report: ApiSpendReport;
   connectors: ApiSpendConnector[];
@@ -201,6 +207,18 @@ export interface ApiPricingLeaks {
   default_prices: ApiSpendPrices;
   secrets_available: boolean; // EFFIGENT_SECRETS_KEY is set: vendor keys can be stored
 }
+/** People (GET /people): who is who, by work email, and the identities each goes by. */
+export type ApiIdentityKind = 'os_user' | 'git_email' | 'host' | 'github' | 'email' | 'api_key';
+export interface ApiPersonIdentity { kind: ApiIdentityKind; value: string; email: string; source: 'manual' | 'suggestion'; created_by?: string; created_at: string }
+export interface ApiPerson { email: string; name: string; identities: ApiPersonIdentity[]; updated_by?: string; updated_at: string }
+/** An identity effigentd saw on a machine (last 30 days) and who it resolves to now. */
+export interface ApiSighting {
+  endpoint_id: string; hostname: string; owner?: string; os_user?: string; git_email?: string; agents: string[]; events: number; last_seen: string;
+  person?: string; via?: ApiVia;
+}
+/** kind "person": add email to People (a vendor seat that isn't there yet). */
+export interface ApiSuggestion { kind: ApiIdentityKind | 'person'; value: string; email: string; name?: string; reason: string; confidence: 'high' | 'medium' | 'low' }
+export interface ApiPeople { people: ApiPerson[]; suggestions: ApiSuggestion[]; sightings: ApiSighting[]; unattributed: string[]; kinds: ApiIdentityKind[]; window_days: number }
 export interface ApiSpendImport { vendor: string; kind: 'seats' | 'usage'; rows: number; seats: number; usage_rows: number; skipped: number; warnings?: string[] }
 
 /** Org admins and security admins may change policy, machines and tokens;

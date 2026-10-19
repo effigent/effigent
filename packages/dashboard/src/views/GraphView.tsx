@@ -105,7 +105,7 @@ function Detail({ id, focus }: { id: string | null; focus: Focus }) {
             <li key={a.id}><AgentCell type={a.type} sub={endpointById(a.endpoint)?.hostname} /><StatusPill status={a.status} /></li>
           ))}
         </ul>
-        <div style={{ padding: '0 20px 18px' }}><Link className="view-all" href={`/identity?user=${u.id}`}>Open in Identity & Access <Ic n="arrowRight" size={13} /></Link></div>
+        <div style={{ padding: '0 20px 18px' }}><Link className="view-all" href={`/identity?user=${u.id}`}>Open in People <Ic n="arrowRight" size={13} /></Link></div>
       </Card>
     );
   }

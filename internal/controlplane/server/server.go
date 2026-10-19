@@ -144,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	// Pricing Leaks: AI tool spend joined with what effigentd sees. Vendor keys
 	// and CSV imports are managed by people only.
 	mux.HandleFunc("GET /api/v1/pricing-leaks", s.console(read, s.pricingLeaks))
+	mux.HandleFunc("GET /api/v1/pricing-leaks/connectors", s.console(read, s.spendConnectors))
 	mux.HandleFunc("PUT /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.putSpendConnector))
 	mux.HandleFunc("DELETE /api/v1/pricing-leaks/connectors/{vendor}", s.console(write, s.deleteSpendConnector))
 	mux.HandleFunc("POST /api/v1/pricing-leaks/sync", s.console(write, s.syncSpendNow))

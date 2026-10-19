@@ -3,7 +3,7 @@
  * GET /api/v1/pricing-leaks (spend.Report) and its writes, in memory only.
  * People and machines match the sample fleet in data.ts.
  */
-import { ApiError, type ApiLeak, type ApiPricingLeaks, type ApiSpendConnector, type ApiSpendImport, type ApiSpendSettings, type ApiSpendVendor } from './api.ts';
+import { ApiError, type ApiLeak, type ApiPricingLeaks, type ApiSpendConnector, type ApiSpendConnectors, type ApiSpendImport, type ApiSpendSettings, type ApiSpendVendor } from './api.ts';
 
 const VENDORS: ApiSpendVendor[] = ['cursor', 'anthropic', 'copilot', 'openai'];
 const LABEL: Record<string, string> = {
@@ -42,18 +42,18 @@ const LEAKS: ApiLeak[] = [
     evidence: ['GitHub Copilot: last activity {d63} (63 days ago)', 'effigentd: no GitHub Copilot agent on dan-dev-vm in 30 days', 'Seat: $19/month (business)'] },
   { id: 'unused_seat:copilot:lena.kim@acme.example', type: 'unused_seat', vendor: 'copilot', person: at('lena.kim'), name: 'Lena Kim',
     title: 'Unused GitHub Copilot seat', confidence: 'medium', monthly_savings_cents: 1900, at_risk_cents: 0,
-    evidence: ['GitHub Copilot reports no activity for this seat', 'effigentd: no enrolled machine is linked to this person (set a machine owner or a People alias)', 'Seat: $19/month (business)'] },
+    evidence: ['GitHub Copilot reports no activity for this seat', 'effigentd: no agent activity is linked to this person (map their OS user, git email or machine on the People page)', 'Seat: $19/month (business)'] },
   { id: 'duplicate_tool:copilot:alex.wang@acme.example', type: 'duplicate_tool', vendor: 'copilot', person: at('alex.wang'), name: 'Alex Wang',
     title: 'Pays for GitHub Copilot, works in Cursor', confidence: 'high', monthly_savings_cents: 1900, at_risk_cents: 0,
     evidence: ['Cursor used on 22 of the last 30 days (cursor-agent)', 'GitHub Copilot used on 2 days', 'Dropping the GitHub Copilot seat saves $19/month'] },
   { id: 'shadow_spend:openai:mike.tan@acme.example', type: 'shadow_spend', vendor: 'openai', person: at('mike.tan'), name: 'Mike Tan',
     title: 'OpenAI (Codex) used off the company plan', confidence: 'high', monthly_savings_cents: 0, at_risk_cents: 2000,
     evidence: ['effigentd saw codex on 17 of the last 30 days on mike-mbp', 'OpenAI (Codex) has no seat or usage for this person on the company account',
-      'If they use a shared company API key, add the key name to their People aliases', 'Likely a personal plan (from $20/month) paid or expensed outside the company plan'] },
+      'If they use a shared company API key, map the key name to them on the People page', 'Likely a personal plan (from $20/month) paid or expensed outside the company plan'] },
   { id: 'shadow_spend:anthropic:omar.haddad@acme.example', type: 'shadow_spend', vendor: 'anthropic', person: at('omar.haddad'), name: 'Omar Haddad',
     title: 'Anthropic (Claude Code) used off the company plan', confidence: 'medium', monthly_savings_cents: 0, at_risk_cents: 2000,
     evidence: ['effigentd saw claude-code on 6 of the last 30 days on prod-bastion-01', 'Anthropic (Claude Code) has no seat or usage for this person on the company account',
-      'If they use a shared company API key, add the key name to their People aliases', 'Likely a personal plan (from $20/month) paid or expensed outside the company plan'] },
+      'If they use a shared company API key, map the key name to them on the People page', 'Likely a personal plan (from $20/month) paid or expensed outside the company plan'] },
   { id: 'shadow_spend:google:mike.tan@acme.example', type: 'shadow_spend', vendor: 'google', person: at('mike.tan'), name: 'Mike Tan',
     title: 'Google (Gemini CLI) used off the company plan', confidence: 'low', monthly_savings_cents: 0, at_risk_cents: 0,
     evidence: ['effigentd saw gemini-cli on 4 of the last 30 days on mike-mbp', 'No company Gemini plan is connected: this runs on a personal Google account or API key'] },
@@ -62,19 +62,15 @@ const LEAKS: ApiLeak[] = [
     evidence: ['effigentd saw aider, opencode on 9 of the last 30 days on priya-mba', 'Open-source agent on a model API key that isn\'t on a connected company account'] },
 ];
 
-const PEOPLE: ApiSpendSettings['people'] = [
-  { email: at('jane.doe'), name: 'Jane Doe', aliases: ['jane-mbp', 'github:janedoe'] },
-  { email: at('alex.wang'), name: 'Alex Wang', aliases: ['github:awang-dev'] },
-  { email: at('sarah.lee'), name: 'Sarah Lee', aliases: ['github:sarahlee'] },
-  { email: at('raj.patel'), name: 'Raj Patel', aliases: ['raj-ws', 'anthropic:raj-laptop-key'] },
-  { email: at('dan.cohen'), name: 'Dan Cohen', aliases: ['github:dcohen'] },
-  { email: at('lena.kim'), name: 'Lena Kim', aliases: ['github:lenakim'] },
-];
-
 export function createPricingLeaksFixture(now: number) {
   const day = (ago: number) => new Date(now - ago * 86_400_000).toISOString().slice(0, 10);
   const iso = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString();
-  const leaks = LEAKS.map((l) => ({ ...l, evidence: l.evidence.map((e) => e.replace(/\{d(\d+)\}/g, (_, n) => day(Number(n)))) }));
+  // how effigentd's activity was tied to each person (matches the People sample)
+  const via: Record<string, ApiLeak['attribution']> = {
+    [at('raj.patel')]: 'os_user', [at('emma.brooks')]: 'git_email', [at('tom.weiss')]: 'git_email', [at('noa.levi')]: 'owner', [at('sarah.lee')]: 'os_user',
+    [at('dan.cohen')]: 'host', [at('alex.wang')]: 'os_user', [at('mike.tan')]: 'os_user', [at('omar.haddad')]: 'git_email', [at('priya.shah')]: 'git_email',
+  };
+  const leaks = LEAKS.map((l) => ({ ...l, attribution: l.type === 'runaway_cost' ? undefined : via[l.person], evidence: l.evidence.map((e) => e.replace(/\{d(\d+)\}/g, (_, n) => day(Number(n)))) }));
   let connectors: ApiSpendConnector[] = [
     { vendor: 'cursor', label: LABEL.cursor, configured: true, key_hint: 'f3a9', settings: {}, sync_status: 'ok', last_sync_at: iso(60 * 5),
       last_counts: { seats: 14, usage_rows: 236 }, updated_by: 'user_demo', csv_seats: 0, csv_usage_rows: 0 },
@@ -84,7 +80,7 @@ export function createPricingLeaksFixture(now: number) {
       last_counts: { seats: 11, usage_rows: 0 }, updated_by: 'user_demo', csv_seats: 0, csv_usage_rows: 0 },
     { vendor: 'openai', label: LABEL.openai, configured: false, settings: {}, sync_status: '', csv_seats: 0, csv_usage_rows: 64 },
   ];
-  let settings: ApiSpendSettings = { people: PEOPLE, prices: { seat: {}, personal: {} }, updated_by: 'user_demo', updated_at: iso(60 * 24 * 2) };
+  let settings: ApiSpendSettings = { prices: { seat: {}, personal: {} }, updated_by: 'user_demo', updated_at: iso(60 * 24 * 2) };
 
   const report = (): ApiPricingLeaks['report'] => {
     const on = new Set(connectors.filter((c) => c.configured || c.csv_seats || c.csv_usage_rows).map((c) => c.vendor as string));
@@ -106,7 +102,8 @@ export function createPricingLeaksFixture(now: number) {
   const setConn = (v: string, f: (c: ApiSpendConnector) => ApiSpendConnector) => { connectors = connectors.map((c) => (c.vendor === v ? f(c) : c)); };
 
   return {
-    get(path: string): ApiPricingLeaks | undefined {
+    get(path: string): ApiPricingLeaks | ApiSpendConnectors | undefined {
+      if (path === '/pricing-leaks/connectors') return { connectors, secrets_available: true };
       return path === '/pricing-leaks' ? page() : undefined;
     },
     /** undefined = not a Pricing Leaks route */
@@ -144,7 +141,7 @@ export function createPricingLeaksFixture(now: number) {
       if (method === 'DELETE' && clear) { setConn(clear[1], (c) => ({ ...c, csv_seats: 0, csv_usage_rows: 0 })); return { ok: true }; }
       if (method === 'PUT' && path === '/pricing-leaks/settings') {
         const s = b as unknown as ApiSpendSettings;
-        settings = { people: s.people ?? [], prices: { seat: s.prices?.seat ?? {}, personal: s.prices?.personal ?? {} }, updated_by: 'user_demo', updated_at: new Date().toISOString() };
+        settings = { prices: { seat: s.prices?.seat ?? {}, personal: s.prices?.personal ?? {} }, updated_by: 'user_demo', updated_at: new Date().toISOString() };
         return settings;
       }
       return undefined;
