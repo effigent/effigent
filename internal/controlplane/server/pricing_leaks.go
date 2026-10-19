@@ -337,6 +337,13 @@ func (s *Server) syncSpend(ctx context.Context, c store.SpendConnector) {
 			s.Logf("pricing leaks: record failure: %v", err)
 		}
 	}
+	// A vendor response the client can't handle must not take the control
+	// plane down (and, still due, down again on every restart).
+	defer func() {
+		if r := recover(); r != nil {
+			fail(fmt.Errorf("internal error: %v", r))
+		}
+	}()
 	key, err := s.open(c.Tenant, spendField(c.Vendor), c.SecretEnc)
 	if err != nil {
 		fail(fmt.Errorf("%v — paste the key again", err))

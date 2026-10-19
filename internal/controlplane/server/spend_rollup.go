@@ -64,12 +64,22 @@ func (s *Server) runSpendRollups(ctx context.Context) {
 // rollupSpend records a tenant's report as of now and announces new runaway
 // cost leaks, under the tenant's rollup lock (another instance holding it
 // is already doing this).
-func (s *Server) rollupSpend(ctx context.Context, tenant string) error {
+func (s *Server) rollupSpend(ctx context.Context, tenant string) (err error) {
 	release, ok, err := s.Store.SpendRollupLock(ctx, tenant)
 	if err != nil || !ok {
 		return err
 	}
 	defer release()
+	// A report the code can't handle must not take the control plane down;
+	// the tenant is tried again after SpendRollupEvery.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("internal error: %v", r)
+			if ferr := s.Store.FailSpendRollup(ctx, tenant, clip(err.Error(), 500)); ferr != nil {
+				s.Logf("pricing leaks: record rollup failure: %v", ferr)
+			}
+		}
+	}()
 	started := time.Now().UTC()
 	rep, _, set, err := s.spendReport(ctx, tenant, started)
 	if err == nil {
