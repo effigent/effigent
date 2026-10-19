@@ -10,6 +10,11 @@ export const HELP: Record<string, ReactNode> = {
   approvals: <>Actions your policy marks “needs approval” pause on the machine and wait here. Approving lets that exact action run <b>once</b>; anything different asks again.</>,
   machines: <>Every laptop and server running effigentd. A machine is <b>online</b> when it checked in during the last minute; <b>policy</b> shows which version it enforces.</>,
   team: <>Members come from your sign-in organization. Approver groups and routing rules decide <b>who</b> approves <b>which</b> requests; admins can always step in.</>,
+  pricingLeaks: <>Seats and usage from your AI vendors’ admin APIs (Cursor, Anthropic, GitHub Copilot, OpenAI) or their CSV exports, joined per person with the agents effigentd sees on each machine. Savings are per month, from the vendor’s prices where it reports them and the price table otherwise.</>,
+  leaks: <><b>Unused seat</b>: paid, no use in 30 days (14-day grace for new seats). <b>Duplicate tool</b>: one tool used daily, a paid other barely. <b>Shadow spend</b>: an agent on a machine whose person isn’t on that vendor’s company plan. <b>Runaway cost</b>: over 3× the team median, or a day 5× the week before.</>,
+  connectors: <>Keys are sealed with AES-256-GCM under the control plane’s secrets key and only used to read seats, usage and cost. Syncs pull the last 30 days, once a day and on demand. A CSV import fills in where a vendor has no API or you’d rather not share a key; API data wins where both exist.</>,
+  spendPeople: <>Vendors know people by email (Copilot by GitHub login); effigentd knows machines. A machine maps to its owner, else a hostname alias, else its only OS user alias. Unmatched accounts stay as <code>github:login</code> or <code>host:name</code> and are listed so you can add an alias.</>,
+  spendPrices: <>Seat prices apply when the vendor doesn’t report a price (Cursor and Copilot don’t in their APIs). <code>copilot/business</code> and <code>copilot/enterprise</code> override Copilot by plan. Personal plan prices estimate what shadow spend costs someone off the company plan.</>,
   settings: <>Where approval requests are sent, API keys and webhooks for your other tools, and workspace options.</>,
 
   // overview

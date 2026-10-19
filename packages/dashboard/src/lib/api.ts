@@ -158,6 +158,51 @@ export interface ApiSlackApp {
   directory_available: boolean; // it can match Slack users to approvers (CLERK_SECRET_KEY)
 }
 
+/** Pricing Leaks (GET /pricing-leaks): spend.Report + the connectors and settings. Money is in US cents. */
+export type ApiSpendVendor = 'cursor' | 'anthropic' | 'copilot' | 'openai';
+export type ApiLeakType = 'unused_seat' | 'duplicate_tool' | 'shadow_spend' | 'runaway_cost';
+export interface ApiLeak {
+  id: string;
+  type: ApiLeakType;
+  vendor: string; // a connector vendor, or google / byok for shadow spend
+  person: string; // work email, or kind:value when it can't be matched ("" = the organisation)
+  name?: string;
+  title: string;
+  evidence: string[];
+  monthly_savings_cents: number;
+  at_risk_cents: number; // shadow spend: a likely personal plan, not a saving
+  confidence: 'high' | 'medium' | 'low';
+}
+export interface ApiVendorSpend {
+  vendor: string; label: string; seats: number; active_seats: number;
+  seat_cents: number; usage_cents: number; monthly_cents: number; estimated?: boolean; connected: boolean;
+}
+export interface ApiToolUse {
+  vendor: string; seat: boolean; seat_cents?: number; agents?: string[]; effigent_days: number; vendor_days: number;
+  last_seen?: string; last_vendor_activity?: string; cost_cents: number;
+}
+export interface ApiPersonUsage { person: string; name?: string; matched: boolean; machines?: string[]; tools: ApiToolUse[] }
+export interface ApiSpendReport {
+  generated_at: string; window_days: number; vendors: ApiVendorSpend[]; total_monthly_cents: number;
+  leaks: ApiLeak[]; total_savings_cents: number; total_at_risk_cents: number; people: ApiPersonUsage[]; unattributed: string[];
+}
+export interface ApiSpendConnector {
+  vendor: ApiSpendVendor; label: string; configured: boolean; key_hint?: string; settings: Record<string, string>;
+  sync_status: '' | 'running' | 'ok' | 'error'; last_sync_at?: string; last_error?: string; last_counts?: Record<string, number>;
+  updated_by?: string; csv_seats: number; csv_usage_rows: number;
+}
+export interface ApiSpendPerson { email: string; name?: string; aliases: string[] }
+export interface ApiSpendPrices { seat: Record<string, number>; personal: Record<string, number> }
+export interface ApiSpendSettings { people: ApiSpendPerson[]; prices: ApiSpendPrices; updated_by?: string; updated_at?: string }
+export interface ApiPricingLeaks {
+  report: ApiSpendReport;
+  connectors: ApiSpendConnector[];
+  settings: ApiSpendSettings;
+  default_prices: ApiSpendPrices;
+  secrets_available: boolean; // EFFIGENT_SECRETS_KEY is set: vendor keys can be stored
+}
+export interface ApiSpendImport { vendor: string; kind: 'seats' | 'usage'; rows: number; seats: number; usage_rows: number; skipped: number; warnings?: string[] }
+
 /** Org admins and security admins may change policy, machines and tokens;
  *  everyone else is read-only (server.Principal.CanWrite). */
 export const canWrite = (role: string | undefined) => role === 'admin' || role === 'security_admin';

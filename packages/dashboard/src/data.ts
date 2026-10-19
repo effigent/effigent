@@ -405,6 +405,7 @@ export const navSections: { title: string; soon?: boolean; items: { href: string
     { href: '/', label: 'Overview', icon: 'home', hint: 'Status at a glance, and your next setup step' },
     { href: '/graph', label: 'Agent Graph', icon: 'network', hint: 'What each agent ran, opened and reached — grouped by risk' },
     { href: '/audit', label: 'Activity & Audit', icon: 'clipboard', hint: 'Every agent event and every admin change, exportable' },
+    { href: '/pricing-leaks', label: 'Pricing Leaks', icon: 'database', hint: 'Unused seats, duplicate tools, shadow spend and runaway AI costs' },
   ] },
   { title: 'Control', items: [
     { href: '/policies', label: 'Policies', icon: 'shield', hint: 'Decide what agents may do: rules, exceptions, AI help' },

@@ -205,6 +205,11 @@ const devEmptyApi: Api = {
     if (p === '/approval-routing') return Promise.resolve({ groups: [], routes: [], default_group: '' } as T);
     if (p === '/events/archives') return Promise.resolve({ retention_days: 90, archive_enabled: false, archives: [] } as T);
     if (p === '/exceptions/options') return Promise.resolve({ options: [], agents: [], mode: '' } as T);
+    if (p === '/pricing-leaks') return Promise.resolve({
+      report: { generated_at: new Date().toISOString(), window_days: 30, vendors: [], total_monthly_cents: 0, leaks: [], total_savings_cents: 0, total_at_risk_cents: 0, people: [], unattributed: [] },
+      connectors: (['cursor', 'anthropic', 'copilot', 'openai'] as const).map((v) => ({ vendor: v, label: v, configured: false, settings: {}, sync_status: '', csv_seats: 0, csv_usage_rows: 0 })),
+      settings: { people: [], prices: { seat: {}, personal: {} } }, default_prices: { seat: {}, personal: {} }, secrets_available: false,
+    } as T);
     return Promise.reject(new ApiError(503, NO_CONTROL_PLANE));
   },
   send: () => Promise.reject(new ApiError(503, NO_CONTROL_PLANE)),
