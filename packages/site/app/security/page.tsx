@@ -22,7 +22,7 @@ const PILLARS = [
   {
     hue: '150',
     title: 'Decisions are made on the machine',
-    body: 'effigentd evaluates every action locally against the last signed policy it received. The control plane distributes policy and collects events; it is not in the path of a block. If the network or the control plane is down, the last policy keeps enforcing and events wait on the machine’s disk (up to 256 MB) until it reconnects. Approval requests are the exception: they need an approver, so while the control plane can’t be reached the paused action is denied — never silently allowed.',
+    body: 'effigentd evaluates every action locally against the last signed policy it received. The control plane distributes policy and collects events; it is not in the path of a block. If the network or the control plane is down, the last policy keeps enforcing and events wait on the machine’s disk (up to 256 MB) until it reconnects. Approval requests are the exception: they need an approver, so while the control plane can’t be reached the paused action is denied — never silently allowed. For a real outage, an admin can issue a break-glass code: signed, time-limited, for one machine or all of them, verified offline. It lifts approval requirements only, never a deny rule, and its creation and every use are alerted and audited.',
   },
   {
     hue: '250',
@@ -32,7 +32,7 @@ const PILLARS = [
   {
     hue: '25',
     title: 'Agents can’t lift their own policy',
-    body: 'Agents run as the developer; effigentd runs as root. Its local API is read-only unless the daemon was started with a token, because the agents it governs can reach localhost. Policies are signed (Ed25519) by the control plane and checked against a key pinned when the machine enrolled, so a tampered policy on disk is refused.',
+    body: 'Agents run as the developer; effigentd runs as root. Its local API is read-only unless the daemon was started with a token, because the agents it governs can reach localhost. Policies are signed (Ed25519) by the control plane and checked against a key pinned when the machine enrolled, so a tampered policy on disk is refused. On Linux the kernel also guards effigentd from the agents it governs: an agent can’t kill effigentd or Tetragon, or edit their binaries, state or the managed hook settings.',
   },
   {
     hue: '290',

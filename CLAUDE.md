@@ -13,12 +13,12 @@ Keep this file current when architecture, data model or deployment change.
 
 | Path | What | Runs on |
 |---|---|---|
-| `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync + heartbeat (incl. hook state), `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork), `hooks/` agent hook payloads → canonical tools, `hookstate/` hook file locations + per-agent hook health (see 2e), `gateway/` local model gateway (2j). Subcommands: `enroll`, `run` (zero-gap launcher), `install-hooks`, `install-gateway`. | Linux host next to Tetragon (dev: Docker Desktop VM) |
+| `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync + heartbeat (incl. hook state), `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork), `hooks/` agent hook payloads → canonical tools, `hookstate/` hook file locations + per-agent hook health (see 2e), `gateway/` local model gateway (2j). Subcommands: `enroll`, `run` (zero-gap launcher), `install-hooks`, `install-gateway`, `cloud-setup`, `break-glass`, `gate` (2l). | Linux host next to Tetragon (dev: Docker Desktop VM) |
 | `cmd/effigent-cp`, `internal/controlplane/*` | Control plane (Go): `store/` Postgres (schema `cp`, embedded migrations tracked in `cp.schema_migrations`), `server/` endpoint protocol `/ep/v1/*` + console API `/api/v1/*`, `compile/` central policies per machine, `spend/` Pricing Leaks (see 2d). Image: `Dockerfile.cp`. | AWS App Runner `effigent-cp` (628713530358, us-east-1) at https://api.effigent.ai — redeploy with `AWS_PROFILE=effigent deploy/aws/deploy-cp.sh` |
 | `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
 | `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). No sample data by default: pages without a backend (Allow/Deny Lists) show "Coming soon" empty states; the Agent Graph is built client-side from real events (`src/lib/live-graph.ts`). **Demo Mode** (Settings / user menu; localStorage `effigent.demoMode`) swaps in a sample workspace from `src/lib/fixture-api.ts` on every page and never calls the real API. | Vercel, app.effigent.ai |
 | `packages/site` | Marketing site + docs, Next.js static export. | S3 + CloudFront, effigent.ai |
-| `test/endpoint` | Endpoint e2e against Tetragon (37 checks). On a Mac with effigentd installed run `PORT=7787 ./test/endpoint/e2e.sh` (the installed daemon holds 7777). | Docker Desktop |
+| `test/endpoint` | Endpoint e2e against Tetragon (53 checks; §7 self-protection, §8 gated binaries). On a Mac with effigentd installed run `PORT=7787 ./test/endpoint/e2e.sh` (the installed daemon holds 7777). | Docker Desktop |
 | `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
 | `Dockerfile.effigentd`, `deploy/helm/effigent`, `deploy/docker` | effigentd for container hosts and Kubernetes. Image `ghcr.io/effigent/effigentd:<version>` + `:latest` (amd64/arm64), Helm repo `https://effigent.ai/charts` (chart `effigent`, DaemonSet: hostPID, hostNetwork, privileged, `/var/lib/effigent` hostPath, `EFFIGENT_HOSTNAME` = node name, token from a Secret). Both published by `release-effigentd.yml` after the binaries; the ghcr package must be public. Tetragon comes from its official chart with `tetragon.grpc.address=localhost:54321` + `tetragon.processAncestors.enabled=base,kprobe,lsm`. `deploy/docker/compose.yaml` = Tetragon (event cache 2 × 1s) + effigentd on a plain host. | customer clusters / Docker hosts |
 | `test/containers` | `kind.sh` (2-node kind + Tetragon chart + our chart) and `docker.sh` (compose): stand-in agent's curl and `.env` blocked, blocks in the local control plane, restart keeps the machine. `hooksock.sh`: the hook socket on kind without Tetragon (2i). One Tetragon per kernel: stop the dev `tetragon` container first. | Docker Desktop |
@@ -185,7 +185,7 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   applies it exactly as the direct call (re-opened if applying fails on a 5xx, superseded on a
   4xx). A policy proposal written on an older version is superseded on approval (re-propose);
   exceptions and owner changes apply on the latest. `GET|PUT /policy/settings`: on applies at
-  once, off is itself a proposal. No break-glass. Expiring exceptions are removed without a
+  once, off is itself a proposal. Break-glass (2l) lifts approval lists only, never policy changes. Expiring exceptions are removed without a
   proposal (only tightens). Audit `policy.approve|reject|withdraw|supersede`,
   `policy.settings.update`.
 
@@ -733,6 +733,55 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
   Not exercised: a real IdP (Okta/Entra/Keycloak), the archive against MinIO, browser CORS in-cluster
   (checked locally in Chrome against Dex), the Clerk runtime path (covered by characterization tests).
 
+## 2l. Break-glass, self-protection, gated binaries
+
+- **Break-glass** (migration 018 `cp.break_glass_codes`, `server/break_glass.go`, `store/break_glass.go`,
+  `sign/breakglass.go`, `cmd/effigentd/breakglass.go`, `engine/breakglass.go`):
+  - `POST /api/v1/break-glass {endpoint_id ("" | "*" = all machines), duration_minutes (1…480), reason}`
+    (people only, `s.console`) returns the code once. `GET` lists, `DELETE /{id}` revokes.
+  - The code: Crockford base32 of version / flags / expiry / nonce plus an ed25519 signature by the tenant
+    key (~125 chars), in its own signing domain. The machine is implicit: a machine code verifies only
+    there, an all-machines code anywhere in the tenant. Only the nonce is stored.
+  - Not gated behind policy change approval, by design. Compensating controls: approvals only, ≤ 8h,
+    reason required, webhook `break_glass.created` / `break_glass.used`, email, audit.
+  - `effigentd break-glass <code>` → local `POST /break-glass` → verified offline against the pinned key.
+    `engine.SetBreakGlass` reapplies every agent with `Rule.KernelLifted` (approve-as-deny dropped) and
+    restores at expiry. The hook handler lets an `Approve` decision through as event `break_glass`;
+    deny lists ran before.
+  - Single use per machine: `<state>/break-glass.json`, written then renamed. `break_glass_start` is
+    reported on reconnect and marks the code used.
+  - The console link is `/enforcement?tab=break-glass`, but that tab isn't built yet. The posture
+    report's `break_glass` section isn't registered yet.
+- **Self-protection** (`cmd/effigentd/guard.go`, `tetragon/render.go`, policy top-level
+  `self_protection`, default on):
+  - Each tracked agent gets `-guard` (file writes / append / create / O_TRUNC via inode_setattr /
+    unlink / rename on path prefixes) and `-guardk` (task_kill on effigentd + Tetragon pids, ≤ 4,
+    procfs hosts only) TracingPolicies.
+  - Always `Override` EPERM, even in monitor mode and break-glass. Loaded before `-lsm`, so the
+    `effigentd run` canary implies the guard is live.
+  - Paths: `/usr/local/bin/effigentd`, `/var/lib/effigent`, the systemd unit (prefix, so drop-ins too),
+    Tetragon's binary / `/etc/tetragon` / `/var/log/tetragon`, the four managed hook configs (Linux
+    paths), plus the daemon's resolved binary and state dir.
+- **Gated binaries** (policy per rule `gated_exec`, absolute paths; `cmd/effigentd/gate.go`, `run.go`):
+  - A bprm_check selector refuses the agent tree's exec of a gated path unless the executing binary is
+    effigentd (`GateExempt` = the daemon's resolved paths, injected by `engine.SetGateExempt`).
+  - `effigentd gate [--agent N] -- <bin> args` → `POST /gate/{agent}` (no token, like `/hook`) → the
+    argv is judged as a Bash call (command / actions / approval pipeline) → exec on allow. Any error
+    refuses.
+  - `effigentd run` reads `GET /gated/{agent}`, puts a shim dir (basename → effigentd symlinks) first in
+    PATH, sets `EFFIGENT_AGENT` / `EFFIGENT_SHIM_DIR`, and refuses to launch a gated command itself.
+    It only warns when it can't reach the API to check.
+  - Compile carries `gated_exec` (overrides + sameRule). Not on the hook socket.
+- Tests:
+  - `sign/breakglass_test.go`, `server/break_glass_test.go` (DB), `tetragon/render_test.go`
+    (guard + gated), compile `TestGatedExecSurvivesCompile`.
+  - e2e §7 (self-protection, verified on Tetragon v1.7.1 / kernel 6.11) and §8 (direct exec blocked,
+    non-agent allowed, gate fails closed, nested run refused).
+  - Not live: the gate's allow path and the shims (unit tests only), break-glass end to end.
+- Rollout: control plane (migration 018) → console → effigentd release → endpoints upgraded → only then
+  publish `gated_exec` / `self_protection` (older builds refuse them: parse error, they stay on the
+  current version). Self-protection needs no policy change: it is on once endpoints upgrade.
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -824,7 +873,14 @@ npm run -w @effigent/site build                     # site
   and the admin token can't count toward two-person approval and aren't checked as the
   requester when one approver suffices; the agent's message says only "pending" until the
   quorum (the "1 of 2" wording would be in effigentd).
-- Policy change approval: there is no break-glass (an emergency change needs a second admin);
+- Break-glass / self-protection / gated binaries (2l): break-glass has no console screen yet (API only),
+  the user who ran it is self-asserted, a revoked code still works on a machine that stays offline, and
+  use is known only on reconnect. Self-protection covers the agent tree only: `systemctl stop effigentd`
+  (systemd sends the signal), Tetragon's local gRPC API (127.0.0.1:54321) and root outside the agent tree
+  aren't blocked; path prefixes also cover same-prefixed siblings; Linux only. Gated binaries match exact
+  paths (a copy elsewhere escapes in denylist mode), shims exist only under `effigentd run`, the gate
+  needs the local daemon (refused in containers without it), and `withShims` leaves one temp dir per run.
+- Policy change approval: break-glass doesn't cover policy changes (an emergency change needs a second admin);
   expiring exceptions are removed without a proposal; a proposal made with an API key can't
   be approved by the key's creator, but any other admin can. Legal hold: anyone with
   `s3:PutObjectLegalHold` on the bucket (AWS side) can lift an S3 hold; the hold covers the
@@ -854,8 +910,9 @@ npm run -w @effigent/site build                     # site
   translated to Claude Code's canonical tools (`internal/endpoint/hooks/agents.go`), so
   one policy (deny + approval lists, `mcp__<server>__<tool>` names) covers all four.
   Hook health (removed, switched off, user-disabled) is reported to the control plane, which
-  alerts (2e). A local admin/root can still edit or delete any of these files, or stop
-  effigentd: that is **detected, not prevented** (hook state ≤ ~1 min + one heartbeat;
+  alerts (2e). On Linux the agent's own tree can't edit these files or signal effigentd (2l); a
+  local admin/root outside it can still edit or delete them, or stop effigentd: that is
+  **detected, not prevented** (hook state ≤ ~1 min + one heartbeat;
   offline = threshold + ≤ 1 min; a signal's sender isn't known, only how effigentd was run).
   A sleeping or disconnected laptop looks the same as a killed daemon unless effigentd sent
   `daemon_stop`; kill -9 sends nothing (reported as `daemon_unclean_restart` at the next start).

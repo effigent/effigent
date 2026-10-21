@@ -10,9 +10,11 @@ The work shipped in two rounds:
   - Control plane `f9a7774` is deployed (migrations 012–015).
   - `main` is pushed (console).
   - `effigentd-v0.7.0` is tagged.
-- **Round 2 is on branch `feature/vendor-checklist`.** It is not pushed and not deployed: 54
-  commits ahead of `origin/main`.
-- **One part is still being built:** break-glass, Linux self-protection and gated binaries.
+- **Round 2 is being released (2026-10-22).**
+  - Control plane `3d9b228` is deployed (migrations 016, 017, 019, 020).
+  - `main` is pushed (console + site).
+- **Round 3 (break-glass, Linux self-protection, gated binaries) is merged** and goes out with
+  the next control plane deploy (migration 018) and effigentd release.
 
 ---
 
@@ -98,7 +100,7 @@ The work shipped in two rounds:
 
 ---
 
-## Round 2 (on the branch, not deployed)
+## Round 2 (being released)
 
 ### Hook signals [2f]
 - **SQL in MCP database tools:** `execute_sql`, Supabase / Neon / Postgres servers and others are
@@ -220,17 +222,61 @@ The work shipped in two rounds:
 
 ---
 
-## Still being built
-- **Break-glass during an outage** (checklist Q18).
-- **Linux self-protection** of effigentd and its hooks (Q20).
-- **Gated binaries** for subcommand control without hooks (Q3).
+## Round 3 (merged, ships with the next release)
 
-Migration 018 is reserved for this work. Its posture-report section plugs into
-`RegisterReportSection("break_glass")`.
+### Break-glass during an outage [2l, Q18]
+- **What:** a signed code that lets a machine run calls needing approval while the control plane
+  is unreachable. Deny rules keep working.
+- **How:**
+  - An admin issues a code (`POST /api/v1/break-glass`): one machine or all of them, 1 minute
+    to 8 hours, with a written reason.
+  - The person at the machine runs `effigentd break-glass <code>`.
+  - effigentd verifies it offline against the key pinned at enrollment and lifts approval
+    lists, in hooks and in the kernel, until the code expires.
+  - Each code works once per machine.
+  - Creation and use alert email and webhooks and are audited. Use is reported on reconnect.
+- **Verified:** sign/verify unit tests and a database test. Not run end to end.
+- **Limits:**
+  - API only: there's no console screen yet.
+  - The user who ran it is what the machine reports.
+  - A revoked code still works on a machine that stays offline.
+  - It never covers policy changes.
 
-## Release order for round 2
+### Linux self-protection [2l, Q20]
+- **What:** a kernel guard so an agent can't switch Effigent off.
+- **How:** on by default (`self_protection: false` turns it off). Every tracked agent tree is
+  refused, even in monitor mode and during break-glass:
+  - writes, truncation, deletes and renames of effigentd's and Tetragon's binaries, effigentd's
+    state, its systemd unit, Tetragon's config and log, and the managed hook configs;
+  - signals to effigentd and Tetragon.
+- **Verified:** against real Tetragon (e2e section 7, 45/45, twice).
+- **Limits:**
+  - `systemctl stop effigentd` (systemd sends the signal), Tetragon's local API and root
+    outside the agent tree aren't blocked. Denying `systemctl` to agents closes the first.
+  - Linux only.
+
+### Gated binaries [2l, Q3]
+- **What:** subcommand control for agents without hooks (Aider and the others).
+- **How:**
+  - A rule's `gated_exec` lists binaries, e.g. `/usr/local/bin/aws`. The kernel refuses the
+    agent's direct exec of them.
+  - `effigentd run` puts shims first in the agent's PATH. Each shim calls
+    `effigentd gate -- aws …`, which judges the full command with the hook rules (command
+    lists, cloud verbs, environments, approvals) and runs the real binary only on allow.
+- **Verified:** against real Tetragon (e2e section 8):
+  - a direct exec is blocked, and a process outside the agent tree is not;
+  - the gate fails closed;
+  - a nested `effigentd run` is refused.
+
+  The allow path and the shims are unit-tested only.
+- **Limits:**
+  - Exact paths: a copy of the binary elsewhere escapes in denylist mode.
+  - Shims only under `effigentd run`.
+  - The gate needs the local daemon (refused in containers without it).
+
+## Release order for rounds 2 and 3
 1. **Control plane:** `AWS_PROFILE=effigent deploy/aws/deploy-cp.sh`. Migrations 016, 017, 019,
-   020, plus 018 once the kernel work is merged. 016's backfill makes the first start slow.
+   020 (round 2, deployed), then 018 (round 3).
 2. **effigentd tag** (`effigentd-v*`). Needed for remote mode, `cloud-setup`, the hook socket,
    `install-gateway`, the post-tool hooks and `--ca-file`.
 3. **`release-selfhost.yml`** (manual), then make both ghcr packages public.
@@ -238,7 +284,8 @@ Migration 018 is reserved for this work. Its posture-report section plugs into
    steps 1–3, so it must not go live first.
 5. **Endpoints:** rerun `install-hooks` (adds the post-tool hooks). Run `install-gateway` only where
    an admin opts in.
-6. **Publish policies that use the new keys** (`mcp_pins`, `models:`, the new action kinds) only
+6. **Publish policies that use the new keys** (`mcp_pins`, `models:`, the new action kinds,
+   `gated_exec`, `self_protection`) only
    after the endpoints are upgraded. Older effigentd builds refuse them and stay on their current
    version.
 

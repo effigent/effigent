@@ -7,8 +7,10 @@ Answers to the 28 points in "EFFIGENT: POINTS TO CHECK WITH THE VENDOR", from th
 - **Partly**: part of the ask is covered and the gap is stated.
 - **No**: not built.
 
-**Not released yet.** Everything marked *new* is on branch `feature/vendor-checklist`.
-None of it is deployed or tagged.
+**Release state (2026-10-22).** The first round is live. Break-glass (18), Linux
+self-protection (20) and gated binaries (3) are merged and ship with the next control plane
+deploy and effigentd release. Policies using `gated_exec` or `self_protection` need that
+effigentd release on every endpoint first.
 
 **Two layers.** Effigent enforces in two places, and the answers say which one applies:
 - **Kernel** (Linux, Tetragon/BPF LSM). It matches binaries, file path suffixes and IP addresses.
@@ -274,14 +276,41 @@ The kernel has no write-only or directory rules.
 
 ## The other points
 
-### 3. Subcommand control on Linux without hooks: **No**
-The kernel matches the resolved binary, so `aws s3 ls` and `aws ec2 terminate-instances` are
-the same to it. With hooks (on Linux too), it works:
+### 3. Subcommand control on Linux without hooks: **Yes** for gated binaries (new), via `effigentd run`
+The kernel matches the resolved binary, so on its own it treats `aws s3 ls` and
+`aws ec2 terminate-instances` alike. **Gated binaries (new)** close that gap for agents
+without hooks:
+- A rule's `gated_exec` lists absolute binary paths (e.g. `/usr/local/bin/aws`,
+  `/usr/bin/kubectl`). The kernel refuses the agent tree's own exec of them, so the agent
+  can't run them directly.
+- `effigentd gate -- <program> <args>` asks the daemon to judge the full command line with
+  the same rules as a hook call: `command_deny` / `command_approve`, `cloud_change` /
+  `cloud_destroy` / `access` per CLI verb, environments, approvals. On allow, effigentd runs
+  the real binary; on any error it refuses (fails closed).
+- `effigentd run --agent NAME -- <agent>` puts shims for the gated programs first in the
+  agent's PATH, so `aws ec2 terminate-instances` from Aider goes through the gate
+  without changing the agent.
+
+With hooks (on Linux too), the same verbs are read from the agent's tool call:
 - `cloud_change` / `cloud_destroy` / `access` per CLI verb (aws, gcloud, az, kubectl, oc, helm,
   terraform, tofu, terragrunt, pulumi, eksctl)
 - `command_deny` / `command_approve` with `*` anywhere in the pattern
 
-For agents without hooks (e.g. Aider), the kernel can only allow or deny the whole binary.
+**Limits:**
+- Paths are exact, like `exec_deny`. A copy of the binary at a new path isn't gated unless
+  the rule is an allowlist (`exec_allow`).
+- Shims exist only for agents started with `effigentd run`. A detected agent has to call
+  `effigentd gate` itself, and until then its gated programs are simply refused.
+- The gate needs the local daemon. In containers without it, gated programs are refused.
+
+**Verified:**
+- Against real Tetragon (e2e section 8, 53/53, run twice):
+  - an agent's direct exec of a gated binary is blocked, while a process outside the agent
+    tree can still run it;
+  - the gate fails closed when the daemon is down;
+  - a nested `effigentd run` can't be used to get around it.
+- In unit tests only: the allow path (gate → daemon allows → real binary runs) and the PATH
+  shims.
 
 ### 7. Fail-open hooks: **Yes**, detected and alerted
 **New:** effigentd reads each agent's hook configuration back every minute and reports one
@@ -451,12 +480,33 @@ audited.
 (`ANTHROPIC_API_KEY: set`), never their values. Redaction now strips `NAME_TOKEN=…`-style values
 from everything sent (see 28).
 
-### 18. Break-glass during an outage: **No**
+### 18. Break-glass during an outage: **Yes** (new; API, no console screen yet)
 When the control plane is unreachable, a call that needs approval is denied, and deny rules keep
-working from the cached signed policy.
+working from the cached signed policy. **Break-glass (new)** lets work continue:
+- **Issuing a code:** an admin or security admin issues a code (`POST /api/v1/break-glass`).
+  It is for one machine or all of them, lasts 1 minute to 8 hours, and needs a written
+  reason. The control plane signs it with the workspace key and keeps only its id. Codes
+  can be listed and revoked.
+- **Using a code:** the person at the machine runs `effigentd break-glass <code>`.
+  - effigentd checks it offline against the key pinned at enrollment.
+  - For the window, it lifts **approval requirements only**, in hooks and in the kernel.
+    Deny rules, self-protection and gated-binary denies stay on.
+  - Each code works once per machine.
+  - Every call let through is recorded as a `break_glass` event.
+- **Alerts and audit:** creating a code and using it both alert the notification emails and
+  webhooks (`break_glass.created`, `break_glass.used`) and are audited. Use is reported when
+  the machine reconnects.
+- **Not gated behind policy change approval:** an outage is the emergency the code exists
+  for, and a second admin may be unreachable. That's why the code can only lift approvals,
+  is time-limited, needs a reason, and alerts everyone on both creation and use.
 
-A break-glass option (signed offline codes that only lift approval lists, audited when the
-machine reconnects) is designed but not built.
+**Limits:**
+- No console screen yet: codes are issued through the API.
+- Who used a code is the OS user the machine reports.
+- Use is known only once the machine reconnects.
+- A code revoked while a machine is offline still works on that machine until it expires.
+- It lifts approvals only. A policy change still needs a second admin when policy change
+  approval is on.
 
 ### 19. Console access, SSO, SCIM, tickets: **Partly**
 - **SSO (available through Clerk, not yet set up for a customer):** console login is Clerk.
@@ -478,11 +528,30 @@ machine reconnects) is designed but not built.
 Clerk plan details were read from Clerk's docs on 2026-10-21; re-check them before quoting
 prices to a customer.
 
-### 20. Local admin tampering: **Partly** (detect, not prevent)
-**New:**
+### 20. Local admin tampering: **Partly**: prevented for the agent on Linux (new), detected everywhere
+**Prevention on Linux (new, on by default; `self_protection: false` turns it off):** every
+tracked agent tree gets a kernel guard that refuses, even in monitor mode and during
+break-glass:
+- writing, truncating, deleting or renaming effigentd's and Tetragon's binaries, effigentd's
+  state dir, its systemd unit (and drop-ins), Tetragon's config and log, and the managed hook
+  configs for Claude Code, Codex, Gemini CLI and Cursor;
+- signals from the agent tree to effigentd's and Tetragon's processes (`kill`, `pkill`,
+  `kill -9`).
+
+Verified against real Tetragon (e2e section 7, 45/45, twice). A process outside an agent tree
+(an admin's own shell) is not restricted.
+
+**Not prevented:**
+- `systemctl stop effigentd`: systemd sends the signal, not the agent. Add `systemctl` to
+  the agent's `exec_deny` or `gated_exec` to close it.
+- Tetragon's local API (127.0.0.1:54321) can remove its policies.
+- Root outside the agent tree can still stop or remove effigentd.
+- No prevention on macOS or Windows (no kernel layer).
+
+**Detection everywhere (unchanged):**
 - **A stopped daemon:** SIGTERM, a service stop or a shutdown emits `daemon_stop` before
-  teardown. It names who stopped it: a signal, the service manager, or the OS user at a
-  terminal.
+  teardown. It records how effigentd was run (systemd, launchd, Windows service, terminal)
+  and, for a terminal run, the OS user. A signal doesn't name its sender.
 - **kill -9, a crash or power loss:** leaves a run marker, so the next start emits
   `daemon_unclean_restart`.
 - **Offline detection:** a machine that goes silent is marked offline after the tenant's
@@ -490,15 +559,9 @@ prices to a customer.
   webhook. Detection takes the threshold plus up to one minute. The alert says whether the
   machine stopped cleanly or went silent. Coming back online is audited without an email,
   because laptops sleep.
-- **What a stop event can't say:** a signal doesn't name who sent it, so `daemon_stop` records
-  how effigentd was run (systemd, launchd, Windows service, terminal) and, for a terminal run,
-  the OS user.
 
-**Hooks fail closed** (Claude Code; Cursor per its docs) when the daemon is down, so stopping it stops those
-agents instead of freeing them.
-
-Root can still stop or remove it. Preventing that needs OS-level protection, such as macOS
-Endpoint Security or MDM-locked services.
+**Hooks fail closed** (Claude Code; Cursor per its docs) when the daemon is down, so stopping
+it stops those agents instead of freeing them.
 
 ### 22. MCP governance: **Partly**
 - **Already there:** `mcp_allow` (server names, `*` wildcards); a call to another server is
