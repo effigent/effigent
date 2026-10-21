@@ -17,9 +17,14 @@ type Principal struct {
 	UserID string `json:"user_id"`
 	Tenant string `json:"tenant"` // Clerk ref: "org:<id>" or "user:<id>"
 	Role   string `json:"role"`
-	Via    string `json:"via"` // "clerk" | "admin-token" | "api-key"
+	Via    string `json:"via"` // "clerk" | "oidc" | "admin-token" | "api-key"
 	// Scopes limit an API key: read, approvals, endpoints, policy.
 	Scopes []string `json:"scopes,omitempty"`
+	// OIDC sign-ins only (Clerk principals leave them empty, so /me is
+	// unchanged for them): the verified email, display name and groups.
+	Email  string   `json:"email,omitempty"`
+	Name   string   `json:"name,omitempty"`
+	Groups []string `json:"groups,omitempty"`
 }
 
 // API key scopes. "read" covers every GET; the others are what a key may change.
@@ -43,6 +48,8 @@ type Authenticator struct {
 	authorizedParties map[string]bool
 	// APIKeys resolves workspace API keys; nil disables them.
 	APIKeys APIKeyLookup
+	// oidc verifies a generic OpenID Connect issuer's tokens (self-hosted).
+	oidc *oidcAuth
 }
 
 // Options configures NewAuthenticator.
@@ -51,6 +58,8 @@ type Options struct {
 	AdminToken        string
 	AdminTenants      []string
 	AuthorizedParties []string
+	// OIDC, when set, also accepts tokens from a generic OIDC issuer.
+	OIDC *OIDCOptions
 }
 
 func set(list []string) map[string]bool {
@@ -73,8 +82,15 @@ func NewAuthenticator(ctx context.Context, o Options) (*Authenticator, error) {
 		}
 		a.jwks = k
 	}
-	if a.jwks == nil && a.adminToken == "" {
-		return nil, errors.New("configure CLERK_ISSUER and/or EFFIGENT_ADMIN_TOKEN")
+	if o.OIDC != nil {
+		oa, err := newOIDCAuth(ctx, *o.OIDC)
+		if err != nil {
+			return nil, err
+		}
+		a.oidc = oa
+	}
+	if a.jwks == nil && a.adminToken == "" && a.oidc == nil {
+		return nil, errors.New("configure CLERK_ISSUER, EFFIGENT_OIDC_ISSUER and/or EFFIGENT_ADMIN_TOKEN")
 	}
 	return a, nil
 }
@@ -114,6 +130,11 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, error) {
 			return Principal{}, errors.New("the admin token is not enabled for this tenant")
 		}
 		return Principal{UserID: "admin", Tenant: tenant, Role: "admin", Via: "admin-token"}, nil
+	}
+	// A generic OIDC issuer (self-hosted) is picked by the token's own "iss";
+	// everything else takes the Clerk path below, unchanged.
+	if a.oidc != nil && (a.jwks == nil || peekIssuer(tok) == a.oidc.o.Issuer) {
+		return a.oidc.authenticate(tok)
 	}
 	if a.jwks == nil {
 		return Principal{}, errors.New("invalid token")
@@ -183,6 +204,7 @@ func (s *Server) scoped(scope string, need access, next func(http.ResponseWriter
 			tooMany(w, wait)
 			return
 		}
+		s.noteOIDCUser(r.Context(), p) // self-hosted: remember who signed in (no directory API)
 		if p.Via == "api-key" {
 			want := scope
 			if need == read && want == "" {

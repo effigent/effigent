@@ -22,6 +22,7 @@ Keep this file current when architecture, data model or deployment change.
 | `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
 | `Dockerfile.effigentd`, `deploy/helm/effigent`, `deploy/docker` | effigentd for container hosts and Kubernetes. Image `ghcr.io/effigent/effigentd:<version>` + `:latest` (amd64/arm64), Helm repo `https://effigent.ai/charts` (chart `effigent`, DaemonSet: hostPID, hostNetwork, privileged, `/var/lib/effigent` hostPath, `EFFIGENT_HOSTNAME` = node name, token from a Secret). Both published by `release-effigentd.yml` after the binaries; the ghcr package must be public. Tetragon comes from its official chart with `tetragon.grpc.address=localhost:54321` + `tetragon.processAncestors.enabled=base,kprobe,lsm`. `deploy/docker/compose.yaml` = Tetragon (event cache 2 × 1s) + effigentd on a plain host. | customer clusters / Docker hosts |
 | `test/containers` | `kind.sh` (2-node kind + Tetragon chart + our chart) and `docker.sh` (compose): stand-in agent's curl and `.env` blocked, blocks in the local control plane, restart keeps the machine. `hooksock.sh`: the hook socket on kind without Tetragon (2i). One Tetragon per kernel: stop the dev `tetragon` container first. | Docker Desktop |
+| `deploy/helm/effigent-cp`, `deploy/selfhost`, `Dockerfile.console`, `test/selfhost` | Self-hosted control plane + console with the customer's OIDC provider (see 2k, `docs/self-hosting.md`). `test/selfhost/kind.sh`: kind + chart + Dex + enrolled effigentd. | customer infra / Docker Desktop |
 
 ## 2. How policy reaches the kernel
 
@@ -688,6 +689,50 @@ Full write-up, vendor research with links: `docs/cloud-agents.md`.
     usage + session recorded; a denied model was refused locally.
   - Not live: Codex, Gemini, the OpenAI/Gemini upstreams.
 
+## 2k. Self-hosted control plane
+
+Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENANT`, default
+`org:self-hosted`); the SaaS (Clerk) path is unchanged and still the default everywhere.
+- Control plane auth (`server/oidc.go`, `OIDCOptionsFromEnv`): `EFFIGENT_OIDC_ISSUER` +
+  `EFFIGENT_OIDC_AUDIENCE` (falls back to `_CLIENT_ID`; required). Discovery is lazy and retried
+  every 10s (issuer must match exactly), JWKS via keyfunc; RS/PS/ES only, `exp` required, `aud` must
+  contain the audience. Claims `_USER_CLAIM`/`_EMAIL_CLAIM`/`_NAME_CLAIM`/`_GROUPS_CLAIM` (defaults
+  sub/email/name/groups, dotted paths ok). Role per request: `_ADMIN_GROUPS` or verified
+  `_ADMIN_EMAILS` → admin, `_SECURITY_ADMIN_GROUPS` → security_admin, else member (viewer);
+  `_ALLOWED_GROUPS` refuses the rest. Email kept only with `email_verified` (or
+  `_ALLOW_UNVERIFIED_EMAIL=1`). `EFFIGENT_TLS_CERT_FILE`/`_KEY_FILE` serve HTTPS directly.
+- Directory without Clerk (migration 020 `cp.console_users`, `server/console_users.go`): `scoped()`
+  records each OIDC user (throttled 5 min unless changed); `GET /api/v1/members` (sign-ins in the
+  last 30 days) feeds the Team page and approver-group pickers; `StoreDirectory` answers
+  `MemberRole`/`UserEmails` (Slack "members" rule, proposals) when there's no `CLERK_SECRET_KEY`.
+  `Store.Migrate` takes `pg_advisory_lock(hashtext('cp.schema_migrations'))` (replicas).
+- Console (`EFFIGENT_AUTH_MODE=oidc`, read at run time): `src/lib/oidc.ts` + `src/app/auth/{login,
+  callback,token,logout}` — code + PKCE, state/nonce in a sealed tx cookie, session = AES-256-GCM
+  sealed chunked cookie `effigent_session` (`EFFIGENT_SESSION_SECRET` ≥ 32, absolute lifetime
+  `EFFIGENT_SESSION_HOURS`, default 12), `/auth/token` (same-origin only) refreshes < 60s before
+  expiry, logout POST → `end_session_endpoint`. `EFFIGENT_OIDC_TOKEN=id_token|access_token`.
+  `middleware.ts` branches on the mode (Clerk middleware unchanged); `RuntimeProvider` +
+  `setApiBase()` take `EFFIGENT_API_URL` at run time. No ClerkProvider in OIDC mode; `/api/v1/storage*`,
+  Clerk webhook and `/sign-up` 404. Standalone output only with `NEXT_OUTPUT=standalone`
+  (`Dockerfile.console`); the Vercel build is unchanged.
+- effigentd: `enroll --ca-file` (or `EFFIGENT_CA_FILE`) trusts a private CA in addition to the
+  system roots and saves it as `<state>/ca.pem`, trusted on every start (`cmd/effigentd/cafile.go`).
+  `install.sh` and the macOS pkg don't pass it yet.
+- Archive on S3-compatible stores: `EFFIGENT_ARCHIVE_ENDPOINT`, `_PATH_STYLE=1`, `_SSE=none`,
+  `_REGION`.
+- Packaging: `deploy/helm/effigent-cp` (cp + console Deployments, keys Secret generated once via
+  `lookup` with `helm.sh/resource-policy: keep` unless `keys.existingSecret` — required under
+  GitOps/`helm template`; bundled Postgres StatefulSet for evaluation; Ingress for two hosts;
+  `caBundle` → `SSL_CERT_DIR` / `NODE_EXTRA_CA_CERTS`), `deploy/selfhost/compose.yaml` (Postgres, cp,
+  console, Caddy). Images `ghcr.io/effigent/effigent-cp` / `effigent-console` and the chart are
+  published by `release-selfhost.yml` (workflow_dispatch only; not run yet).
+- Tests: `server/oidc_test.go` (DB parts need `EFFIGENT_TEST_DATABASE_URL`), `test/selfhost/kind.sh`
+  (kind + chart + bundled Postgres + Dex mock connector + cp TLS from a test CA: sign-in through the
+  console, `/me` admin via oidc, members, enrollment token + policy publish by the OIDC admin,
+  effigentd enroll with `--ca-file` and sync, `helm upgrade` keeps the signing key; passed 2026-10-22).
+  Not exercised: a real IdP (Okta/Entra/Keycloak), the archive against MinIO, browser CORS in-cluster
+  (checked locally in Chrome against Dex), the Clerk runtime path (covered by characterization tests).
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -697,6 +742,10 @@ Full write-up, vendor research with links: `docs/cloud-agents.md`.
   tenant = `org:<id>` or `user:<id>`, same refs as v1 `tenants.clerk_ref`), or
   `EFFIGENT_ADMIN_TOKEN` + `X-Effigent-Tenant` for automation.
 - Console dev bypass: `EFFIGENT_DEV_NOAUTH=1 NEXT_PUBLIC_EFFIGENT_DEV_NOAUTH=1` (never in production builds).
+- Self-hosted (2k): OIDC ID/access tokens from `EFFIGENT_OIDC_ISSUER` (`server/oidc.go`), Principal
+  `via: oidc` with `email`/`name`/`groups` (omitted for Clerk, so Clerk's `/me` is unchanged). With
+  both configured, a token whose unverified `iss` equals the OIDC issuer goes to OIDC, everything
+  else to Clerk. Characterization tests pin the Clerk and admin-token paths (`server/auth_test.go`).
 
 ## 4. Running locally
 

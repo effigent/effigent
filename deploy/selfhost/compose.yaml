@@ -1,0 +1,103 @@
+# Self-hosted Effigent on one VM: Postgres, the control plane, the console and
+# Caddy in front (automatic HTTPS for both hostnames).
+#
+#   cp env.example .env && $EDITOR .env      # hostnames, OIDC client, keys
+#   docker compose up -d
+#   docker compose logs cp | grep 'signing public key'
+#
+# Point two DNS names at the VM (EFFIGENT_API_HOST for effigentd and the API,
+# EFFIGENT_CONSOLE_HOST for people) and open 80 + 443. Back up .env (it holds
+# the policy signing key) and the postgres volume. Guide: docs/self-hosting.md
+# (https://effigent.ai/docs/self-hosting).
+name: effigent
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: effigent
+      POSTGRES_DB: effigent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U effigent -d effigent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  cp:
+    image: ${EFFIGENT_CP_IMAGE:-ghcr.io/effigent/effigent-cp}:${EFFIGENT_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      EFFIGENT_LISTEN: 0.0.0.0:8080
+      EFFIGENT_PUBLIC_URL: https://${EFFIGENT_API_HOST:?set EFFIGENT_API_HOST}
+      EFFIGENT_CONSOLE_ORIGIN: https://${EFFIGENT_CONSOLE_HOST:?set EFFIGENT_CONSOLE_HOST}
+      # An external Postgres: replace with its URL (sslmode=require).
+      DATABASE_URL: postgres://effigent:${POSTGRES_PASSWORD}@postgres:5432/effigent?sslmode=disable
+      # Every enrolled machine pins this key's public half. Losing or changing
+      # it means enrolling every machine again.
+      EFFIGENT_SIGNING_KEY: ${EFFIGENT_SIGNING_KEY:?set EFFIGENT_SIGNING_KEY (openssl rand -base64 32)}
+      EFFIGENT_SECRETS_KEY: ${EFFIGENT_SECRETS_KEY:?set EFFIGENT_SECRETS_KEY}
+      EFFIGENT_ADMIN_TOKEN: ${EFFIGENT_ADMIN_TOKEN:-}
+      EFFIGENT_ADMIN_TENANTS: ${EFFIGENT_TENANT:-org:self-hosted}
+      EFFIGENT_OIDC_ISSUER: ${EFFIGENT_OIDC_ISSUER:?set EFFIGENT_OIDC_ISSUER}
+      EFFIGENT_OIDC_AUDIENCE: ${EFFIGENT_OIDC_CLIENT_ID:?set EFFIGENT_OIDC_CLIENT_ID}
+      EFFIGENT_OIDC_TENANT: ${EFFIGENT_TENANT:-org:self-hosted}
+      EFFIGENT_OIDC_GROUPS_CLAIM: ${EFFIGENT_OIDC_GROUPS_CLAIM:-groups}
+      EFFIGENT_OIDC_ADMIN_GROUPS: ${EFFIGENT_OIDC_ADMIN_GROUPS:-}
+      EFFIGENT_OIDC_SECURITY_ADMIN_GROUPS: ${EFFIGENT_OIDC_SECURITY_ADMIN_GROUPS:-}
+      EFFIGENT_OIDC_ADMIN_EMAILS: ${EFFIGENT_OIDC_ADMIN_EMAILS:-}
+      EFFIGENT_OIDC_ALLOWED_GROUPS: ${EFFIGENT_OIDC_ALLOWED_GROUPS:-}
+      EFFIGENT_SMTP_URL: ${EFFIGENT_SMTP_URL:-}
+      EFFIGENT_EMAIL_FROM: ${EFFIGENT_EMAIL_FROM:-}
+      EFFIGENT_ARCHIVE_BUCKET: ${EFFIGENT_ARCHIVE_BUCKET:-}
+      EFFIGENT_ARCHIVE_REGION: ${EFFIGENT_ARCHIVE_REGION:-us-east-1}
+      EFFIGENT_ARCHIVE_ENDPOINT: ${EFFIGENT_ARCHIVE_ENDPOINT:-}
+      EFFIGENT_ARCHIVE_PATH_STYLE: ${EFFIGENT_ARCHIVE_PATH_STYLE:-}
+      EFFIGENT_ARCHIVE_SSE: ${EFFIGENT_ARCHIVE_SSE:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+
+  console:
+    image: ${EFFIGENT_CONSOLE_IMAGE:-ghcr.io/effigent/effigent-console}:${EFFIGENT_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      EFFIGENT_AUTH_MODE: oidc
+      EFFIGENT_API_URL: https://${EFFIGENT_API_HOST}
+      EFFIGENT_CONSOLE_URL: https://${EFFIGENT_CONSOLE_HOST}
+      EFFIGENT_OIDC_ISSUER: ${EFFIGENT_OIDC_ISSUER}
+      EFFIGENT_OIDC_CLIENT_ID: ${EFFIGENT_OIDC_CLIENT_ID}
+      EFFIGENT_OIDC_CLIENT_SECRET: ${EFFIGENT_OIDC_CLIENT_SECRET:-}
+      EFFIGENT_OIDC_SCOPES: ${EFFIGENT_OIDC_SCOPES:-openid email profile offline_access}
+      EFFIGENT_OIDC_TOKEN: ${EFFIGENT_OIDC_TOKEN:-id_token}
+      EFFIGENT_OIDC_PROVIDER_NAME: ${EFFIGENT_OIDC_PROVIDER_NAME:-}
+      EFFIGENT_SESSION_SECRET: ${EFFIGENT_SESSION_SECRET:?set EFFIGENT_SESSION_SECRET}
+      EFFIGENT_SESSION_HOURS: ${EFFIGENT_SESSION_HOURS:-12}
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on: [cp, console]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      EFFIGENT_API_HOST: ${EFFIGENT_API_HOST}
+      EFFIGENT_CONSOLE_HOST: ${EFFIGENT_CONSOLE_HOST}
+      # Optional: "tls internal" = Caddy's own CA instead of Let's Encrypt,
+      # e.g. on a private network; give effigentd its root with --ca-file.
+      EFFIGENT_CADDY_TLS: ${EFFIGENT_CADDY_TLS:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  pgdata:
+  caddy-data:
+  caddy-config:

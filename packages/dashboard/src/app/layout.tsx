@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { ClerkProvider } from '@clerk/nextjs';
 import { devNoAuth } from '@/lib/dev-auth.ts';
+import { authMode } from '@/lib/auth-mode.ts';
 import { THEME_SCRIPT } from '@/lib/theme-script.ts';
 import '../theme.css';
 
@@ -40,7 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body>{devNoAuth ? children : <ClerkProvider appearance={clerkAppearance}>{children}</ClerkProvider>}</body>
+      <body>{devNoAuth || authMode() === 'oidc' ? children : <ClerkProvider appearance={clerkAppearance}>{children}</ClerkProvider>}</body>
     </html>
   );
 }

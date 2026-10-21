@@ -1,0 +1,220 @@
+{{- $keys := include "effigent-cp.keysSecret" . }}
+{{- $tls := .Values.controlPlane.tls.secretName }}
+{{- if not (or .Values.database.url .Values.database.existingSecret .Values.postgres.enabled) }}
+{{- fail "set database.url or database.existingSecret (Postgres 14+), or postgres.enabled=true for an evaluation install" }}
+{{- end }}
+{{- $_ := required "set oidc.issuer (your identity provider's issuer URL)" .Values.oidc.issuer }}
+{{- $_ := required "set oidc.clientId (the console's OIDC client id)" .Values.oidc.clientId }}
+{{- if not (has .Values.oidc.token (list "id_token" "access_token")) }}
+{{- fail "oidc.token must be id_token or access_token" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "effigent-cp.fullname" . }}
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  selector:
+    matchLabels:
+      {{- include "effigent-cp.selector" (dict "root" . "component" "control-plane") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "effigent-cp.selector" (dict "root" . "component" "control-plane") | nindent 8 }}
+      annotations:
+        {{- with .Values.controlPlane.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "effigent-cp.serviceAccount" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "effigent-cp.podSecurity" . | nindent 6 }}
+      containers:
+        - name: effigent-cp
+          image: {{ include "effigent-cp.image" (dict "image" .Values.image.controlPlane "root" .) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "effigent-cp.containerSecurity" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: EFFIGENT_LISTEN
+              value: 0.0.0.0:8080
+            - name: EFFIGENT_PUBLIC_URL
+              value: {{ include "effigent-cp.cpURL" . | quote }}
+            - name: EFFIGENT_CONSOLE_ORIGIN
+              value: {{ include "effigent-cp.consoleOrigin" . | quote }}
+            {{- if .Values.postgres.enabled }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ $keys }}, key: postgres-password}
+            - name: DATABASE_URL
+              value: "postgres://effigent:$(POSTGRES_PASSWORD)@{{ include "effigent-cp.postgresHost" . }}:5432/effigent?sslmode=disable"
+            {{- else }}
+            {{- include "effigent-cp.secretEnv" (dict "root" . "env" "DATABASE_URL" "key" "database-url" "existing" .Values.database.existingSecret "existingKey" .Values.database.existingSecretKey) | nindent 12 }}
+            {{- end }}
+            - name: EFFIGENT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ $keys }}, key: signing-key}
+            - name: EFFIGENT_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: {name: {{ $keys }}, key: admin-token}
+            - name: EFFIGENT_ADMIN_TENANTS
+              value: {{ .Values.controlPlane.tenant | quote }}
+            - name: EFFIGENT_SECRETS_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ $keys }}, key: secrets-key}
+            - name: EFFIGENT_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: EFFIGENT_OIDC_AUDIENCE
+              value: {{ .Values.oidc.clientId | quote }}
+            - name: EFFIGENT_OIDC_TENANT
+              value: {{ .Values.controlPlane.tenant | quote }}
+            {{- with .Values.oidc.jwksUrl }}
+            - name: EFFIGENT_OIDC_JWKS_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: EFFIGENT_OIDC_USER_CLAIM
+              value: {{ .Values.oidc.claims.user | default "sub" | quote }}
+            - name: EFFIGENT_OIDC_EMAIL_CLAIM
+              value: {{ .Values.oidc.claims.email | default "email" | quote }}
+            - name: EFFIGENT_OIDC_NAME_CLAIM
+              value: {{ .Values.oidc.claims.name | default "name" | quote }}
+            - name: EFFIGENT_OIDC_GROUPS_CLAIM
+              value: {{ .Values.oidc.claims.groups | default "groups" | quote }}
+            - name: EFFIGENT_OIDC_ADMIN_GROUPS
+              value: {{ join "," .Values.oidc.adminGroups | quote }}
+            - name: EFFIGENT_OIDC_SECURITY_ADMIN_GROUPS
+              value: {{ join "," .Values.oidc.securityAdminGroups | quote }}
+            - name: EFFIGENT_OIDC_ADMIN_EMAILS
+              value: {{ join "," .Values.oidc.adminEmails | quote }}
+            - name: EFFIGENT_OIDC_ALLOWED_GROUPS
+              value: {{ join "," .Values.oidc.allowedGroups | quote }}
+            {{- if .Values.oidc.allowUnverifiedEmail }}
+            - name: EFFIGENT_OIDC_ALLOW_UNVERIFIED_EMAIL
+              value: "1"
+            {{- end }}
+            {{- if or .Values.smtp.url .Values.smtp.existingSecret }}
+            {{- include "effigent-cp.secretEnv" (dict "root" . "env" "EFFIGENT_SMTP_URL" "key" "smtp-url" "existing" .Values.smtp.existingSecret "existingKey" .Values.smtp.existingSecretKey) | nindent 12 }}
+            {{- end }}
+            {{- with .Values.smtp.from }}
+            - name: EFFIGENT_EMAIL_FROM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.archive.bucket }}
+            - name: EFFIGENT_ARCHIVE_BUCKET
+              value: {{ . | quote }}
+            - name: EFFIGENT_ARCHIVE_REGION
+              value: {{ $.Values.archive.region | default "us-east-1" | quote }}
+            {{- with $.Values.archive.endpoint }}
+            - name: EFFIGENT_ARCHIVE_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $.Values.archive.pathStyle }}
+            - name: EFFIGENT_ARCHIVE_PATH_STYLE
+              value: "1"
+            {{- end }}
+            {{- if not $.Values.archive.sse }}
+            - name: EFFIGENT_ARCHIVE_SSE
+              value: none
+            {{- end }}
+            {{- end }}
+            {{- with .Values.controlPlane.eventRetentionDays }}
+            - name: EFFIGENT_EVENT_RETENTION_DAYS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.controlPlane.endpointOfflineAfter }}
+            - name: EFFIGENT_ENDPOINT_OFFLINE_AFTER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $tls }}
+            - name: EFFIGENT_TLS_CERT_FILE
+              value: /etc/effigent/tls/tls.crt
+            - name: EFFIGENT_TLS_KEY_FILE
+              value: /etc/effigent/tls/tls.key
+            {{- end }}
+            {{- include "effigent-cp.caEnv" . | nindent 12 }}
+            {{- with .Values.controlPlane.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if and .Values.archive.bucket .Values.archive.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.archive.existingSecret }}
+          {{- end }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http, scheme: {{ if $tls }}HTTPS{{ else }}HTTP{{ end }}}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http, scheme: {{ if $tls }}HTTPS{{ else }}HTTP{{ end }}}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $tls }}
+            - name: tls
+              mountPath: /etc/effigent/tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.caBundle.configMap }}
+            - name: ca
+              mountPath: /etc/effigent/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if $tls }}
+        - name: tls
+          secret:
+            secretName: {{ $tls }}
+        {{- end }}
+        {{- if .Values.caBundle.configMap }}
+        - name: ca
+          configMap:
+            name: {{ .Values.caBundle.configMap }}
+        {{- end }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "effigent-cp.fullname" . }}
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  type: {{ .Values.controlPlane.service.type }}
+  selector:
+    {{- include "effigent-cp.selector" (dict "root" . "component" "control-plane") | nindent 4 }}
+  ports:
+    - name: {{ if $tls }}https{{ else }}http{{ end }}
+      port: {{ .Values.controlPlane.service.port }}
+      targetPort: http
+{{- if .Values.serviceAccount.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "effigent-cp.serviceAccount" . }}
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+{{- end }}

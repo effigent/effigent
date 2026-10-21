@@ -1,0 +1,50 @@
+{{- if .Values.ingress.enabled }}
+{{- if .Values.controlPlane.tls.secretName }}
+{{- fail "ingress.enabled with controlPlane.tls.secretName: let the Ingress terminate TLS (ingress.tls) or serve TLS from the pod without an Ingress, not both" }}
+{{- end }}
+{{- $cpHost := (urlParse (include "effigent-cp.cpURL" .)).hostname }}
+{{- $name := include "effigent-cp.fullname" . }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $cpHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.controlPlane.service.port }}
+    {{- if .Values.console.enabled }}
+    {{- $consoleHost := (urlParse (include "effigent-cp.consoleURL" .)).hostname }}
+    {{- if eq $consoleHost $cpHost }}
+    {{- fail "controlPlane.url and console.url need different hosts (e.g. effigent-api.example.com and effigent.example.com)" }}
+    {{- end }}
+    - host: {{ $consoleHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}-console
+                port:
+                  number: {{ .Values.console.service.port }}
+    {{- end }}
+{{- end }}

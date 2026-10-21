@@ -1,0 +1,120 @@
+{{- if .Values.console.enabled }}
+{{- $keys := include "effigent-cp.keysSecret" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "effigent-cp.fullname" . }}-console
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  replicas: {{ .Values.console.replicas }}
+  selector:
+    matchLabels:
+      {{- include "effigent-cp.selector" (dict "root" . "component" "console") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "effigent-cp.selector" (dict "root" . "component" "console") | nindent 8 }}
+      annotations:
+        {{- with .Values.console.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "effigent-cp.serviceAccount" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "effigent-cp.podSecurity" . | nindent 6 }}
+      containers:
+        - name: console
+          image: {{ include "effigent-cp.image" (dict "image" .Values.image.console "root" .) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "effigent-cp.containerSecurity" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: EFFIGENT_AUTH_MODE
+              value: oidc
+            - name: EFFIGENT_API_URL
+              value: {{ include "effigent-cp.cpURL" . | quote }}
+            - name: EFFIGENT_CONSOLE_URL
+              value: {{ include "effigent-cp.consoleURL" . | quote }}
+            - name: EFFIGENT_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: EFFIGENT_OIDC_CLIENT_ID
+              value: {{ .Values.oidc.clientId | quote }}
+            {{- if or .Values.oidc.clientSecret .Values.oidc.clientSecretExistingSecret }}
+            {{- include "effigent-cp.secretEnv" (dict "root" . "env" "EFFIGENT_OIDC_CLIENT_SECRET" "key" "client-secret" "existing" .Values.oidc.clientSecretExistingSecret "existingKey" .Values.oidc.clientSecretKey) | nindent 12 }}
+            {{- end }}
+            - name: EFFIGENT_OIDC_SCOPES
+              value: {{ .Values.oidc.scopes | quote }}
+            - name: EFFIGENT_OIDC_TOKEN
+              value: {{ .Values.oidc.token | quote }}
+            {{- with .Values.oidc.providerName }}
+            - name: EFFIGENT_OIDC_PROVIDER_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            - name: EFFIGENT_SESSION_HOURS
+              value: {{ .Values.console.sessionHours | quote }}
+            - name: EFFIGENT_SESSION_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ $keys }}, key: session-secret}
+            {{- include "effigent-cp.caEnv" . | nindent 12 }}
+            {{- with .Values.console.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /app/packages/dashboard/.next/cache
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.caBundle.configMap }}
+            - name: ca
+              mountPath: /etc/effigent/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.caBundle.configMap }}
+        - name: ca
+          configMap:
+            name: {{ .Values.caBundle.configMap }}
+        {{- end }}
+      {{- with .Values.console.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.console.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.console.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "effigent-cp.fullname" . }}-console
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  type: {{ .Values.console.service.type }}
+  selector:
+    {{- include "effigent-cp.selector" (dict "root" . "component" "console") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.console.service.port }}
+      targetPort: http
+{{- end }}

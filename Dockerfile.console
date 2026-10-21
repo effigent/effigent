@@ -1,0 +1,38 @@
+# effigent-console — the console for a self-hosted control plane (Next.js
+# standalone server). Signs people in with the customer's OIDC provider; every
+# setting is read at run time, so one image serves any install:
+#   EFFIGENT_API_URL           the control plane's public URL (what browsers call)
+#   EFFIGENT_CONSOLE_URL       this console's public URL (OIDC redirect: <url>/auth/callback)
+#   EFFIGENT_OIDC_ISSUER, EFFIGENT_OIDC_CLIENT_ID, EFFIGENT_OIDC_CLIENT_SECRET (optional),
+#   EFFIGENT_OIDC_SCOPES, EFFIGENT_OIDC_PROVIDER_NAME, EFFIGENT_SESSION_SECRET (≥ 32 chars)
+# See docs/self-hosting.md. Build from the repo root:
+#   docker build -f Dockerfile.console -t effigent-console .
+FROM node:22-alpine AS deps
+WORKDIR /src
+COPY package.json package-lock.json ./
+COPY packages/dashboard/package.json packages/dashboard/
+COPY packages/site/package.json packages/site/
+RUN npm ci -w @effigent/dashboard --include-workspace-root=false --no-audit --no-fund
+
+FROM node:22-alpine AS build
+WORKDIR /src
+COPY --from=deps /src/node_modules ./node_modules
+COPY --from=deps /src/packages/dashboard/node_modules ./packages/dashboard/node_modules
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY packages/dashboard ./packages/dashboard
+# Self-hosted build: no Clerk, standalone server. EFFIGENT_AUTH_MODE is also
+# read at run time; setting it here keeps the few static pages Clerk-free.
+ENV NEXT_TELEMETRY_DISABLED=1 NEXT_OUTPUT=standalone EFFIGENT_AUTH_MODE=oidc
+RUN cd packages/dashboard && npx next build
+
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 EFFIGENT_AUTH_MODE=oidc PORT=3000 HOSTNAME=0.0.0.0
+COPY --from=build --chown=node:node /src/packages/dashboard/.next/standalone ./
+COPY --from=build --chown=node:node /src/packages/dashboard/.next/static ./packages/dashboard/.next/static
+COPY --from=build --chown=node:node /src/packages/dashboard/public ./packages/dashboard/public
+# Numeric, so Kubernetes runAsNonRoot can verify it (1000 = node).
+USER 1000:1000
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1
+CMD ["node", "packages/dashboard/server.js"]

@@ -1,0 +1,35 @@
+Effigent control plane: {{ include "effigent-cp.cpURL" . }}
+{{- if .Values.console.enabled }}
+Console:                 {{ include "effigent-cp.consoleURL" . }}  (sign in with {{ .Values.oidc.providerName | default .Values.oidc.issuer }})
+OIDC redirect URI:       {{ include "effigent-cp.consoleURL" . }}/auth/callback
+Post-logout redirect:    {{ include "effigent-cp.consoleURL" . }}/sign-in?signed_out=1
+{{- end }}
+Workspace:               {{ .Values.controlPlane.tenant }}
+{{- if not (or .Values.oidc.adminGroups .Values.oidc.adminEmails) }}
+
+WARNING: neither oidc.adminGroups nor oidc.adminEmails is set, so everyone who
+signs in is a viewer. Set one to get an admin.
+{{- end }}
+
+THE POLICY SIGNING KEY. Every enrolled machine pins its public key; if the key
+is lost or replaced, every machine must be enrolled again. Back it up now:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "effigent-cp.keysSecret" . }} -o jsonpath='{.data.signing-key}' | base64 -d > effigent-signing.key
+{{- if not .Values.keys.existingSecret }}
+
+The chart generated the keys into Secret {{ include "effigent-cp.keysSecret" . }} (kept on
+uninstall, reused on upgrade). With `helm template` / GitOps, create the Secret
+yourself and set keys.existingSecret instead: a fresh render generates new keys.
+{{- end }}
+{{- if .Values.postgres.enabled }}
+
+The bundled Postgres is for evaluation only (one replica, no backups).
+{{- end }}
+
+Enroll a machine (admin token: secret key admin-token):
+
+  TOKEN=$(kubectl -n {{ .Release.Namespace }} get secret {{ include "effigent-cp.keysSecret" . }} -o jsonpath='{.data.admin-token}' | base64 -d)
+  curl -X POST -H "Authorization: Bearer $TOKEN" -H 'X-Effigent-Tenant: {{ .Values.controlPlane.tenant }}' {{ include "effigent-cp.cpURL" . }}/api/v1/enrollment-tokens
+  sudo effigentd enroll --server {{ include "effigent-cp.cpURL" . }} --token eft_…{{ if .Values.controlPlane.tls.secretName }} --ca-file ca.pem{{ end }}
+
+or from the console: Enforcement → Enroll a machine.

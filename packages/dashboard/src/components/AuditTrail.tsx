@@ -44,7 +44,7 @@ const CATEGORIES = [
 ];
 const ACTORS = [
   { id: '', label: 'Anyone' },
-  { id: 'clerk,admin-token', label: 'People' },
+  { id: 'clerk,oidc,admin-token', label: 'People' },
   { id: 'api-key', label: 'API keys' },
   { id: 'endpoint,enrollment-token', label: 'Machines' },
   { id: 'slack', label: 'Slack approvers' },

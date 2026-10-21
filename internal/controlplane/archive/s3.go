@@ -23,16 +23,40 @@ type S3 struct {
 	client  *s3.Client
 	up      *manager.Uploader
 	presign *s3.PresignClient
+	sse     types.ServerSideEncryption
 }
 
 func NewS3(ctx context.Context, bucket, region string) (*S3, error) {
+	return NewS3With(ctx, bucket, region, S3Options{})
+}
+
+// S3Options points the archive at an S3-compatible store (self-hosted:
+// MinIO, Ceph, …). The zero value is AWS S3.
+type S3Options struct {
+	Endpoint  string // e.g. https://minio.internal:9000; "" = AWS
+	PathStyle bool   // bucket in the path, not the host name (MinIO)
+	// NoSSE leaves out the SSE-S3 header, for stores without a KMS (MinIO
+	// refuses it then); encrypt the volume instead.
+	NoSSE bool
+}
+
+func NewS3With(ctx context.Context, bucket, region string, o S3Options) (*S3, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, err
 	}
-	c := s3.NewFromConfig(cfg)
-	return &S3{Bucket: bucket, client: c, up: manager.NewUploader(c, func(u *manager.Uploader) { u.PartSize = 8 << 20 }),
-		presign: s3.NewPresignClient(c)}, nil
+	c := s3.NewFromConfig(cfg, func(so *s3.Options) {
+		if o.Endpoint != "" {
+			so.BaseEndpoint = aws.String(o.Endpoint)
+		}
+		so.UsePathStyle = o.PathStyle
+	})
+	a := &S3{Bucket: bucket, client: c, up: manager.NewUploader(c, func(u *manager.Uploader) { u.PartSize = 8 << 20 }),
+		presign: s3.NewPresignClient(c), sse: types.ServerSideEncryptionAes256}
+	if o.NoSSE {
+		a.sse = ""
+	}
+	return a, nil
 }
 
 // Put uploads r to key (streaming, multipart when large) and returns the
@@ -44,7 +68,7 @@ func (a *S3) Put(ctx context.Context, key string, r io.Reader) (int64, string, e
 		ContentEncoding: aws.String("gzip"),
 		// Object Lock buckets require an integrity checksum on every write
 		ChecksumAlgorithm:    types.ChecksumAlgorithmCrc32,
-		ServerSideEncryption: types.ServerSideEncryptionAes256,
+		ServerSideEncryption: a.sse,
 	}
 	out, err := a.up.Upload(ctx, in)
 	if err != nil {
@@ -95,7 +119,7 @@ func (a *S3) Check(ctx context.Context) error {
 	key := "events/_health/probe.txt"
 	_, err := a.client.PutObject(ctx, &s3.PutObjectInput{Bucket: &a.Bucket, Key: &key,
 		Body:              strings.NewReader("effigent control plane write check " + time.Now().UTC().Format(time.RFC3339) + "\n"),
-		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32, ServerSideEncryption: types.ServerSideEncryptionAes256})
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32, ServerSideEncryption: a.sse})
 	if err != nil {
 		return fmt.Errorf("s3 write check on %s: %w", a.Bucket, err)
 	}

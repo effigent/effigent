@@ -1,0 +1,11 @@
+apiVersion: v2
+name: effigent-cp
+description: Self-hosted Effigent control plane and console — policies, events, approvals for your effigentd endpoints, signed in with your OIDC provider
+type: application
+home: https://effigent.ai/docs/self-hosting
+icon: https://effigent.ai/icon1.png
+# The image tags default to appVersion (effigent-cp and effigent-console are
+# released together).
+version: 0.1.0
+appVersion: v0.1.0
+kubeVersion: ">=1.23.0-0"

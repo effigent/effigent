@@ -1,0 +1,23 @@
+# deploy/helm/effigent-cp as test/selfhost/kind.sh installs it (release
+# effigent-cp, namespace effigent): local images, bundled Postgres, Dex, the
+# control plane serving TLS from a test CA.
+image:
+  controlPlane: {repository: effigent-cp, tag: dev}
+  console: {repository: effigent-console, tag: dev}
+  pullPolicy: Never
+controlPlane:
+  url: https://effigent-cp.effigent.svc:8080
+  tls:
+    secretName: selfhost-cp-tls
+console:
+  url: http://effigent-cp-console.effigent.svc:3000
+oidc:
+  issuer: http://dex.effigent.svc:5556/dex
+  clientId: effigent-console
+  clientSecret: console-secret
+  scopes: openid email profile groups offline_access
+  providerName: Dex
+  adminGroups: [authors]
+postgres:
+  enabled: true
+  storage: 1Gi

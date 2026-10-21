@@ -65,6 +65,7 @@ type Server struct {
 	archiveChecked bool
 	slackMu        sync.Mutex
 	slackUsers     map[string]slackUserEntry
+	seen           seenUsers // OIDC sign-ins recorded lately (console_users.go)
 }
 
 func (s *Server) publicKey() ed25519.PublicKey { return s.Key.Public().(ed25519.PublicKey) }
@@ -125,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 
 	// console API
 	mux.HandleFunc("GET /api/v1/me", s.console(read, s.me))
+	mux.HandleFunc("GET /api/v1/members", s.console(read, s.members)) // OIDC sign-ins (self-hosted)
 	mux.HandleFunc("POST /api/v1/enrollment-tokens", s.scoped("endpoints", write, s.createEnrollmentToken))
 	mux.HandleFunc("POST /api/v1/cloud-environments", s.scoped("endpoints", write, s.createCloudEnvironment))
 	mux.HandleFunc("GET /api/v1/endpoints", s.console(read, s.listEndpoints))

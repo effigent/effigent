@@ -1,0 +1,101 @@
+name: Release self-hosted control plane
+
+# Manual for now (Actions → Release self-hosted control plane → Run workflow):
+# builds and pushes ghcr.io/effigent/effigent-cp:<version> and
+# ghcr.io/effigent/effigent-console:<version> (+ :latest, amd64 + arm64) and
+# publishes the effigent-cp Helm chart next to the effigentd chart at
+# https://effigent.ai/charts. Both ghcr packages must be public for customers
+# to pull them. See docs/self-hosting.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: charts-index   # one writer of charts/index.yaml at a time
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./cmd/effigent-cp/... ./internal/controlplane/... ./internal/shared/...
+      - run: go test -count=1 ./cmd/effigent-cp/... ./internal/controlplane/... ./internal/shared/...
+      - run: helm lint deploy/helm/effigent-cp --set controlPlane.url=https://api.example.com --set console.url=https://console.example.com --set oidc.issuer=https://idp.example.com --set oidc.clientId=c --set postgres.enabled=true
+
+  images:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3   # the console's arm64 build runs emulated
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cp
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ inputs.version }}
+          push: true
+          tags: |
+            ghcr.io/effigent/effigent-cp:${{ inputs.version }}
+            ghcr.io/effigent/effigent-cp:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.version }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.console
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/effigent/effigent-console:${{ inputs.version }}
+            ghcr.io/effigent/effigent-console:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.version }}
+
+  chart:
+    needs: images
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Publish Helm chart
+        # helm repo add effigent https://effigent.ai/charts; helm install … effigent/effigent-cp
+        run: |
+          v="${{ inputs.version }}"
+          mkdir -p dist/charts
+          helm package deploy/helm/effigent-cp --version "${v#v}" --app-version "$v" -d dist/charts
+          merge=""
+          if aws s3 cp "s3://${{ vars.SITE_BUCKET }}/charts/index.yaml" dist/index.yaml; then merge="--merge dist/index.yaml"; fi
+          helm repo index dist/charts --url https://effigent.ai/charts $merge
+          aws s3 cp "dist/charts/effigent-cp-${v#v}.tgz" "s3://${{ vars.SITE_BUCKET }}/charts/" \
+            --content-type application/gzip --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp dist/charts/index.yaml "s3://${{ vars.SITE_BUCKET }}/charts/index.yaml" \
+            --content-type text/yaml --cache-control "no-cache"

@@ -7,6 +7,7 @@ import { Ic } from '@/icons.tsx';
 import { SlackApp } from '@/components/SlackApp.tsx';
 import { useLive } from '@/live.tsx';
 import { API_BASE, ApiError, apiErrorText, type ApiNotifications, type ApiPolicySettings } from '@/lib/api.ts';
+import { useRuntime } from '@/lib/runtime.tsx';
 import { Integrations } from '@/components/Integrations.tsx';
 import { SpendVendors } from '@/components/SpendVendors.tsx';
 import { Storage } from '@/components/Storage.tsx';
@@ -29,6 +30,7 @@ function Row({ title, desc, children }: { title: string; desc: string; children:
 
 export function Settings({ dev }: { dev: boolean }) {
   const { me, canWrite, fixture, loaded } = useLive();
+  const oidc = useRuntime().auth === 'oidc';
   const pendingMe = loaded ? '—' : '…';
   const { demo, setDemo } = useDemoMode();
   const [s, setS] = useState({
@@ -68,7 +70,7 @@ export function Settings({ dev }: { dev: boolean }) {
         </Card>
 
         <Card>
-          <CardHead title="Workspace & access" sub="What the control plane decided from your Clerk session — the active organization is the workspace." />
+          <CardHead title="Workspace & access" sub={oidc ? "What the control plane decided from your sign-in — this self-hosted console has one workspace, and roles come from your identity provider's groups." : "What the control plane decided from your Clerk session — the active organization is the workspace."} />
           <Row title="Workspace" desc={me?.tenant.startsWith('user:') ? 'Personal workspace — switch organization in the top bar to manage a team.' : 'Your active Clerk organization.'}>
             <code className="mono-chip" style={{ color: 'var(--txt-2)' }}>{me?.tenant ?? pendingMe}</code>
           </Row>
