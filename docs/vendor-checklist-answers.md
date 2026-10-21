@@ -173,7 +173,7 @@ These are also found inside scripts and npm scripts. Example policy:
 
 **Where:** `hooks/git.go`.
 
-### 6. Cursor: **Yes** (hooks)
+### 6. Cursor: **Yes** (hooks), built from Cursor's docs, not yet tested against a live Cursor
 **New:**
 - `install-hooks` registers effigentd in Cursor's enterprise `hooks.json` for
   `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile` and `preToolUse`, with
@@ -412,7 +412,7 @@ prices to a customer.
   how effigentd was run (systemd, launchd, Windows service, terminal) and, for a terminal run,
   the OS user.
 
-**Hooks fail closed** (Claude Code, Cursor) when the daemon is down, so stopping it stops those
+**Hooks fail closed** (Claude Code; Cursor per its docs) when the daemon is down, so stopping it stops those
 agents instead of freeing them.
 
 Root can still stop or remove it. Preventing that needs OS-level protection, such as macOS
@@ -511,6 +511,21 @@ doesn't reach files people already downloaded or data webhook receivers hold.
 - `internal/endpoint/hooks/actions_test.go`: about 70 classification cases and 22 decision
   cases, with a fake OSV.
 - `osv_test.go`, `redact_test.go`, `compile/actions_test.go`.
+
+**Database tests** (run on a fresh database with every migration, 012–015 included):
+`TestTwoPersonApproval`, `TestPolicyProposals`, `TestLegalHold`, `TestEndpointHealth`,
+`TestHookProblems`. Endpoint tests: `TestCursor`, hookstate `TestCheck` / `TestHookCmd`,
+`TestInstallHooksRoundTrip`, `TestRunMarker`, `TestHeartbeatCarriesHookReportOnChange`.
+
+**Smoke runs** against a real daemon and a local control plane (observed by hand, not
+automated):
+- SIGTERM gives `daemon_stop`.
+- kill -9 then restart gives `daemon_unclean_restart`, including a kill during the last flush.
+- With the control plane frozen, the daemon exits in about 3 seconds and spools its last batch.
+- The hook report is stored on the machine.
+
+**Not exercised anywhere yet:** Cursor against a real install, legal hold against the real S3
+bucket, the new console screens in a browser.
 
 **End to end:** `test/hooks/approval.sh` passes 42 of 42 checks. It drives a real hook process,
 a hooks-mode daemon and a local control plane through: force-push deny, `curl | sh` deny,

@@ -62,7 +62,7 @@ defaults:
   # require_launcher: true                    # stop agents not started with `effigentd run --agent <name> -- <cmd>`
   #
   # What a command or tool call does, read by the agent hooks (Claude Code,
-  # Codex, Gemini CLI; never the kernel). Kinds: protected_push, force_push,
+  # Codex, Gemini CLI, Cursor; never the kernel). Kinds: protected_push, force_push,
   # branch_delete, history_rewrite, hook_bypass, destructive_sql, sql_write,
   # cloud_change, cloud_destroy, access, package_install, package_unlisted,
   # package_registry, package_scripts, package_malicious, package_vulnerable,
