@@ -148,6 +148,9 @@ func (m *sseMeter) endLine() {
 }
 
 func (m *sseMeter) Usage() Usage {
+	if len(m.line) > 0 { // cut off mid-line: a complete JSON object still counts
+		m.endLine()
+	}
 	if len(m.data) > 0 { // a stream cut off without its final blank line
 		readEvent(m.wire, m.event, m.data, &m.u)
 		m.data = nil

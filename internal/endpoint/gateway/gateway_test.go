@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
+	"github.com/klauspost/compress/zstd"
 )
 
 // recorder collects the gateway's events.
@@ -65,7 +67,7 @@ func setup(t *testing.T, rule policy.Rule, upstream http.HandlerFunc) *fixture {
 	for name := range Providers {
 		ups[name] = f.upstream.URL
 	}
-	ups["chatgpt"] = f.upstream.URL + "/backend-api/codex"
+	ups["codex"] = f.upstream.URL + "/backend-api/codex"
 	g, err := New(Config{
 		Rule: func(string) policy.Rule { return f.rule }, Emit: f.rec.emit, Upstreams: ups,
 		Session: func(agent, s string) (Identity, bool) {
@@ -284,25 +286,101 @@ func TestOpenAIChatStreamUsage(t *testing.T) {
 	}
 }
 
-// Codex signed in with ChatGPT: the Responses API under /backend-api/codex.
+// Codex: one base URL (/codex/codex) for both sign-ins. A ChatGPT sign-in
+// goes to the Codex backend, an API key to /v1; the session is its thread-id.
 func TestResponsesStreamUsage(t *testing.T) {
-	var path, sessionHdr string
+	var path, sessionHdr, auth string
 	f := setup(t, policy.Rule{Mode: policy.Denylist, Models: policy.ModelRule{Allow: []string{"gpt-5*"}}}, func(w http.ResponseWriter, r *http.Request) {
-		path, sessionHdr = r.URL.Path, r.Header.Get("session_id")
+		path, sessionHdr, auth = r.URL.Path, r.Header.Get("thread-id"), r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "text/event-stream")
 		sse(w,
 			"event: response.created\n"+`data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"gpt-5-codex","usage":null}}`,
 			"event: response.output_text.delta\n"+`data: {"type":"response.output_text.delta","delta":"ok"}`,
 			"event: response.completed\n"+`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"gpt-5-codex","usage":{"input_tokens":5000,"input_tokens_details":{"cached_tokens":4096},"output_tokens":300,"output_tokens_details":{"reasoning_tokens":256},"total_tokens":5300}}}`)
 	})
-	resp := post(t, f.gw.URL+"/chatgpt/codex/responses", `{"model":"gpt-5-codex","stream":true,"input":[]}`, map[string]string{"session_id": "019a-codex"})
-	_, _ = io.ReadAll(resp.Body)
+	for i, c := range []struct {
+		hdr  map[string]string
+		path string
+	}{
+		{map[string]string{"Authorization": "Bearer eyJhbGciOi.chatgpt.token", "ChatGPT-Account-ID": "ws-1", "thread-id": "019a-codex", "session-id": "cache-key"}, "/backend-api/codex/responses"},
+		{map[string]string{"Authorization": "Bearer eyJhbGciOi.chatgpt.token", "thread-id": "019a-codex"}, "/backend-api/codex/responses"},
+		{map[string]string{"Authorization": "Bearer sk-proj-TESTKEY", "thread-id": "019a-codex"}, "/v1/responses"},
+	} {
+		resp := post(t, f.gw.URL+"/codex/codex/responses", `{"model":"gpt-5-codex","stream":true,"input":[]}`, c.hdr)
+		_, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		e := f.rec.waitFor(t, i+1)[i]
+		if mc := e.ModelCall; path != c.path || auth != c.hdr["Authorization"] || sessionHdr != "019a-codex" || e.SessionID != "019a-codex" ||
+			mc.InputTokens != 904 || mc.CacheReadTokens != 4096 || mc.OutputTokens != 300 || mc.ReasoningTokens != 256 || mc.StopReason != "completed" ||
+			mc.Provider != "codex" {
+			t.Errorf("%d: %s %+v %+v", i, path, e, mc)
+		}
+		if b, _ := json.Marshal(e); strings.Contains(string(b), "sk-proj") || strings.Contains(string(b), "eyJ") {
+			t.Errorf("a credential in the event: %s", b)
+		}
+	}
+}
+
+// Codex compresses its requests to the ChatGPT backend with zstd: the model
+// is read from the decoded body; an allowed request goes out as it came.
+func TestCompressedRequests(t *testing.T) {
+	var got []byte
+	var enc string
+	f := setup(t, policy.Rule{Mode: policy.Denylist, Models: policy.ModelRule{Allow: []string{"gpt-5*"}}}, func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		enc = r.Header.Get("Content-Encoding")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_1","status":"completed","model":"gpt-5-codex","usage":{"input_tokens":3,"output_tokens":1}}`)
+	})
+	zw, _ := zstd.NewWriter(nil)
+	send := func(body string) *http.Response {
+		z := zw.EncodeAll([]byte(body), nil)
+		req, _ := http.NewRequest(http.MethodPost, f.gw.URL+"/codex/codex/responses", bytes.NewReader(z))
+		req.Header.Set("Content-Encoding", "zstd")
+		req.Header.Set("Authorization", "Bearer eyJ.x.y")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp
+	}
+	if resp := send(`{"model":"gpt-4.1","input":[]}`); resp.StatusCode != http.StatusBadRequest || got != nil {
+		t.Errorf("a denied model in a zstd body: %d, upstream saw %d bytes", resp.StatusCode, len(got))
+	}
+	body := `{"model":"gpt-5-codex","input":[]}`
+	if resp := send(body); resp.StatusCode != 200 || enc != "zstd" || !bytes.Equal(got, zw.EncodeAll([]byte(body), nil)) {
+		t.Errorf("an allowed zstd request: %d %q", resp.StatusCode, enc)
+	}
+	if e := f.rec.waitFor(t, 2)[1]; e.Model != "gpt-5-codex" || e.ModelCall.InputTokens != 3 {
+		t.Errorf("%+v", e)
+	}
+	// a body that can't be decoded names no model the policy can allow
+	req, _ := http.NewRequest(http.MethodPost, f.gw.URL+"/codex/codex/responses", strings.NewReader("not zstd"))
+	req.Header.Set("Content-Encoding", "zstd")
+	resp, _ := http.DefaultClient.Do(req)
 	resp.Body.Close()
-	e := f.rec.waitFor(t, 1)[0]
-	if mc := e.ModelCall; path != "/backend-api/codex/responses" || sessionHdr != "019a-codex" || e.SessionID != "019a-codex" ||
-		mc.InputTokens != 904 || mc.CacheReadTokens != 4096 || mc.OutputTokens != 300 || mc.ReasoningTokens != 256 || mc.StopReason != "completed" ||
-		mc.Provider != "chatgpt" {
-		t.Errorf("%s %+v %+v", path, e, mc)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("undecodable body: %d", resp.StatusCode)
+	}
+}
+
+// Codex's built-in provider tries Responses over WebSocket first; 426 makes
+// it fall back to HTTP streaming at once.
+func TestWebSocketUpgradeIsRefused(t *testing.T) {
+	hit := false
+	f := setup(t, policy.Rule{}, func(w http.ResponseWriter, r *http.Request) { hit = true })
+	req, _ := http.NewRequest(http.MethodGet, f.gw.URL+"/codex/codex/responses", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUpgradeRequired || hit {
+		t.Errorf("%d upstream hit=%v", resp.StatusCode, hit)
 	}
 }
 
@@ -361,7 +439,7 @@ func TestRefusesWhatIsNotALocalAgent(t *testing.T) {
 func TestPathsStayUnderTheProvider(t *testing.T) {
 	var paths []string
 	f := setup(t, policy.Rule{}, func(w http.ResponseWriter, r *http.Request) { paths = append(paths, r.URL.Path) })
-	for _, p := range []string{"/chatgpt/codex/../../../etc/passwd", "/chatgpt/codex/%2e%2e/%2e%2e/x", "/anthropic/claude-code/v1/models"} {
+	for _, p := range []string{"/codex/codex/../../../etc/passwd", "/codex/codex/%2e%2e/%2e%2e/x", "/anthropic/claude-code/v1/models"} {
 		req, _ := http.NewRequest(http.MethodGet, f.gw.URL+p, nil)
 		req.URL.Opaque = p // send it as written
 		resp, err := http.DefaultClient.Do(req)

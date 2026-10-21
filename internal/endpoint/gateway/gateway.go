@@ -16,6 +16,7 @@ package gateway
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
+	"github.com/klauspost/compress/zstd"
 )
 
 // DefaultAddr is where the gateway listens unless -gateway says otherwise.
@@ -41,12 +43,20 @@ const ModelCall event.Type = "model_call"
 
 // Providers are the upstreams, by the first path segment of the gateway URL:
 // http://127.0.0.1:7779/<provider>/<agent>/<the provider's own path>.
+//
+// codex is Codex's built-in OpenAI provider, whose one base URL
+// (openai_base_url) serves both sign-ins: signed in with ChatGPT it talks to
+// the Codex backend, with an API key to api.openai.com/v1. The gateway picks
+// by the credential's kind (an sk- API key or not), never storing it.
 var Providers = map[string]string{
 	"anthropic": "https://api.anthropic.com",
 	"openai":    "https://api.openai.com",
-	"chatgpt":   "https://chatgpt.com/backend-api/codex", // Codex signed in with ChatGPT
+	"codex":     "https://chatgpt.com/backend-api/codex",
 	"gemini":    "https://generativelanguage.googleapis.com",
 }
+
+// codexAPI is where Codex's calls go when it uses an API key.
+const codexAPI = "/v1" // under Providers["openai"]
 
 // Identity is who is behind a session, as the agent's hook calls said.
 type Identity struct{ OSUser, GitEmail string }
@@ -64,7 +74,8 @@ type Config struct {
 	// platform can tell (Linux: /proc/net/tcp); nil or "" when it can't.
 	Peer func(remoteAddr string) string
 	Logf func(string, ...any)
-	// Upstreams replaces Providers (tests); Transport the upstream client.
+	// Upstreams replaces Providers (tests; "openai" also serves Codex with
+	// an API key, under /v1); Transport the upstream client.
 	Upstreams map[string]string
 	Transport http.RoundTripper
 }
@@ -119,12 +130,26 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	prov, agent, rest, ok := splitPath(r.URL.EscapedPath())
 	up := g.upstreams[prov]
 	if !ok || up == nil {
-		http.Error(w, "Effigent model gateway: use http://"+r.Host+"/<anthropic|openai|chatgpt|gemini>/<agent>/… as the base URL", http.StatusNotFound)
+		http.Error(w, "Effigent model gateway: use http://"+r.Host+"/<anthropic|openai|codex|gemini>/<agent>/… as the base URL", http.StatusNotFound)
 		return
 	}
 	if !agentRE.MatchString(agent) {
 		writeError(w, prov, http.StatusBadRequest, "invalid_request_error", "Effigent model gateway: "+strconv.Quote(agent)+" is not an agent name")
 		return
+	}
+	// WebSockets aren't proxied: 426 is the answer on which Codex switches
+	// the session to HTTP streaming at once (other errors cost it retries).
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		writeError(w, prov, http.StatusUpgradeRequired, "invalid_request_error", "Effigent model gateway: use HTTP streaming, not WebSockets")
+		return
+	}
+	if prov == "codex" && apiKey(r.Header) {
+		if api := g.upstreams["openai"]; api != nil {
+			u := *api
+			u.Path = strings.TrimSuffix(u.Path, "/") + codexAPI
+			u.RawPath = ""
+			up = &u
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequest+1))
 	if err != nil {
@@ -135,7 +160,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, prov, http.StatusRequestEntityTooLarge, "request_too_large", "Effigent model gateway: the request is larger than 64 MB")
 		return
 	}
-	c := classify(prov, r.Method, rest, body)
+	// Codex compresses its requests (zstd) to the ChatGPT backend: the model
+	// is read from the decoded body, the original bytes are forwarded.
+	plain, decoded := decodeBody(r.Header.Get("Content-Encoding"), body)
+	c := classify(prov, r.Method, rest, plain)
 	session := sessionOf(r.Header)
 	ev := event.Event{Time: start, Type: ModelCall, Severity: "info", Agent: agent, Kind: "model", Rule: "gateway",
 		Target: up.Host + strings.TrimSuffix(up.Path, "/") + cleanPath(rest), SessionID: session, Model: c.model}
@@ -181,7 +209,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if enforce { // monitor / learn change nothing
 			limit = rule.Models.MaxTokens
 		}
-		body, mc.Rewritten = rewrite(c, body, limit)
+		if out, note := rewrite(c, plain, limit); note != "" {
+			body, mc.Rewritten = out, note
+			if decoded { // a rewritten body goes out uncompressed
+				r.Header.Del("Content-Encoding")
+			}
+		}
 	}
 
 	out, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL(up, rest, r.URL.RawQuery), bytes.NewReader(body))
@@ -294,7 +327,7 @@ func classify(prov, method, path string, body []byte) call {
 			return call{}
 		}
 		c.wire = wireAnthropic
-	case "openai", "chatgpt":
+	case "openai", "codex":
 		switch {
 		case strings.HasSuffix(path, "/chat/completions"):
 			c.wire = wireOpenAIChat
@@ -442,6 +475,7 @@ func writeError(w http.ResponseWriter, prov string, status int, typ, msg string)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Effigent-Gateway", "refused")
+	w.Header().Set("X-Should-Retry", "false") // Claude Code shows it without retrying
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
 }
@@ -499,8 +533,10 @@ func cleanPath(p string) string {
 }
 
 // sessionHeaders identify an agent's session: Claude Code sends
-// X-Claude-Code-Session-Id, Codex session_id.
-var sessionHeaders = []string{"X-Claude-Code-Session-Id", "Session_id", "Session-Id", "X-Session-Id"}
+// X-Claude-Code-Session-Id (its hooks' session_id), Codex thread-id (the
+// thread its hooks name session_id; Codex's session-id header is a cache
+// key, not that id).
+var sessionHeaders = []string{"X-Claude-Code-Session-Id", "Thread-Id", "Session_id", "X-Session-Id"}
 
 func sessionOf(h http.Header) string {
 	for _, k := range sessionHeaders {
@@ -517,6 +553,50 @@ func sessionOf(h http.Header) string {
 		}
 	}
 	return ""
+}
+
+// apiKey: the request carries an OpenAI API key (sk-…), not a ChatGPT
+// sign-in token (a JWT, sent with ChatGPT-Account-ID when there is one).
+func apiKey(h http.Header) bool {
+	if h.Get("ChatGPT-Account-ID") != "" {
+		return false
+	}
+	tok, ok := strings.CutPrefix(h.Get("Authorization"), "Bearer ")
+	return ok && strings.HasPrefix(strings.TrimSpace(tok), "sk-")
+}
+
+// maxDecoded bounds a decoded request body.
+const maxDecoded = 4 * maxRequest
+
+// decodeBody undoes a request's Content-Encoding (zstd, gzip) so the model
+// can be read. ok is false when there was nothing to decode; plain is nil
+// when decoding failed (the request then names no model the gateway can see).
+func decodeBody(enc string, body []byte) (plain []byte, ok bool) {
+	var r io.Reader
+	switch strings.ToLower(strings.TrimSpace(enc)) {
+	case "", "identity":
+		return body, false
+	case "zstd":
+		d, err := zstd.NewReader(bytes.NewReader(body), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxDecoded))
+		if err != nil {
+			return nil, false
+		}
+		defer d.Close()
+		r = d
+	case "gzip":
+		z, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, false
+		}
+		r = z
+	default:
+		return nil, false
+	}
+	out, err := io.ReadAll(io.LimitReader(r, maxDecoded+1))
+	if err != nil || len(out) > maxDecoded {
+		return nil, false
+	}
+	return out, true
 }
 
 func cut(s string, n int) string {

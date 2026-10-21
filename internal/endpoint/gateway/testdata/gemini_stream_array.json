@@ -1,0 +1,12 @@
+[{
+  "candidates": [{"content": {"parts": [{"text": "Hello"}],"role": "model"},"index": 0}],
+  "usageMetadata": {"promptTokenCount": 1200,"cachedContentTokenCount": 1000,"totalTokenCount": 1200},
+  "modelVersion": "gemini-2.0-flash"
+}
+,
+{
+  "candidates": [{"content": {"parts": [{"text": " there!"}],"role": "model"},"finishReason": "STOP","index": 0}],
+  "usageMetadata": {"promptTokenCount": 1200,"cachedContentTokenCount": 1000,"candidatesTokenCount": 11,"totalTokenCount": 1211},
+  "modelVersion": "gemini-2.0-flash"
+}
+]
