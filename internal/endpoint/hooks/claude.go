@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 )
 
@@ -53,6 +54,13 @@ var pathTools = map[string]bool{
 // but an approval list does (exec_approve, command_approve, tool_approve, …)
 // returns Approve in the enforcing modes: the daemon asks an approver.
 func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
+	facts := classify(rule, in)
+	d := evaluate(rule, in, facts)
+	d.Actions = facts.actions
+	return d
+}
+
+func evaluate(rule policy.Rule, in ClaudeInput, facts facts) Decision {
 	var f finding
 	for _, p := range rule.ToolDeny {
 		if textMatch(p, in.ToolName) {
@@ -60,10 +68,11 @@ func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
 			break
 		}
 	}
+	cmds := facts.cmds // the command line and the scripts it runs
 	switch {
 	case f.reason != "":
 	case in.ToolName == "Bash":
-		f = checkCommand(rule, str(in.ToolInput, "command"), in.Cwd)
+		f = checkCmds(rule, cmds, in.Cwd)
 	case pathTools[in.ToolName]:
 		for _, k := range []string{"file_path", "notebook_path", "path"} {
 			if p := str(in.ToolInput, k); p != "" {
@@ -75,9 +84,16 @@ func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
 			f = checkHost(rule, u.Hostname())
 		}
 	}
+	if f.reason == "" {
+		f = f.or(checkLists(rule, cmds, facts, false))
+	}
 
 	if f.reason == "" {
-		if a := checkApproval(rule, in); a.reason != "" {
+		a := checkApproval(rule, in, cmds)
+		if a.reason == "" {
+			a = checkLists(rule, cmds, facts, true)
+		}
+		if a.reason != "" {
 			if enforcing(rule) {
 				return Decision{Approve: true, Report: "approval", Kind: a.kind, Target: a.target, Rule: a.rule,
 					Reason: a.reason}
@@ -99,6 +115,76 @@ func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
 			Reason: "sensitive file " + f.alert}
 	}
 	return Decision{}
+}
+
+// checkLists checks what the call does against command_deny, file_write_deny,
+// package_deny and actions_deny (approve: their _approve twins; command_approve
+// is checkApproval's).
+func checkLists(rule policy.Rule, cmds []simpleCmd, facts facts, approve bool) finding {
+	verb, suffix := "deny", " is not allowed"
+	commands, writes, pkgs, acts := rule.CommandDeny, rule.FileWriteDeny, rule.PackageDeny, rule.ActionsDeny
+	if approve {
+		verb, suffix = "approve", " needs approval"
+		commands, writes, pkgs, acts = nil, rule.FileWriteApprove, rule.PackageApprove, rule.ActionsApprove
+	}
+	if cmd, from, ok := matchCommand(commands, cmds); ok {
+		return finding{reason: "`" + clip(cmd, 80) + "`" + inScript(from) + suffix, kind: "exec", target: "exec " + clip(cmd, 200), rule: "command_" + verb}
+	}
+	for _, p := range facts.writes {
+		if s := matchSuffix(writes, p); s != "" {
+			return finding{reason: "writing " + s + " files" + suffix, kind: "file_open", target: p, rule: "file_write_" + verb}
+		}
+	}
+	for _, p := range facts.pkgs {
+		if e := pkgMatch(pkgs, p); e != "" {
+			return finding{reason: "the package " + p.String() + inScript(p.manifest) + suffix, kind: "exec", target: "package " + p.String(), rule: "package_" + verb}
+		}
+	}
+	if e, a, ok := matchActions(acts, facts.actions); ok {
+		return finding{reason: describe(a, e) + suffix, kind: actionKind(a), target: a.Kind + " " + a.Target, rule: "actions_" + verb}
+	}
+	return finding{}
+}
+
+func inScript(from string) string {
+	if from == "" {
+		return ""
+	}
+	return " (in " + from + ")"
+}
+
+// actionKind is the event kind for an action: exec for commands, file_open for writes.
+func actionKind(a event.Action) string {
+	switch a.Kind {
+	case "guardrail_edit", "credential_read":
+		if strings.HasPrefix(a.Target, "/") {
+			return "file_open"
+		}
+	case "mcp_unlisted", "model_endpoint", "model_api_key":
+		return "tool"
+	}
+	return "exec"
+}
+
+// matchCommand matches each simple command (program name + arguments)
+// against command patterns.
+func matchCommand(list []string, cmds []simpleCmd) (string, string, bool) {
+	if len(list) == 0 {
+		return "", "", false
+	}
+	for _, c := range cmds {
+		args, _ := unwrap(c.args)
+		if len(args) == 0 {
+			continue
+		}
+		cmd := strings.Join(append([]string{progName(args[0])}, args[1:]...), " ")
+		for _, p := range list {
+			if textMatch(p, cmd) {
+				return cmd, c.from, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 func enforcing(r policy.Rule) bool { return r.Mode == policy.Denylist || r.Mode == policy.Allowlist }
@@ -131,8 +217,13 @@ func str(m map[string]any, k string) string {
 }
 
 func checkCommand(rule policy.Rule, line, cwd string) finding {
+	return checkCmds(rule, splitShell(line), cwd)
+}
+
+// checkCmds checks simple commands (a command line, the scripts it runs).
+func checkCmds(rule policy.Rule, cmds []simpleCmd, cwd string) finding {
 	var f finding
-	for _, c := range splitShell(line) {
+	for _, c := range cmds {
 		args, wrappers := unwrap(c.args)
 		for _, w := range wrappers {
 			if !builtins[progName(w)] {
@@ -240,7 +331,7 @@ func matchSuffix(list []string, p string) string {
 		if !strings.HasPrefix(s, "/") {
 			s = "/" + s
 		}
-		if strings.HasSuffix(p, s) {
+		if strings.HasSuffix(p, s) || policy.IsDirEntry(s) && strings.Contains(p+"/", s) {
 			return s
 		}
 		// a directory holding the file: every leading part of s that names
@@ -354,7 +445,7 @@ func inNets(list []string, ip net.IP) bool {
 // checkApproval matches a tool call against the approval lists. Programs,
 // files and hosts reuse the deny matchers on a view of the rule whose deny
 // lists are the approval lists, so both match the same way.
-func checkApproval(rule policy.Rule, in ClaudeInput) finding {
+func checkApproval(rule policy.Rule, in ClaudeInput, cmds []simpleCmd) finding {
 	if !rule.NeedsApproval() {
 		return finding{}
 	}
@@ -368,20 +459,13 @@ func checkApproval(rule policy.Rule, in ClaudeInput) finding {
 	}
 	switch {
 	case in.ToolName == "Bash":
-		line := str(in.ToolInput, "command")
-		for _, c := range splitShell(line) {
-			args, _ := unwrap(c.args)
-			if len(args) == 0 {
-				continue
-			}
-			cmd := strings.Join(append([]string{progName(args[0])}, args[1:]...), " ")
-			for _, p := range rule.CommandApprove {
-				if textMatch(p, cmd) {
-					return finding{reason: "`" + clip(cmd, 80) + "` needs approval", kind: "exec", target: "exec " + clip(cmd, 200), rule: "command_approve"}
-				}
-			}
+		if cmds == nil {
+			cmds = splitShell(str(in.ToolInput, "command"))
 		}
-		f = checkCommand(view, line, in.Cwd)
+		if cmd, from, ok := matchCommand(rule.CommandApprove, cmds); ok {
+			return finding{reason: "`" + clip(cmd, 80) + "`" + inScript(from) + " needs approval", kind: "exec", target: "exec " + clip(cmd, 200), rule: "command_approve"}
+		}
+		f = checkCmds(view, cmds, in.Cwd)
 	case pathTools[in.ToolName]:
 		for _, k := range []string{"file_path", "notebook_path", "path"} {
 			if p := str(in.ToolInput, k); p != "" {
@@ -405,10 +489,23 @@ func checkApproval(rule policy.Rule, in ClaudeInput) finding {
 // textMatch: exact, or a prefix when the pattern ends in "*" (case-sensitive,
 // like the central policy's matcher).
 func textMatch(pattern, s string) bool {
-	if p, ok := strings.CutSuffix(pattern, "*"); ok {
-		return strings.HasPrefix(s, p)
+	if !strings.Contains(pattern, "*") {
+		return pattern == s
 	}
-	return pattern == s
+	parts := strings.Split(pattern, "*")
+	if !strings.HasPrefix(s, parts[0]) {
+		return false
+	}
+	s = s[len(parts[0]):]
+	last := len(parts) - 1
+	for _, part := range parts[1:last] {
+		j := strings.Index(s, part)
+		if j < 0 {
+			return false
+		}
+		s = s[j+len(part):]
+	}
+	return strings.HasSuffix(s, parts[last])
 }
 
 func clip(s string, n int) string {

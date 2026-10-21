@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 )
 
@@ -179,11 +180,21 @@ func EvaluateCall(eval ClaudeEvaluator, rule policy.Rule, c Call) Decision {
 		}
 		return 0
 	}
+	var acts []event.Action
+	seen := map[string]bool{}
 	for _, in := range c.Canon {
-		if d := eval(rule, in); rank(d) > rank(best) {
+		d := eval(rule, in)
+		for _, a := range d.Actions {
+			if k := a.Kind + "\x00" + a.Target + "\x00" + a.In; !seen[k] {
+				seen[k] = true
+				acts = append(acts, a)
+			}
+		}
+		if rank(d) > rank(best) {
 			best = d
 		}
 	}
+	best.Actions = acts
 	return best
 }
 

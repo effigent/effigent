@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -74,6 +75,101 @@ type Rule struct {
 	NetApprove     []string `yaml:"network_approve,omitempty" json:"network_approve"` // IPs / CIDRs
 	CommandApprove []string `yaml:"command_approve,omitempty" json:"command_approve"` // "git push*": a command line, exact or prefix with a trailing *
 	ToolApprove    []string `yaml:"tool_approve,omitempty" json:"tool_approve"`       // agent tool names, e.g. "mcp__github__*", "WebFetch"
+
+	// What a command or tool call does, as an agent hook reads it (never the
+	// kernel): see ActionKinds. An entry is a kind, or kind@environment to
+	// match only actions on that environment's targets ("cloud_change@prod").
+	ActionsDeny    []string `yaml:"actions_deny,omitempty" json:"actions_deny"`
+	ActionsApprove []string `yaml:"actions_approve,omitempty" json:"actions_approve"`
+	// CommandDeny refuses command lines like command_approve pauses them.
+	CommandDeny []string `yaml:"command_deny,omitempty" json:"command_deny"`
+	// Writes only (Write/Edit tools, redirects, cp/mv/tee/sed -i targets…):
+	// path suffixes, and a trailing / for everything under a directory
+	// ("/.github/workflows/"). Hooks only.
+	FileWriteDeny    []string `yaml:"file_write_deny,omitempty" json:"file_write_deny"`
+	FileWriteApprove []string `yaml:"file_write_approve,omitempty" json:"file_write_approve"`
+	// ProtectedBranches for protected_push ("release/*"); empty means
+	// main, master, trunk, prod, production, release*.
+	ProtectedBranches []string `yaml:"protected_branches,omitempty" json:"protected_branches"`
+	// Packages, as ecosystem:name[@version] with * wildcards ("npm:event-stream",
+	// "pypi:colourama", "npm:@acme-internal/*"). PackageAllow, when set, makes
+	// every other package an install names (or a manifest lists) package_unlisted.
+	PackageDeny    []string `yaml:"package_deny,omitempty" json:"package_deny"`
+	PackageApprove []string `yaml:"package_approve,omitempty" json:"package_approve"`
+	PackageAllow   []string `yaml:"package_allow,omitempty" json:"package_allow"`
+	// PackageRegistries are the registries installs may use (URL prefixes);
+	// another one, a URL/git spec or an extra index is package_registry.
+	PackageRegistries []string `yaml:"package_registries,omitempty" json:"package_registries"`
+	// MCPAllow names the MCP servers agents may call ("github", "linear*");
+	// a call to any other is mcp_unlisted.
+	MCPAllow []string `yaml:"mcp_allow,omitempty" json:"mcp_allow"`
+	// ModelHostsAllow are the model API hosts agents may be configured for
+	// (ANTHROPIC_BASE_URL, OPENAI_BASE_URL…; the vendor default when unset);
+	// another is model_endpoint.
+	ModelHostsAllow []string `yaml:"model_hosts_allow,omitempty" json:"model_hosts_allow"`
+
+	// Environments is set by effigentd from the policy's top-level
+	// environments, never by policy authors.
+	Environments map[string]Environment `yaml:"-" json:"-"`
+}
+
+// Environment names the targets that make an action part of an environment
+// such as prod: cloud identities, database and service hosts, MCP servers.
+// Patterns match exactly or with * wildcards; hosts also take IPs and CIDRs.
+type Environment struct {
+	AWSProfiles        []string `yaml:"aws_profiles,omitempty" json:"aws_profiles"`
+	AWSAccounts        []string `yaml:"aws_accounts,omitempty" json:"aws_accounts"`
+	KubeContexts       []string `yaml:"kube_contexts,omitempty" json:"kube_contexts"`
+	GCloudProjects     []string `yaml:"gcloud_projects,omitempty" json:"gcloud_projects"`
+	AzureSubscriptions []string `yaml:"azure_subscriptions,omitempty" json:"azure_subscriptions"` // id or name
+	TerraformWorkspace []string `yaml:"terraform_workspaces,omitempty" json:"terraform_workspaces"`
+	PulumiStacks       []string `yaml:"pulumi_stacks,omitempty" json:"pulumi_stacks"`
+	Hosts              []string `yaml:"hosts,omitempty" json:"hosts"`
+	MCPServers         []string `yaml:"mcp_servers,omitempty" json:"mcp_servers"`
+	// MatchUnknown: a cloud or database action whose target can't be worked
+	// out (no profile, context or host) counts as this environment.
+	MatchUnknown bool `yaml:"match_unknown,omitempty" json:"match_unknown"`
+}
+
+// ActionKinds are the actions an agent hook recognises in commands and tool
+// calls, for actions_deny / actions_approve.
+var ActionKinds = map[string]string{
+	"protected_push":     "git push to a protected branch (or a merge of a pull request with gh)",
+	"force_push":         "git push --force / --force-with-lease / +refspec / --mirror",
+	"branch_delete":      "deleting a branch, locally or on the remote",
+	"history_rewrite":    "git reset --hard, clean -f, filter-branch / filter-repo",
+	"hook_bypass":        "git --no-verify, HUSKY=0",
+	"destructive_sql":    "DROP, TRUNCATE, ALTER … DROP, DELETE/UPDATE without WHERE, database resets",
+	"sql_write":          "any statement or migration that changes a database (includes destructive_sql)",
+	"cloud_change":       "a cloud or cluster command that changes something (includes cloud_destroy)",
+	"cloud_destroy":      "terminating, deleting or destroying cloud or cluster resources",
+	"access":             "any command or tool call that reaches a cloud, cluster, database or named host (use with @env)",
+	"package_install":    "installing a package by name (npm, pip, uv, poetry, cargo, go, gem, brew, npx…)",
+	"package_unlisted":   "a package outside package_allow",
+	"package_registry":   "an install from a registry outside package_registries (or a URL / git spec / extra index)",
+	"package_scripts":    "an npm/pnpm/yarn/bun install that runs install scripts (no --ignore-scripts)",
+	"package_malicious":  "a package listed as malicious in OSV (OpenSSF malicious packages); looked up online",
+	"package_vulnerable": "a pinned package version with a known vulnerability in OSV; looked up online",
+	"guardrail_edit":     "writing CI config, CODEOWNERS, git hooks, agent settings, shell startup files, cron, launchd, systemd",
+	"credential_read":    "reading credential files or caches, or printing tokens or the environment",
+	"remote_script":      "running a downloaded script (curl … | sh)",
+	"fs_destroy":         "recursive deletes outside build output and temp directories",
+	"mcp_unlisted":       "calling an MCP server outside mcp_allow",
+	"model_endpoint":     "an agent configured for a model API host outside model_hosts_allow",
+	"model_api_key":      "an agent running with a personal model API key in its environment",
+}
+
+// implied lets a broader kind match its narrower ones (sql_write covers
+// destructive_sql) and access cover every action on a target.
+var implied = map[string][]string{
+	"sql_write":    {"destructive_sql"},
+	"cloud_change": {"cloud_destroy"},
+	"access":       {"cloud_change", "cloud_destroy", "sql_write", "destructive_sql"},
+}
+
+// KindCovers reports whether a policy kind covers an action's kind.
+func KindCovers(policyKind, actionKind string) bool {
+	return policyKind == actionKind || slices.Contains(implied[policyKind], actionKind)
 }
 
 // Approvals tunes the approval flow for the whole machine.
@@ -112,18 +208,24 @@ func (a Approvals) TTL() int {
 
 // NeedsApproval reports whether the rule has any approval list.
 func (r Rule) NeedsApproval() bool {
-	return len(r.ExecApprove)+len(r.FileApprove)+len(r.DomainApprove)+len(r.NetApprove)+len(r.CommandApprove)+len(r.ToolApprove) > 0
+	return len(r.ExecApprove)+len(r.FileApprove)+len(r.DomainApprove)+len(r.NetApprove)+len(r.CommandApprove)+len(r.ToolApprove)+
+		len(r.ActionsApprove)+len(r.FileWriteApprove)+len(r.PackageApprove) > 0
 }
 
 // Kernel is the rule as the kernel enforces it: the kernel can't pause and
 // ask, so approval lists it can see become denies.
+//
+// Directory entries (a trailing /) are left out: the kernel matches a path
+// suffix, and only hooks match everything under a directory.
 func (r Rule) Kernel() Rule {
-	if !r.NeedsApproval() {
-		return r
-	}
 	k := r
+	k.FileAlert = filePaths(r.FileAlert)
+	if !r.NeedsApproval() {
+		k.FileDeny = filePaths(r.FileDeny)
+		return k
+	}
 	k.ExecDeny = append(append([]string(nil), r.ExecDeny...), r.ExecApprove...)
-	k.FileDeny = append(append([]string(nil), r.FileDeny...), r.FileApprove...)
+	k.FileDeny = filePaths(append(append([]string(nil), r.FileDeny...), r.FileApprove...))
 	k.DomainDeny = append(append([]string(nil), r.DomainDeny...), r.DomainApprove...)
 	k.NetDeny = append(append([]string(nil), r.NetDeny...), r.NetApprove...)
 	if r.Mode == Allowlist && len(r.ExecApprove) > 0 {
@@ -141,6 +243,23 @@ func (r Rule) Kernel() Rule {
 	}
 	return k
 }
+
+// filePaths drops directory entries (a trailing /); nil stays nil.
+func filePaths(list []string) []string {
+	if !slices.ContainsFunc(list, IsDirEntry) {
+		return list
+	}
+	out := []string{}
+	for _, p := range list {
+		if !IsDirEntry(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// IsDirEntry reports whether a file list entry names a directory tree.
+func IsDirEntry(p string) bool { return strings.HasSuffix(p, "/") || strings.HasSuffix(p, `\`) }
 
 type Agent struct {
 	Name         string   `yaml:"name"`
@@ -161,6 +280,8 @@ type Policy struct {
 	MCPServers     []MCP     `yaml:"mcp_servers"`
 	TrackOrphanMCP bool      `yaml:"track_orphan_mcp"` // treat an MCP server with no known agent above it as its own agent
 	Approvals      Approvals `yaml:"approvals,omitempty"`
+	// Environments for kind@environment entries (actions_deny / actions_approve).
+	Environments map[string]Environment `yaml:"environments,omitempty"`
 }
 
 func Load(file string) (*Policy, []byte, error) {
@@ -223,6 +344,32 @@ func (p *Policy) validate() error {
 	if err := p.RuleFor("").check(); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
+	for name, e := range p.Environments {
+		if !nameRE.MatchString(name) {
+			return fmt.Errorf("environment name %q: use lowercase letters, digits and '-'", name)
+		}
+		for _, h := range e.Hosts {
+			if strings.Contains(h, "/") {
+				if _, err := ParseCIDR(h); err != nil {
+					return fmt.Errorf("environments.%s.hosts: %w", name, err)
+				}
+			}
+		}
+	}
+	for _, name := range append([]string{""}, agentNames(p.Agents)...) {
+		r := p.RuleFor(name)
+		for _, list := range [][]string{r.ActionsDeny, r.ActionsApprove} {
+			for _, a := range list {
+				kind, env, _ := strings.Cut(a, "@")
+				if _, ok := ActionKinds[kind]; !ok {
+					return fmt.Errorf("actions entry %q: unknown kind %q (one of: %s)", a, kind, strings.Join(kindNames(), ", "))
+				}
+				if _, ok := p.Environments[env]; env != "" && !ok {
+					return fmt.Errorf("actions entry %q: no environment %q under environments", a, env)
+				}
+			}
+		}
+	}
 	for i := range p.MCPServers {
 		re, err := regexp.Compile(p.MCPServers[i].Pattern)
 		if err != nil {
@@ -231,6 +378,23 @@ func (p *Policy) validate() error {
 		p.MCPServers[i].re = re
 	}
 	return nil
+}
+
+func agentNames(as []Agent) []string {
+	out := make([]string, len(as))
+	for i, a := range as {
+		out[i] = a.Name
+	}
+	return out
+}
+
+func kindNames() []string {
+	out := make([]string, 0, len(ActionKinds))
+	for k := range ActionKinds {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (r Rule) check() error {
@@ -253,11 +417,23 @@ func (r Rule) check() error {
 			return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), "domain_deny", "domain_approve"))
 		}
 	}
-	for _, list := range [][]string{r.CommandApprove, r.ToolApprove, r.ToolDeny} {
+	for _, list := range [][]string{r.CommandApprove, r.CommandDeny, r.ToolApprove, r.ToolDeny, r.MCPAllow} {
 		for _, pat := range list {
-			if strings.TrimSpace(pat) == "" || pat == "*" {
-				return fmt.Errorf("command_approve / tool_approve / tool_deny entry %q would match everything; name a command or tool", pat)
+			if strings.Trim(pat, " *") == "" {
+				return fmt.Errorf("command / tool / mcp entry %q would match everything; name a command, tool or server", pat)
 			}
+		}
+	}
+	for _, list := range [][]string{r.PackageDeny, r.PackageApprove, r.PackageAllow} {
+		for _, pat := range list {
+			if eco, name, ok := strings.Cut(pat, ":"); !ok || !Ecosystems[eco] || strings.Trim(name, " *") == "" {
+				return fmt.Errorf("package entry %q: use ecosystem:name, e.g. npm:left-pad or pypi:requests (ecosystems: npm, pypi, cargo, go, gem, brew)", pat)
+			}
+		}
+	}
+	for _, u := range r.PackageRegistries {
+		if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+			return fmt.Errorf("package_registries entry %q: use the registry URL, e.g. https://npm.acme.internal/", u)
 		}
 	}
 	for _, list := range [][]string{r.NetDeny, r.NetAllow, r.NetApprove} {
@@ -305,6 +481,9 @@ func checkHost(h string) error {
 	}
 	return nil
 }
+
+// Ecosystems are the package ecosystems package lists name.
+var Ecosystems = map[string]bool{"npm": true, "pypi": true, "cargo": true, "go": true, "gem": true, "brew": true}
 
 // Domains returns every hostname any rule denies in the kernel (domain_deny
 // and domain_approve).
@@ -400,10 +579,47 @@ func (p *Policy) RuleFor(agent string) Rule {
 		if a.ToolDeny != nil {
 			r.ToolDeny = a.ToolDeny
 		}
+		if a.ActionsDeny != nil {
+			r.ActionsDeny = a.ActionsDeny
+		}
+		if a.ActionsApprove != nil {
+			r.ActionsApprove = a.ActionsApprove
+		}
+		if a.CommandDeny != nil {
+			r.CommandDeny = a.CommandDeny
+		}
+		if a.FileWriteDeny != nil {
+			r.FileWriteDeny = a.FileWriteDeny
+		}
+		if a.FileWriteApprove != nil {
+			r.FileWriteApprove = a.FileWriteApprove
+		}
+		if a.ProtectedBranches != nil {
+			r.ProtectedBranches = a.ProtectedBranches
+		}
+		if a.PackageDeny != nil {
+			r.PackageDeny = a.PackageDeny
+		}
+		if a.PackageApprove != nil {
+			r.PackageApprove = a.PackageApprove
+		}
+		if a.PackageAllow != nil {
+			r.PackageAllow = a.PackageAllow
+		}
+		if a.PackageRegistries != nil {
+			r.PackageRegistries = a.PackageRegistries
+		}
+		if a.MCPAllow != nil {
+			r.MCPAllow = a.MCPAllow
+		}
+		if a.ModelHostsAllow != nil {
+			r.ModelHostsAllow = a.ModelHostsAllow
+		}
 		if a.Network != nil {
 			r.Network = a.Network
 		}
 	}
+	r.Environments = p.Environments
 	return r
 }
 

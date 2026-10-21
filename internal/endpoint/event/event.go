@@ -71,4 +71,22 @@ type Event struct {
 	GitEmail       string `json:"git_email,omitempty"`       // git user.email for that user in the working directory
 	Model          string `json:"model,omitempty"`           // model the agent reported in its hook payload, if any
 	TranscriptPath string `json:"transcript_path,omitempty"` // the agent's transcript file (hooks), a path only
+
+	// What the tool call does, as the agent hook read it (hooks only).
+	Actions []Action `json:"actions,omitempty"`
+	// AgentEnv is the agent's identity-related environment, on a hook
+	// session's first event: cloud profile names, model API hosts, which
+	// API keys are set (never their values). Reported by the hook process.
+	AgentEnv map[string]string `json:"agent_env,omitempty"`
+}
+
+// Action is one thing a command or tool call does beyond running a program:
+// a push to a protected branch, a destructive SQL statement, a package
+// install, a cloud deletion… (policy.ActionKinds).
+type Action struct {
+	Kind   string            `json:"kind"`
+	Target string            `json:"target,omitempty"` // branch, statement, package, path, cloud operation
+	Attrs  map[string]string `json:"attrs,omitempty"`  // aws_profile, aws_account, kube_context, db_host, registry, …
+	Envs   []string          `json:"envs,omitempty"`   // environments its target belongs to (prod)
+	In     string            `json:"in,omitempty"`     // the script or package.json script it was found in
 }

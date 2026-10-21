@@ -78,21 +78,32 @@ func (r *Resolver) OSUser(uid uint32) string {
 }
 
 func (r *Resolver) home(name string) string {
-	r.mu.Lock()
-	e, ok := r.homes[name]
-	r.mu.Unlock()
-	if r.fresh(e, ok) {
-		return e.v
-	}
-	h := ""
-	if u, err := r.lookupName(name); err == nil {
-		h = u.HomeDir
-	}
-	r.mu.Lock()
-	prune(r.homes)
-	r.homes[name] = entry{h, r.now()}
-	r.mu.Unlock()
+	h, _, _ := r.Account(name)
 	return h
+}
+
+// Account is an OS user's home directory and uid (ok false if unknown).
+func (r *Resolver) Account(name string) (home string, uid int, ok bool) {
+	r.mu.Lock()
+	e, hit := r.homes[name]
+	r.mu.Unlock()
+	if !r.fresh(e, hit) {
+		v := ""
+		if u, err := r.lookupName(name); err == nil {
+			v = u.Uid + "\x00" + u.HomeDir
+		}
+		r.mu.Lock()
+		prune(r.homes)
+		e = entry{v, r.now()}
+		r.homes[name] = e
+		r.mu.Unlock()
+	}
+	id, h, found := strings.Cut(e.v, "\x00")
+	if !found {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(id)
+	return h, n, err == nil
 }
 
 // GitEmail is the user.email git would use for osUser in cwd: the

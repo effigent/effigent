@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 )
 
@@ -23,6 +24,9 @@ type Decision struct {
 	Kind   string `json:"kind,omitempty"`   // exec | file_open | connect | tool
 	Target string `json:"target,omitempty"` // e.g. "exec /usr/bin/curl", "/work/.env"
 	Rule   string `json:"rule,omitempty"`   // the policy list that matched, e.g. "exec_deny"
+	// Actions is what the call does (git, SQL, packages, cloud, files…),
+	// whether or not a policy list matched.
+	Actions []event.Action `json:"actions,omitempty"`
 }
 
 // ClaudeInput is the part of Claude Code's PreToolUse payload effigentd uses.
@@ -32,6 +36,17 @@ type ClaudeInput struct {
 	ToolName  string         `json:"tool_name"`
 	ToolInput map[string]any `json:"tool_input"`
 	ToolUseID string         `json:"tool_use_id"`
+
+	// Set by the daemon, not the agent: who runs the agent and with which
+	// identity-related environment (see AgentEnvNames).
+	Agent string            `json:"-"` // policy agent name, e.g. "claude-code"
+	Env   map[string]string `json:"-"`
+	Home  string            `json:"-"` // the OS user's home directory
+	// UID is the OS user's uid when UIDKnown: files the hook reads to
+	// understand a command (scripts, .sql files, configs) are read only if
+	// that user could read them; unknown means world-readable files only.
+	UID      int  `json:"-"`
+	UIDKnown bool `json:"-"`
 }
 
 // ClaudeEvaluator decides a Claude Code tool call under the agent's rule.

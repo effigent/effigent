@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,8 +60,20 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		if err != nil {
 			return ag.failClosed("the hook input could not be read"), nil
 		}
-		in := call.Orig
 		who := hookIdentity(c)
+		env := hooks.CleanAgentEnv(c.Env)
+		home, uid, uidKnown := "", 0, false
+		if c.OSUser != "" {
+			home, uid, uidKnown = ident.Default.Account(c.OSUser)
+			// The user name is the hook process's claim: claiming root must
+			// not let the daemon read root-only files on the agent's behalf.
+			uidKnown = uidKnown && uid != 0
+		}
+		for i := range call.Canon {
+			call.Canon[i].Agent, call.Canon[i].Env, call.Canon[i].Home = ag.name, env, home
+			call.Canon[i].UID, call.Canon[i].UIDKnown = uid, uidKnown
+		}
+		in := call.Orig
 		// There is no kernel to report agents starting, so a session's first
 		// tool call stands in for it (the console counts agents from these).
 		mu.Lock()
@@ -75,7 +88,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		mu.Unlock()
 		if !known && in.SessionID != "" {
 			eng.Emit(who.on(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: ag.name,
-				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID)}))
+				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID), AgentEnv: env}))
 		}
 		// One event per tool call, so the console sees everything the agent
 		// did; a policy match makes it blocked / would_block / file_open.
@@ -91,6 +104,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		rule := eng.RuleFor(ag.name)
 		d := hooks.EvaluateCall(hooks.Claude, rule, call)
 		ev.Mode = string(rule.Mode)
+		ev.Actions = redactActions(d.Actions)
 		if d.Approve {
 			d = askApproval(ctx, eng, cp(), c, pausedCall{
 				agent: ag.name, session: in.SessionID, tool: in.ToolName, cwd: in.Cwd,
@@ -334,6 +348,11 @@ func hookCmd(args []string) {
 	if u, err := user.Current(); err == nil {
 		req.Header.Set("X-Effigent-OS-User", u.Username)
 	}
+	if env := hooks.AgentEnv(os.Environ()); len(env) > 0 {
+		if b, err := json.Marshal(env); err == nil {
+			req.Header.Set("X-Effigent-Agent-Env", base64.StdEncoding.EncodeToString(b))
+		}
+	}
 	res, err := c.Do(req)
 	if err != nil {
 		os.Stdout.Write(ag.failClosed("effigentd is not running on this machine"))
@@ -346,4 +365,13 @@ func hookCmd(args []string) {
 		return
 	}
 	os.Stdout.Write(out)
+}
+
+// redactActions removes secrets from action targets (SQL statements and
+// command lines can carry them) before they leave the machine.
+func redactActions(acts []event.Action) []event.Action {
+	for i := range acts {
+		acts[i].Target = redact.String(acts[i].Target)
+	}
+	return acts
 }

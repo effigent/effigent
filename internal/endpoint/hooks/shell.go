@@ -9,7 +9,11 @@ import (
 // and the files it redirects to or from.
 type simpleCmd struct {
 	args      []string
-	redirects []string
+	redirects []string // every redirect target, in and out
+	inputs    []string // files read on stdin (< file)
+	stdin     []string // text fed on stdin: heredoc bodies and here-strings
+	pipeFrom  int      // 1 + index of the command whose output it reads (a | b), 0 if none
+	from      string   // the script it was read from (expandScripts), "" for the command line
 }
 
 // splitShell splits a shell command line into its simple commands. It is a
@@ -32,16 +36,27 @@ func splitDepth(s string, depth int) []simpleCmd {
 		w        strings.Builder
 		inWord   bool
 		redirect bool
+		readIn   bool      // the redirect is < (a file read on stdin)
+		hereStr  bool      // the next word is a here-string
+		pipe     int       // pipeFrom for the next command
 		pending  []heredoc // heredocs whose bodies start after this line
 	)
 	flushWord := func() {
 		if !inWord {
 			return
 		}
-		if redirect {
+		switch {
+		case redirect:
 			cur.redirects = append(cur.redirects, w.String())
-			redirect = false
-		} else {
+			if readIn {
+				cur.inputs = append(cur.inputs, w.String())
+			}
+			redirect, readIn = false, false
+		default:
+			if hereStr {
+				cur.stdin = append(cur.stdin, w.String())
+				hereStr = false
+			}
 			cur.args = append(cur.args, w.String())
 		}
 		w.Reset()
@@ -49,10 +64,12 @@ func splitDepth(s string, depth int) []simpleCmd {
 	}
 	flushCmd := func() {
 		flushWord()
-		redirect = false
+		redirect, readIn, hereStr = false, false, false
 		if len(cur.args) > 0 || len(cur.redirects) > 0 {
+			cur.pipeFrom = pipe
 			out = append(out, cur)
 		}
+		pipe = 0
 		cur = simpleCmd{}
 	}
 	for i := 0; i < len(s); i++ {
@@ -62,6 +79,9 @@ func splitDepth(s string, depth int) []simpleCmd {
 			flushCmd()
 			for _, h := range pending {
 				body, next := heredocBody(s, i+1, h)
+				if h.owner < len(out) {
+					out[h.owner].stdin = append(out[h.owner].stdin, body)
+				}
 				out = append(out, h.commands(body, out, depth)...)
 				i = next - 1
 			}
@@ -94,6 +114,7 @@ func splitDepth(s string, depth int) []simpleCmd {
 		case c == '<' && strings.HasPrefix(s[i:], "<<<"):
 			// a here-string: its word is not a redirect target (it is still read as an argument)
 			flushWord()
+			hereStr = true
 			i += 2
 		case c == '\\' && i+1 < len(s):
 			if s[i+1] != '\n' {
@@ -139,7 +160,16 @@ func splitDepth(s string, depth int) []simpleCmd {
 			}
 			i += n - 1
 			inWord = true
+		case c == '|' && !strings.HasPrefix(s[i:], "||"):
+			flushCmd()
+			if strings.HasPrefix(s[i:], "|&") {
+				i++
+			}
+			pipe = len(out) // 1 + index of the command just flushed
 		case c == ';' || c == '&' || c == '|' || c == '\n' || c == '(' || c == ')':
+			if c == '|' {
+				i++ // ||
+			}
 			flushCmd()
 		case c == '<' || c == '>':
 			flushWord()
@@ -151,6 +181,7 @@ func splitDepth(s string, depth int) []simpleCmd {
 				}
 				continue
 			}
+			readIn = c == '<' && (i+1 >= len(s) || s[i+1] != '>')
 			for i+1 < len(s) && (s[i+1] == '>' || s[i+1] == '<' || s[i+1] == '|') {
 				i++
 			}

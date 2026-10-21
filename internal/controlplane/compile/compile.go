@@ -730,6 +730,18 @@ func overrides(def, r ep.Rule) ep.Rule {
 	o.CommandApprove = list(def.CommandApprove, r.CommandApprove)
 	o.ToolApprove = list(def.ToolApprove, r.ToolApprove)
 	o.ToolDeny = list(def.ToolDeny, r.ToolDeny)
+	o.ActionsDeny = list(def.ActionsDeny, r.ActionsDeny)
+	o.ActionsApprove = list(def.ActionsApprove, r.ActionsApprove)
+	o.CommandDeny = list(def.CommandDeny, r.CommandDeny)
+	o.FileWriteDeny = list(def.FileWriteDeny, r.FileWriteDeny)
+	o.FileWriteApprove = list(def.FileWriteApprove, r.FileWriteApprove)
+	o.ProtectedBranches = list(def.ProtectedBranches, r.ProtectedBranches)
+	o.PackageDeny = list(def.PackageDeny, r.PackageDeny)
+	o.PackageApprove = list(def.PackageApprove, r.PackageApprove)
+	o.PackageAllow = list(def.PackageAllow, r.PackageAllow)
+	o.PackageRegistries = list(def.PackageRegistries, r.PackageRegistries)
+	o.MCPAllow = list(def.MCPAllow, r.MCPAllow)
+	o.ModelHostsAllow = list(def.ModelHostsAllow, r.ModelHostsAllow)
 	if !eqBool(def.Network, r.Network) {
 		o.Network = r.Network
 	}
@@ -746,7 +758,11 @@ func sameRule(a, b ep.Rule) bool {
 		eqBool(a.Network, b.Network) && eqBool(a.RequireLauncher, b.RequireLauncher) &&
 		l(a.ExecApprove, b.ExecApprove) && l(a.FileApprove, b.FileApprove) && l(a.DomainApprove, b.DomainApprove) &&
 		l(a.NetApprove, b.NetApprove) && l(a.CommandApprove, b.CommandApprove) && l(a.ToolApprove, b.ToolApprove) &&
-		l(a.ToolDeny, b.ToolDeny)
+		l(a.ToolDeny, b.ToolDeny) && l(a.ActionsDeny, b.ActionsDeny) && l(a.ActionsApprove, b.ActionsApprove) &&
+		l(a.CommandDeny, b.CommandDeny) && l(a.FileWriteDeny, b.FileWriteDeny) && l(a.FileWriteApprove, b.FileWriteApprove) &&
+		l(a.ProtectedBranches, b.ProtectedBranches) && l(a.PackageDeny, b.PackageDeny) && l(a.PackageApprove, b.PackageApprove) &&
+		l(a.PackageAllow, b.PackageAllow) && l(a.PackageRegistries, b.PackageRegistries) && l(a.MCPAllow, b.MCPAllow) &&
+		l(a.ModelHostsAllow, b.ModelHostsAllow)
 }
 
 func eqBool(a, b *bool) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }

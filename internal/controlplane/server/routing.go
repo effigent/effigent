@@ -25,7 +25,8 @@ import (
 var routeKinds = map[string]string{
 	"command_approve": "command", "exec_approve": "command",
 	"domain_approve": "website", "network_approve": "website",
-	"tool_approve": "tool", "file_approve": "file",
+	"tool_approve": "tool", "file_approve": "file", "file_write_approve": "file",
+	"actions_approve": "command", "package_approve": "command",
 }
 
 // patternRe compiles a rule pattern: case-insensitive, unanchored, * = anything.

@@ -11,6 +11,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -37,6 +38,9 @@ type HookCall struct {
 	Payload []byte
 	Budget  time.Duration // how long the hook process waits for the answer
 	OSUser  string        // the user the agent runs as (reported by the hook process)
+	// Env is the agent's identity-related environment (hooks.AgentEnv),
+	// reported by the hook process in X-Effigent-Agent-Env.
+	Env map[string]string
 }
 
 func (s *Server) Handler() http.Handler {
@@ -58,7 +62,7 @@ func (s *Server) Handler() http.Handler {
 			budget = min(time.Duration(v)*time.Second, 5*time.Minute)
 		}
 		out, err := s.Hook(r.Context(), HookCall{Agent: r.PathValue("agent"), Payload: body, Budget: budget,
-			OSUser: r.Header.Get("X-Effigent-OS-User")})
+			OSUser: r.Header.Get("X-Effigent-OS-User"), Env: agentEnv(r.Header.Get("X-Effigent-Agent-Env"))})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -131,4 +135,20 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
+}
+
+// agentEnv decodes X-Effigent-Agent-Env: base64 (std) JSON of name -> value.
+func agentEnv(h string) map[string]string {
+	if h == "" || len(h) > 16<<10 {
+		return nil
+	}
+	b, err := base64.StdEncoding.DecodeString(h)
+	if err != nil {
+		return nil
+	}
+	var m map[string]string
+	if json.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	return m
 }
