@@ -408,6 +408,9 @@ export const navSections: { title: string; soon?: boolean; items: { href: string
     { href: '/graph', label: 'Agent Graph', icon: 'network', hint: 'What each agent ran, opened and reached — grouped by risk' },
     { href: '/audit', label: 'Activity & Audit', icon: 'clipboard', hint: 'Every agent event and every admin change, exportable' },
     { href: '/pricing-leaks', label: 'Pricing Leaks', icon: 'database', hint: 'Unused seats, duplicate tools, shadow spend and runaway AI costs' },
+    { href: '/inventory', label: 'Inventory', icon: 'layers', hint: 'Every agent and MCP server seen, how each is controlled, and unmanaged people' },
+    { href: '/anomalies', label: 'New behaviour', icon: 'spark', hint: 'The first time an agent ran a program, reached a host or used an MCP server on a machine' },
+    { href: '/report', label: 'Posture report', icon: 'listCheck', hint: 'A period’s machines, blocks, approvals, policy and spend — print or email it' },
   ] },
   { title: 'Control', items: [
     { href: '/policies', label: 'Policies', icon: 'shield', hint: 'Decide what agents may do: rules, exceptions, AI help' },

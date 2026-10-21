@@ -1012,3 +1012,27 @@ tr.revoked td { opacity: 0.55; }
 .viz-readout { font-size: 12.5px; color: var(--txt-2); min-height: 18px; }
 .viz-readout b { color: var(--txt); font-weight: 600; }
 .viz-axis { font-size: 11px; fill: var(--txt-3); }
+
+/* Posture report (/report): bars, key/value tables, and a print layout
+ * without the console chrome (Print / PDF from the browser). */
+.report-bar { display: flex; height: 8px; border-radius: 4px; background: var(--border-soft); overflow: hidden; }
+.report-bar span { background: var(--red); }
+.report-bar span.w { background: var(--gold); opacity: .7; }
+.report-kv td { padding: 6px 0; border: 0; }
+.print-only { display: none; }
+@media print {
+  :root { color-scheme: light; }
+  body, .app, .main, .content { background: #fff !important; color: #111 !important; height: auto !important; overflow: visible !important; }
+  .app { display: block; }
+  .sidebar, .sidebar-backdrop, .topbar, .api-banner, .demo-banner, .toast, .page-guide, .no-print, .info-tip-btn { display: none !important; }
+  .content { padding: 0; }
+  .page { max-width: none; gap: 12px; }
+  .print-only { display: block; }
+  .report-title h1 { font-size: 20px; margin: 0 0 4px; }
+  .card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ccc !important; background: #fff !important; }
+  .card a { color: inherit; text-decoration: none; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-2, .grid-3 { grid-template-columns: repeat(2, 1fr); }
+  .tbl-wrap { overflow: visible !important; }
+  .report-bar span { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
