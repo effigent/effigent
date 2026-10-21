@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -42,7 +43,7 @@ import (
 //
 // Credentials: $EFFIGENT_CLOUD_TOKEN (efc_…, from the console) or the
 // endpoint.json `effigentd cloud-setup` wrote to the state dir
-// ($EFFIGENT_STATE_DIR, default ~/.effigent-cloud). No policy (never synced,
+// ($EFFIGENT_STATE_DIR, default /var/tmp/effigent-cloud). No policy (never synced,
 // control plane unreachable) denies, unless EFFIGENT_REMOTE_FAIL_OPEN=1,
 // which decides with the built-in default policy instead.
 
@@ -55,13 +56,25 @@ func remoteMode(args []string) bool {
 	return os.Getenv("EFFIGENT_CLOUD_TOKEN") != ""
 }
 
+// cloudStateDir is $EFFIGENT_STATE_DIR, else /var/tmp/effigent-cloud: a
+// fixed path, because a vendor's setup step and its agent may not share a
+// home directory (Copilot's setup steps run as the Actions runner user, the
+// agent with HOME=/root). A directory there that belongs to another user
+// (planted on a shared machine) is skipped for ~/.effigent-cloud.
 func cloudStateDir() string {
 	if d := strings.TrimSpace(os.Getenv("EFFIGENT_STATE_DIR")); d != "" {
 		return d
 	}
+	shared := filepath.Join(os.TempDir(), "effigent-cloud")
+	if runtime.GOOS != "windows" {
+		shared = "/var/tmp/effigent-cloud"
+	}
+	if ownedBySelfOrRoot(shared) {
+		return shared
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		home = os.TempDir()
+		return shared
 	}
 	return filepath.Join(home, ".effigent-cloud")
 }
@@ -120,6 +133,7 @@ func remoteHook(name string, ag hookAgent, payload []byte, budget time.Duration)
 		return ag.failClosed("this cloud environment has no Effigent credentials (set EFFIGENT_CLOUD_TOKEN, or run effigentd cloud-setup in the setup step)")
 	}
 	_ = os.MkdirAll(dir, 0o700)
+	work := writableDir(dir) // the policy cache, spool and session marks
 
 	var mu sync.Mutex
 	var evs []event.Event
@@ -134,8 +148,14 @@ func remoteHook(name string, ag hookAgent, payload []byte, budget time.Duration)
 	if err := client.LoadCached(ctx); err != nil {
 		remoteLogf("cached policy: %v", err)
 	}
+	if work != dir {
+		// The setup step's state is read-only for this user: what it cached
+		// first, then this user's own newer copy.
+		client.Dir = work
+		_ = client.LoadCached(ctx)
+	}
 	reachable := true
-	marker := filepath.Join(dir, "synced")
+	marker := filepath.Join(work, "synced")
 	if fi, err := os.Stat(marker); client.Version() == 0 || err != nil || time.Since(fi.ModTime()) > remoteRefresh() {
 		wait := 3 * time.Second
 		if client.Version() == 0 {
@@ -158,7 +178,7 @@ func remoteHook(name string, ag hookAgent, payload []byte, budget time.Duration)
 			Message: "no policy: the control plane could not be reached before this cloud environment's first sync"})
 		out = ag.failClosed("this cloud environment has no Effigent policy yet and the control plane could not be reached")
 	} else {
-		h := hookHandlerSeen(eng, func() *cpclient.Client { return client }, sessionMarks(filepath.Join(dir, "sessions")))
+		h := hookHandlerSeen(eng, func() *cpclient.Client { return client }, sessionMarks(filepath.Join(work, "sessions")))
 		call := api.HookCall{Agent: name, Payload: payload, Budget: budget - time.Since(start), Env: hooks.AgentEnv(os.Environ())}
 		if u, err := user.Current(); err == nil {
 			call.OSUser = u.Username
@@ -174,7 +194,7 @@ func remoteHook(name string, ag hookAgent, payload []byte, budget time.Duration)
 	left := budget - time.Since(start) - 500*time.Millisecond
 	ectx, ecancel := context.WithTimeout(context.Background(), min(3*time.Second, max(left, 200*time.Millisecond)))
 	defer ecancel()
-	shipEvents(ectx, st, filepath.Join(dir, "spool"), evs, reachable)
+	shipEvents(ectx, st, filepath.Join(work, "spool"), evs, reachable)
 	return out
 }
 
@@ -182,6 +202,25 @@ func remoteHook(name string, ag hookAgent, payload []byte, budget time.Duration)
 func isNetErr(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// writableDir is dir if this user can write it, else ~/.effigent-cloud
+// (the setup step ran as root, the agent doesn't).
+func writableDir(dir string) string {
+	if f, err := os.CreateTemp(dir, ".w-*"); err == nil {
+		f.Close()
+		os.Remove(f.Name())
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return dir
+	}
+	own := filepath.Join(home, ".effigent-cloud")
+	if os.MkdirAll(own, 0o700) != nil {
+		return dir
+	}
+	return own
 }
 
 func touch(p string) {
@@ -199,7 +238,7 @@ func sessionMarks(dir string) func(string) bool {
 		sum := sha256.Sum256([]byte(key))
 		f, err := os.OpenFile(filepath.Join(dir, hex.EncodeToString(sum[:16])), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
-			return errors.Is(err, os.ErrExist)
+			return true // exists, or can't be recorded: don't report a session start on every call
 		}
 		f.Close()
 		if ents, err := os.ReadDir(dir); err == nil && len(ents) > 100 {
@@ -322,8 +361,9 @@ func spoolBatch(dir string, b []byte) {
 func cloudSetupCmd(args []string) {
 	fs := flag.NewFlagSet("cloud-setup", flag.ExitOnError)
 	token := fs.String("token", os.Getenv("EFFIGENT_CLOUD_TOKEN"), "the cloud environment's token (efc_…; default $EFFIGENT_CLOUD_TOKEN)")
-	dir := fs.String("state-dir", cloudStateDir(), "where the hooks find it (default $EFFIGENT_STATE_DIR or ~/.effigent-cloud)")
+	dir := fs.String("state-dir", cloudStateDir(), "where the hooks find it (default $EFFIGENT_STATE_DIR or /var/tmp/effigent-cloud)")
 	offline := fs.Bool("allow-offline", false, "succeed even if the control plane can't be reached now (the hooks then deny until it can)")
+	shared := fs.Bool("shared", false, "let other users read the state (the agent runs as another user than this setup step)")
 	_ = fs.Parse(args)
 	st, err := stateFromToken(*token)
 	if err != nil {
@@ -335,8 +375,14 @@ func cloudSetupCmd(args []string) {
 		os.Exit(1)
 	}
 	b, _ := json.MarshalIndent(st, "", "  ")
+	mode := os.FileMode(0o600)
+	if *shared {
+		// The agent may run as another user than the setup step; it can read the token anyway (docs/cloud-agents.md).
+		mode = 0o644
+		_ = os.Chmod(*dir, 0o755)
+	}
 	tmp := filepath.Join(*dir, ".endpoint.json.tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err == nil {
+	if err := os.WriteFile(tmp, b, mode); err == nil {
 		err = os.Rename(tmp, filepath.Join(*dir, "endpoint.json"))
 	}
 	if err != nil {
@@ -364,5 +410,8 @@ func cloudSetupCmd(args []string) {
 		return
 	}
 	touch(filepath.Join(*dir, "synced"))
+	if *shared {
+		_ = os.Chmod(filepath.Join(*dir, "policy.json"), 0o644)
+	}
 	fmt.Printf("effigentd: cloud environment %s ready (policy v%d, state in %s)\n", st.EndpointID, client.Version(), *dir)
 }
