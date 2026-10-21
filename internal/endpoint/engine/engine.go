@@ -76,6 +76,7 @@ type Engine struct {
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
 
 func New(pol *policy.Policy, raw []byte, enf Enforcer, emit func(event.Event), logf func(string, ...any), verbose bool) *Engine {
+	applyRedaction(pol, logf)
 	return &Engine{
 		pol: pol, polRaw: raw, enf: enf, emit: func(ev event.Event) { emit(scrub(ev)) }, logf: logf, verbose: verbose,
 		roots: map[uint32]*Root{}, byPolicy: map[string]*Root{},
@@ -97,6 +98,20 @@ func (e *Engine) UseResolver(ctx context.Context, r *domains.Resolver, procfs st
 	e.reportEmpty(pol.Domains())
 }
 
+// applyRedaction sets the policy's masks (validated by the parser already).
+func applyRedaction(p *policy.Policy, logf func(string, ...any)) {
+	if p == nil {
+		return
+	}
+	rules := make([]redact.Rule, len(p.Redact.Patterns))
+	for i, r := range p.Redact.Patterns {
+		rules[i] = redact.Rule{Name: r.Name, Pattern: r.Pattern}
+	}
+	if err := redact.Configure(rules, p.Redact.PII); err != nil && logf != nil {
+		logf("redaction masks not applied: %v", err)
+	}
+}
+
 // scrub removes secrets from every free-text field of an event before any
 // sink (stdout, log file, control plane) sees it.
 func scrub(ev event.Event) event.Event {
@@ -107,6 +122,14 @@ func scrub(ev event.Event) event.Event {
 	}
 	ev.Target = redact.String(ev.Target)
 	ev.Message = redact.String(ev.Message)
+	if len(ev.Actions) > 0 {
+		acts := make([]event.Action, len(ev.Actions))
+		for i, a := range ev.Actions {
+			a.Target = redact.String(a.Target)
+			acts[i] = a
+		}
+		ev.Actions = acts
+	}
 	return ev
 }
 
@@ -565,6 +588,7 @@ func (e *Engine) SetPolicy(ctx context.Context, raw []byte) (int, error) {
 		dns.Set(ctx, p.Domains())
 		e.reportEmpty(p.Domains())
 	}
+	applyRedaction(p, e.logf)
 	e.mu.Lock()
 	e.pol, e.polRaw = p, raw
 	pids := make([]uint32, 0, len(e.roots))

@@ -282,6 +282,22 @@ type Policy struct {
 	Approvals      Approvals `yaml:"approvals,omitempty"`
 	// Environments for kind@environment entries (actions_deny / actions_approve).
 	Environments map[string]Environment `yaml:"environments,omitempty"`
+	// Redact adds masks to the built-in secret redaction, applied on the
+	// machine before any event leaves it.
+	Redact Redaction `yaml:"redact,omitempty"`
+}
+
+// Redaction is the workspace's own masks: patterns (RE2) for internal ids,
+// hostnames, customer data, and the optional PII set (emails, phone, card
+// and IBAN numbers) for workplaces that must not collect them.
+type Redaction struct {
+	PII      bool         `yaml:"pii,omitempty" json:"pii"`
+	Patterns []RedactRule `yaml:"patterns,omitempty" json:"patterns"`
+}
+
+type RedactRule struct {
+	Name    string `yaml:"name" json:"name"`
+	Pattern string `yaml:"pattern" json:"pattern"`
 }
 
 func Load(file string) (*Policy, []byte, error) {
@@ -344,6 +360,21 @@ func (p *Policy) validate() error {
 	if err := p.RuleFor("").check(); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
+	if len(p.Redact.Patterns) > 50 {
+		return fmt.Errorf("redact.patterns: at most 50")
+	}
+	for _, r := range p.Redact.Patterns {
+		if !redactNameRE.MatchString(r.Name) {
+			return fmt.Errorf("redact pattern name %q: 2-32 of a-z, 0-9, _ and -", r.Name)
+		}
+		re, err := regexp.Compile(r.Pattern)
+		if err != nil || len(r.Pattern) > 300 {
+			return fmt.Errorf("redact pattern %s: not a valid RE2 expression of at most 300 characters", r.Name)
+		}
+		if re.MatchString("") {
+			return fmt.Errorf("redact pattern %s matches empty text", r.Name)
+		}
+	}
 	for name, e := range p.Environments {
 		if !nameRE.MatchString(name) {
 			return fmt.Errorf("environment name %q: use lowercase letters, digits and '-'", name)
@@ -379,6 +410,8 @@ func (p *Policy) validate() error {
 	}
 	return nil
 }
+
+var redactNameRE = regexp.MustCompile(`^[a-z0-9_-]{2,32}$`)
 
 func agentNames(as []Agent) []string {
 	out := make([]string, len(as))

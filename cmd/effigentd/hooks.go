@@ -104,7 +104,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		rule := eng.RuleFor(ag.name)
 		d := hooks.EvaluateCall(hooks.Claude, rule, call)
 		ev.Mode = string(rule.Mode)
-		ev.Actions = redactActions(d.Actions)
+		ev.Actions = d.Actions // redacted with the rest of the event (engine.scrub)
 		if d.Approve {
 			d = askApproval(ctx, eng, cp(), c, pausedCall{
 				agent: ag.name, session: in.SessionID, tool: in.ToolName, cwd: in.Cwd,
@@ -365,13 +365,4 @@ func hookCmd(args []string) {
 		return
 	}
 	os.Stdout.Write(out)
-}
-
-// redactActions removes secrets from action targets (SQL statements and
-// command lines can carry them) before they leave the machine.
-func redactActions(acts []event.Action) []event.Action {
-	for i := range acts {
-		acts[i].Target = redact.String(acts[i].Target)
-	}
-	return acts
 }

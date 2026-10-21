@@ -39,7 +39,18 @@ defaults:
     - /.git-credentials
     - /.npmrc
     - /.pypirc
+    - /.pgpass
+    - /.my.cnf
+    - /.vault-token
+    - /.config/gh/hosts.yml
+    - /.terraform.d/credentials.tfrc.json
+    - /.azure/msal_token_cache.json
+    - /.azure/accessTokens.json
+    - /.ssh/id_dsa
     - /etc/shadow
+    - /.aws/sso/cache/          # a trailing / is a directory tree: agent hooks only
+    - /.aws/cli/cache/
+    - /.config/gcloud/legacy_credentials/
   file_deny:            # path suffixes the kernel refuses to open for agents
     - /etc/shadow
   network: true         # report outbound TCP connects
@@ -49,6 +60,26 @@ defaults:
   #                                           # every 30s and blocks the addresses. Shared CDN IPs
   #                                           # can over-block or miss; network_allow is stronger.
   # require_launcher: true                    # stop agents not started with `effigentd run --agent <name> -- <cmd>`
+  #
+  # What a command or tool call does, read by the agent hooks (Claude Code,
+  # Codex, Gemini CLI; never the kernel). Kinds: protected_push, force_push,
+  # branch_delete, history_rewrite, hook_bypass, destructive_sql, sql_write,
+  # cloud_change, cloud_destroy, access, package_install, package_unlisted,
+  # package_registry, package_scripts, package_malicious, package_vulnerable,
+  # guardrail_edit, credential_read, remote_script, fs_destroy, mcp_unlisted,
+  # model_endpoint, model_api_key. kind@env limits an entry to an environment.
+  # actions_deny: [force_push, remote_script, package_malicious, destructive_sql@prod, cloud_destroy@prod]
+  # actions_approve: [protected_push, guardrail_edit, cloud_change@prod, access@prod, package_vulnerable]
+  # protected_branches: [main, "release/*"]
+  # command_deny: ["* --dangerously-skip-permissions*"]   # * anywhere
+  # file_write_deny: [/.github/workflows/, /CODEOWNERS]   # writes only; a trailing / is a tree
+  # file_write_approve: [/migrations/]
+  # package_deny: ["npm:event-stream", "pypi:colourama"]
+  # package_approve: ["npm:@acme/*"]
+  # package_allow: [...]                       # set it and every other package is package_unlisted
+  # package_registries: [https://npm.acme.internal/]
+  # mcp_allow: [github, "linear*"]
+  # model_hosts_allow: [api.anthropic.com, "bedrock-runtime.*.amazonaws.com"]
 
 agents:
   - name: claude-code
@@ -79,6 +110,20 @@ mcp_servers:
   - pattern: '([\w.]+)[-_]mcp(?:[-_]server)?\b'
   - pattern: '\bmcp-remote\b'
     name: remote
+
+# Environments for kind@env entries: the targets that make an action prod.
+# environments:
+#   prod:
+#     aws_profiles: ["prod-*"]          # --profile / AWS_PROFILE
+#     aws_accounts: ["111122223333"]    # from ~/.aws/config (sso_account_id, role_arn)
+#     kube_contexts: ["prod-*"]         # --context or current-context
+#     gcloud_projects: ["*-prod"]
+#     azure_subscriptions: [Production]
+#     terraform_workspaces: [prod]
+#     pulumi_stacks: ["*/prod"]
+#     hosts: ["*.prod.internal", 10.20.0.0/16]   # databases, hosts named in commands
+#     mcp_servers: [prod-db]
+#     match_unknown: false              # true: a cloud/database action with no known target counts as prod
 
 # An MCP server with no known agent above it (e.g. launched by an unknown
 # client) becomes its own tracked root and gets the `defaults` rule.
