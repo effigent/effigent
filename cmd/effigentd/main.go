@@ -320,6 +320,11 @@ func daemon() {
 	go tg.Run(ctx, events, func() {
 		logger.Printf("connected to Tetragon at %s", *tetragonAddr)
 		tgConnected.Store(true)
+		// Install self-protection (FR Q20) before any agent is tracked, and
+		// refresh it on every (re)connect so Tetragon's pid is current (it may
+		// have started after effigentd, or restarted). SetGuard reapplies live
+		// roots, so a later refresh takes effect.
+		eng.SetGuard(ctx, buildGuard(*stateDir, *procfs, logger.Printf))
 		if first && *procfs != "" {
 			if procs, ppid, err := procscan.Scan(*procfs); err != nil {
 				logger.Printf("procfs scan: %v", err)

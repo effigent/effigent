@@ -168,6 +168,34 @@ func translate(res *tg.GetEventsResponse) (event.Raw, bool) {
 			if len(e.GetArgs()) > 0 {
 				r.Target = fileTarget(e.GetArgs()[0].GetFileArg())
 			}
+		// Self-protection (FR Q20): an agent tree tried to tamper with
+		// effigentd/Tetragon. These hooks are always Override, so a match is
+		// always a block; surface it so the console shows the attempt.
+		case "file_permission":
+			r.Kind = event.Blocked
+			if len(e.GetArgs()) > 0 {
+				r.Target = "self-protect write " + fileTarget(e.GetArgs()[0].GetFileArg())
+			}
+		case "inode_setattr":
+			r.Kind = event.Blocked
+			if len(e.GetArgs()) > 0 {
+				r.Target = "self-protect truncate " + e.GetArgs()[0].GetPathArg().GetPath()
+			}
+		case "inode_unlink":
+			r.Kind = event.Blocked
+			if len(e.GetArgs()) > 0 {
+				r.Target = "self-protect delete " + e.GetArgs()[0].GetPathArg().GetPath()
+			}
+		case "inode_rename":
+			r.Kind = event.Blocked
+			if a := e.GetArgs(); len(a) >= 2 {
+				r.Target = "self-protect rename " + a[0].GetPathArg().GetPath() + " -> " + a[1].GetPathArg().GetPath()
+			} else if len(a) == 1 {
+				r.Target = "self-protect rename " + a[0].GetPathArg().GetPath()
+			}
+		case "task_kill":
+			r.Kind = event.Blocked
+			r.Target = "self-protect signal to effigentd/tetragon"
 		default:
 			return r, false
 		}

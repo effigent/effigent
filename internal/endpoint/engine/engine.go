@@ -74,6 +74,7 @@ type Engine struct {
 	bgUntil  time.Time                                       // break-glass window end (zero = none); while active approval lists are lifted
 	bgID     string                                          // the active grant's id, for events
 	bgTimer  *time.Timer
+	guard    *policy.SelfProtect // FR Q20 self-protection, injected into every tracked agent's kernel rule when SelfProtectionOn
 }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
@@ -291,10 +292,19 @@ func (e *Engine) ruleFor(root *Root) policy.Rule {
 		agent = ""
 	}
 	r := e.pol.RuleFor(agent)
+	var k policy.Rule
 	if e.bgActiveLocked() {
-		return r.KernelLifted()
+		k = r.KernelLifted()
+	} else {
+		k = r.Kernel()
 	}
-	return r.Kernel()
+	// Self-protection (FR Q20) rides on every tracked agent's kernel rule,
+	// unless the policy turns it off. It is injected after Kernel/KernelLifted
+	// so neither approval-lifting nor break-glass can drop it.
+	if e.guard != nil && e.pol.SelfProtectionOn() {
+		k.SelfProtect = e.guard
+	}
+	return k
 }
 
 // bgActiveLocked reports whether a break-glass window is currently open.
@@ -317,17 +327,38 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 	}
 	// Load in parallel: each policy costs a BPF program load (~400ms), and
 	// until they are in, the agent's execs are only observed, not enforced.
+	//
+	// Self-protection must win the race against the agent (FR Q20): the
+	// `effigentd run` canary only proves the -lsm doc is live (it probes a
+	// file_open deny), so if the guard docs loaded in parallel they could come
+	// up *after* the agent already started and tampered. We therefore load the
+	// guard docs first and wait, then the rest — so "-lsm is up" (canary clear)
+	// implies the guard is up too. Guard docs stay separate from -lsm because a
+	// single LSM TracingPolicy with too many hooks silently fails to enforce.
 	start := time.Now()
 	errs := make([]error, len(docs))
-	var wg sync.WaitGroup
+	guardFirst := make([]int, 0, len(docs))
+	rest := make([]int, 0, len(docs))
 	for i, d := range docs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errs[i] = e.enf.Add(ctx, d.YAML)
-		}()
+		if strings.Contains(d.Name, "-guard") {
+			guardFirst = append(guardFirst, i)
+		} else {
+			rest = append(rest, i)
+		}
 	}
-	wg.Wait()
+	loadPhase := func(idx []int) {
+		var wg sync.WaitGroup
+		for _, i := range idx {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = e.enf.Add(ctx, docs[i].YAML)
+			}()
+		}
+		wg.Wait()
+	}
+	loadPhase(guardFirst)
+	loadPhase(rest)
 	var loaded []string
 	for i, d := range docs {
 		if err := errs[i]; err != nil {
@@ -628,6 +659,20 @@ func (e *Engine) SetPolicy(ctx context.Context, raw []byte) (int, error) {
 		}
 	}
 	return len(pids), nil
+}
+
+// SetGuard installs the self-protection target (FR Q20): the pids no tracked
+// agent may signal and the path prefixes it may not write, unlink or rename.
+// Set once at startup before any agent is tracked; it also re-applies live
+// roots so a later call takes effect. A nil sp clears it.
+func (e *Engine) SetGuard(ctx context.Context, sp *policy.SelfProtect) {
+	e.mu.Lock()
+	e.guard = sp
+	pids := e.livePIDsLocked()
+	e.mu.Unlock()
+	for _, pid := range pids {
+		e.reapply(ctx, pid)
+	}
 }
 
 // EnableRescan makes every policy change look for running processes that

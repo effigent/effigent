@@ -111,6 +111,22 @@ type Rule struct {
 	// Environments is set by effigentd from the policy's top-level
 	// environments, never by policy authors.
 	Environments map[string]Environment `yaml:"-" json:"-"`
+
+	// SelfProtect is set by effigentd (never by policy authors): the kernel
+	// rules that stop processes in this agent's tree from killing effigentd /
+	// Tetragon or tampering with their binaries, state and config (FR Q20).
+	SelfProtect *SelfProtect `yaml:"-" json:"-"`
+}
+
+// SelfProtect is the daemon's self-protection, rendered into every tracked
+// agent's kernel policy (Linux): the agent's tree may not signal these pids
+// nor write / truncate / unlink / rename these paths. Always enforced, even
+// in monitor mode and during a break-glass window — an agent must never be
+// able to turn effigentd off. Scoped to the agent tree, so a non-agent root
+// shell is unaffected (the documented limit).
+type SelfProtect struct {
+	KillPIDs []uint32 // effigentd + Tetragon pids (empty when they can't be resolved, e.g. a dev daemon outside the agents' pid namespace)
+	Paths    []string // absolute files and directory prefixes to protect from writes
 }
 
 // Environment names the targets that make an action part of an environment
@@ -303,7 +319,14 @@ type Policy struct {
 	// Redact adds masks to the built-in secret redaction, applied on the
 	// machine before any event leaves it.
 	Redact Redaction `yaml:"redact,omitempty"`
+	// SelfProtection turns kernel self-protection on (default) or off (FR Q20):
+	// rules that stop an agent tree from stopping effigentd / Tetragon or
+	// editing their binaries, state and hook config. nil = on.
+	SelfProtection *bool `yaml:"self_protection,omitempty" json:"self_protection,omitempty"`
 }
+
+// SelfProtectionOn reports whether kernel self-protection is enabled (default on).
+func (p *Policy) SelfProtectionOn() bool { return p.SelfProtection == nil || *p.SelfProtection }
 
 // Redaction is the workspace's own masks: patterns (RE2) for internal ids,
 // hostnames, customer data, and the optional PII set (emails, phone, card

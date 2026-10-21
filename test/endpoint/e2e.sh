@@ -140,7 +140,50 @@ check "$OUT/events.jsonl" '"type":"blocked".*"target":"connect 8.8.8.8:53".*DNS 
 docker rm -f eff-domain >/dev/null; sleep 2
 api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
 
-echo "== 7. backend"
+echo "== 7. self-protection (FR Q20): an agent tree can't tamper with effigentd/Tetragon/hook files"
+# default.yaml leaves self_protection unset (= on). effigentd run makes the
+# guard live before the agent acts, so this isn't a race. We assert on file
+# content, not exit codes (a blocked '>' can leave an empty new file behind).
+api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
+# The protected files are baked into the image, i.e. in overlayfs's read-only
+# LOWER layer. Opening a lower-layer file with O_TRUNC copies it up EMPTY before
+# the LSM truncate hook runs, so '> file' would empty it even though the guard
+# refuses the open (a container-only quirk; see §5). Real deployment paths
+# (/usr/local/bin, /var/lib/effigent, host /etc) are on a writable filesystem.
+# Force the two content-checked files up into the writable layer first, in the
+# outer (untracked, non-agent) shell before the agent starts, so the test
+# exercises a writable-layer file as on a real host.
+COPYUP='cp /etc/claude-code/managed-settings.json /tmp/ms && cp /tmp/ms /etc/claude-code/managed-settings.json; cp /var/lib/effigent/policy.json /tmp/ps && cp /tmp/ps /var/lib/effigent/policy.json;'
+TAMPER='
+  echo HACK >  /etc/claude-code/managed-settings.json 2>/dev/null; echo "trunc exit=$?"
+  stat -c "trunc-size=%s" /etc/claude-code/managed-settings.json 2>/dev/null
+  echo HACK >> /var/lib/effigent/policy.json 2>/dev/null;          echo "append exit=$?"
+  rm -f /usr/local/bin/effigentd 2>/dev/null;                      echo "rm exit=$?"
+  mv /etc/cursor/hooks.json /tmp/stolen 2>/dev/null;               echo "mv-away exit=$?"
+  echo junk > /tmp/j; mv /tmp/j /var/lib/effigent/policy.json 2>/dev/null; echo "mv-over exit=$?"
+  echo "settings=[$(cat /etc/claude-code/managed-settings.json)]"
+  echo "state=[$(cat /var/lib/effigent/policy.json)]"
+  [ -e /usr/local/bin/effigentd ] && echo binary-intact || echo binary-GONE
+  [ -e /etc/cursor/hooks.json ]   && echo hooks-intact  || echo hooks-GONE'
+docker run --rm effigent-scenario bash -c "$COPYUP EFFIGENT_RUN_QUIET=1 effigentd run --agent claude -- bash -c '$TAMPER'" > "$OUT/selfprotect.txt" 2>&1; sleep 2
+sed 's/^/        /' "$OUT/selfprotect.txt"
+check "$OUT/selfprotect.txt" 'settings=\[SETTINGS-ORIG\]' "protected hook config not overwritten by the agent"
+check "$OUT/selfprotect.txt" 'state=\[STATE-ORIG\]'       "protected state file not appended/renamed-over by the agent"
+check "$OUT/selfprotect.txt" 'binary-intact'              "effigentd binary not deleted by the agent"
+check "$OUT/selfprotect.txt" 'hooks-intact'               "hook config not renamed away by the agent"
+check "$OUT/events.jsonl" '"type":"blocked".*self-protect' "self-protection block reported as an event"
+# A non-agent process (not a tracked agent tree) is unaffected: the guard is scoped.
+docker run --rm effigent-scenario bash -c 'echo CHANGED > /etc/claude-code/managed-settings.json; cat /etc/claude-code/managed-settings.json' > "$OUT/nonagent.txt" 2>&1
+check "$OUT/nonagent.txt" 'CHANGED' "a non-agent process can still write the same path (guard is scoped to agent trees)"
+# self_protection: false removes the guard.
+{ echo 'self_protection: false'; cat internal/endpoint/policy/default.yaml; } > "$OUT/noselfprotect.yaml"
+api -X PUT --data-binary @"$OUT/noselfprotect.yaml" $API/policy > "$OUT/put-nosp.json"
+check "$OUT/put-nosp.json" '"ok": true' "policy with self_protection: false accepted"
+docker run --rm effigent-scenario bash -c "EFFIGENT_RUN_QUIET=1 effigentd run --agent claude -- bash -c 'echo OFF > /etc/claude-code/managed-settings.json 2>/dev/null; cat /etc/claude-code/managed-settings.json'" > "$OUT/sp-off.txt" 2>&1; sleep 1
+check "$OUT/sp-off.txt" 'OFF' "with self_protection off the agent can write the protected path"
+api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
+
+echo "== 8. backend"
 sleep 6
 check "$OUT/backend.log" "received batch"                            "backend received batches (bearer token)"
 check "$OUT/backend.jsonl" '"type":"blocked"'                         "blocked events shipped to backend"
