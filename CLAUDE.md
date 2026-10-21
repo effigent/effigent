@@ -200,7 +200,8 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   Events: approval.requested, approval.decided, action.blocked (opt-in, 60/min cap,
   `dropped` counter), endpoint.enrolled, endpoint.revoked, policy.published,
   pricing_leaks.runaway_cost (opt-in, see 2d), endpoint.hooks_missing / endpoint.offline /
-  endpoint.online (opt-in, see 2e), test.
+  endpoint.online (opt-in, see 2e), anomaly.first_seen (opt-in, 60/min cap like
+  action.blocked, see 2h), test.
   `emit()` only enqueues (`cp.webhook_deliveries`); the worker (started by `Handler()`)
   claims due rows with `for update skip locked` + a 60s lease and retries 10s, 1m, 5m,
   30m, 2h, 6h; 4xx except 408/429 are final. `EFFIGENT_DEV_INSECURE_WEBHOOKS=1` (local
@@ -425,6 +426,69 @@ carries them (`actions`), matched or not; `engine.scrub` redacts their targets.
   hook env through a real hook process, daemon and local control plane. OSV's response shape was
   checked against the live API (2026-10-21); the live lookup isn't in an automated test.
 
+## 2h. Inventory, posture report, baselines
+
+All control plane (no effigentd change); everything is read from rollups, never a scan of `cp.events`.
+- Ingest rollups (migration 016, `store/inventory_rollup.go`, run by `Store.Ingest` in the batch's
+  transaction after `agent_activity_daily`): `cp.agent_inventory` (machine + agent: first/last seen,
+  hook vs kernel events = body without/with `process`, latest non-empty `mode`), `cp.mcp_activity_daily`
+  (day, machine, agent, OS user, server, tool, source `hook` from `mcp__server__tool` targets | `kernel`
+  from `via: mcp:<label>`; `unlisted` = the event carries an `mcp_unlisted` action),
+  `cp.enforcement_daily` (blocked / would_block / file_open / approval types per normalized rule:
+  list names as is, Tetragon policy names → `kernel_exec|kernel_file|kernel_connect` by target, else
+  `other`; `detail` = the action kind for `actions_*`). Migration 016 backfills 35 days with the same
+  statements; `inventory_gen_test.go` keeps them in step. `FirstRollupDay` (016's applied_at − 35 d) adds
+  a report note when a period starts earlier.
+- `GET /api/v1/inventory?days=1…365` (default 30; read scope): `agents` (per machine, coverage from
+  `inventory.Coverage`: `enforced` by hooks [hook reported installed, or hook events from a build that
+  doesn't report] and/or kernel [sensor tetragon or kernel events], `hooks_off`, `detection_only` [no
+  hook exists: aider, opencode, goose…, no kernel], `unmanaged` [mode unmanaged: Claude Cowork]),
+  `mcp_servers` (tools, agents, machines, people, sources, orphan = `mcp-<name>` agent from
+  `track_orphan_mcp`, `allowlist` from the latest base policy body's `RuleFor(agent).MCPAllow`, per-machine
+  `uses`), `unmanaged_people` (`inventory.Unmanaged`: Pricing Leaks seats + usage in the window, resolved
+  through the People directory, with no `agent_activity_daily` activity resolving to them: `no_machine`
+  or `no_activity`), `spend_vendors`.
+- Baselines (migration 017, `inventory/baseline.go` pure, `store/baselines.go`): per machine + agent +
+  kind (`binary`, `host`, `mcp`, `action` incl. `kind@env`) the values seen (`cp.baseline_keys`,
+  `cp.baseline_values`). Extraction: kernel exec targets / `exec <path>` blocks → path, kernel connects →
+  IP (loopback dropped), hook `Bash` → program names (`inventory.Programs`: separators, wrappers, no
+  variables/loops) + URL hosts, `WebFetch` → host, `mcp__server__*` / `via mcp:` → server, `actions[]` →
+  kind. A value never seen, or last seen > 30 days before, is a signal in `cp.anomalies` — except during
+  a 7-day warm-up from the agent's `agent_inventory.first_at` on that machine. Caps: 2000 binaries,
+  1000 hosts, 200 MCP servers, 200 action kinds per key (past the cap nothing new is stored or signalled,
+  `overflow` counts it); ≤ 50 signals per key per UTC day (`suppressed`); values clipped to 300 bytes;
+  signals pruned after 180 days (hourly, in the report worker); baselines themselves aren't pruned.
+  Applied in the ingest transaction; a replayed batch adds nothing.
+- `GET /api/v1/anomalies` (read scope): `kind` (comma list), `agent`, `endpoint`, `q`, `since`,
+  cursor `before=<unixnanos>_<id>`, `limit` ≤ 500 → `{anomalies (+hostname, owner, person), next_before,
+  kinds, caps, window_days, warmup_days, daily_signal_cap, baselines, webhook_event}`. Each signal emits
+  webhook `anomaly.first_seen` (`{anomaly, endpoint_id, hostname, review_url}`), capped per webhook.
+- Posture report (`server/report.go`): `GET /api/v1/report?days=7|30|90` (UTC days through today; read
+  scope): machines (enrolled, new, seen, online now by the endpoint-health threshold, hook reports and
+  problems), agents in use / by person (People directory) / by team (`cp.endpoints.teams`), enforcement by
+  kind + daily, approvals (`cp.approvals`: requested, approved = approved|used, denied, expired incl.
+  pending past expiry, median time to decide, self-approval refusals from the audit trail), exceptions
+  (latest source), policy versions + proposals by state, first-seen counts, Pricing Leaks totals (as of
+  now) + episodes found/resolved in the period. `break_glass` is null until a feature registers a
+  `ReportSection` with key `break_glass` (`RegisterReportSection`); other keys go to `sections`.
+- Report email: `GET|PUT /api/v1/report/schedule` (`{enabled, cadence weekly|monthly, emails ≤ 20}`, PUT
+  people only, audited `report.schedule.update` before/after), `POST /api/v1/report/send` (now, audited
+  `report.send`). `cp.report_schedules.next_at`: Mondays 08:00 UTC (last 7 days) / the 1st 08:00 UTC
+  (last 30 days); `runReportSchedules` ticks every minute and claims due rows with one `update … where
+  tenant in (… for update skip locked) returning` that moves `next_at` (once across instances), mails each
+  recipient (schedule emails, else the notification emails) the headline numbers + a link to
+  `/report?days=N`, stores `last_result`, audits `report.email` (actor via `system`). No email configured →
+  recorded `off: …`, nothing retried.
+- Console: Monitor → Inventory (`/inventory?tab=agents|mcp|people`), New behaviour
+  (`/anomalies?kind=&endpoint=`, the webhook's review_url), Posture report (`/report?days=`, print CSS in
+  `theme.css` hides the chrome). Types `lib/api-inventory.ts`, Demo Mode `lib/inventory-fixture.ts`.
+- Tests: `inventory/inventory_test.go` (Programs, Extract, Decide warm-up / cap / 30-day re-fire /
+  daily cap, Coverage, Unmanaged), `server/inventory_test.go` (DB: real ingest → rollups, inventory API,
+  warm-up then signals + paging + webhooks, report counts, schedule validation + claim once under 4
+  concurrent claimers). The backfill was checked equal to the ingest rollups on the test DB by hand.
+- Deploy order: control plane (migrations 016, 017; 016's backfill scans 35 days of `cp.events` once)
+  → console.
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -581,6 +645,27 @@ npm run -w @effigent/site build                     # site
   `effigentd run` in the agent image, verified 2026-10-18 on kind). Autoscaled nodes need a valid token in
   the Secret. Docker Desktop: a bind path that doesn't exist on the Mac is created in the VM, while
   `/var/lib` itself maps to the Mac's `/private/var/lib`.
+- Inventory, baselines, posture report (2h):
+  - New behaviour is novelty detection, not prompt-injection or intent detection: it says an agent did
+    something new on that machine, not why; an attacker reusing tools the agent already uses is invisible.
+  - Baselines are per machine + agent, not per person or fleet-wide; a new machine (or agent on it)
+    learns silently for 7 days, so anything it does in that week becomes "normal". Past a cap (2000
+    programs, 1000 hosts, 200 MCP servers / action kinds per key) nothing new is learned or signalled
+    there; ≤ 50 signals per key per day, the rest only counted.
+  - Programs from hooks are command names read from the command line (`inventory.Programs`: no scripts,
+    aliases, functions or variables followed); from the kernel full paths, so the same program can signal
+    once in each form. Hosts from hooks are names in commands / WebFetch; from the kernel IPs.
+  - MCP tool names come from hooks only (kernel MCP events carry the server label, not the tool); agents
+    without hooks show their MCP servers only when effigentd tracks them as a process.
+  - The `mcp_allow` column reads the latest base policy body, not each machine's compiled policy;
+    `unlisted_calls` (hook `mcp_unlisted`) is what each machine actually decided.
+  - Unmanaged people depend on the People mapping and the connected / imported Pricing Leaks vendors: an
+    unmapped work email shows as unmanaged even if that person has an enrolled machine.
+  - Migration 016 backfills 35 days; older periods start empty (the report says so). The report's spend
+    numbers are as of now (the latest rollup), not as of the period; `break_glass` is null until a
+    break-glass feature registers its section. Report email needs SMTP or SES (else recorded `off`).
+  - Not checked in a browser: the print layout (only the `@media print` CSS was written) and a real
+    report email.
 
 ## 6. Conventions
 
