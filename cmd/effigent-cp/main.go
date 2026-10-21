@@ -81,6 +81,12 @@ func main() {
 		srv.Archive = a
 	}
 	srv.RetentionDays, _ = strconv.Atoi(os.Getenv("EFFIGENT_EVENT_RETENTION_DAYS"))
+	// Machines silent this long are reported offline (default 5m, at least 2m; tenants may set their own).
+	if v := os.Getenv("EFFIGENT_ENDPOINT_OFFLINE_AFTER"); v != "" {
+		if srv.OfflineAfter, err = time.ParseDuration(v); err != nil {
+			logger.Fatalf("EFFIGENT_ENDPOINT_OFFLINE_AFTER: %v", err)
+		}
+	}
 	// Slack approval messages: off until the shared (B2B) Slack app exists.
 	srv.SlackEnabled = os.Getenv("EFFIGENT_SLACK") == "1"
 	// Slack app credentials are sealed with this key; without it Slack apps can't be connected.
