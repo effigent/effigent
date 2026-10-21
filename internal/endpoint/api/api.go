@@ -27,6 +27,9 @@ type Server struct {
 	Stats  func() map[string]any
 	// Hook answers an agent's pre-tool hook (POST /hook/{agent}); nil disables it.
 	Hook func(ctx context.Context, c HookCall) ([]byte, error)
+	// BreakGlass applies an admin-issued offline break-glass code (POST
+	// /break-glass); nil disables it (not enrolled / hooks disabled).
+	BreakGlass func(ctx context.Context, code, osUser string) ([]byte, error)
 	// Managed is set when the endpoint is enrolled: policy then comes only
 	// from the control plane, and local PUT /policy is refused.
 	Managed bool
@@ -65,6 +68,26 @@ func (s *Server) Handler() http.Handler {
 			OSUser: r.Header.Get("X-Effigent-OS-User"), Env: agentEnv(r.Header.Get("X-Effigent-Agent-Env"))})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	})
+	mux.HandleFunc("POST /break-glass", func(w http.ResponseWriter, r *http.Request) {
+		if s.BreakGlass == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]any{"ok": false, "message": "break-glass needs an enrolled endpoint"})
+			return
+		}
+		var req struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Code == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "body must be {\"code\":\"...\"}"})
+			return
+		}
+		out, err := s.BreakGlass(r.Context(), req.Code, r.Header.Get("X-Effigent-OS-User"))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": err.Error()})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

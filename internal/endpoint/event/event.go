@@ -28,6 +28,12 @@ const (
 	// at start that the previous run ended without one (crash, kill -9, power).
 	DaemonStop           Type = "daemon_stop"
 	DaemonUncleanRestart Type = "daemon_unclean_restart"
+
+	// Break-glass (FR Q18): a signed offline code was activated on this
+	// machine (BreakGlassStart, reported to the control plane which marks the
+	// code used), and each approval-required call it then lets through.
+	BreakGlassStart Type = "break_glass_start"
+	BreakGlass      Type = "break_glass"
 )
 
 // Proc identifies one process. ExecID is stable across pid reuse (Tetragon).

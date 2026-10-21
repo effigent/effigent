@@ -63,6 +63,9 @@ func main() {
 		case "install-hooks":
 			installHooksCmd(os.Args[2:])
 			return
+		case "break-glass":
+			breakGlassCmd(os.Args[2:])
+			return
 		}
 	}
 	if runAsServiceIfNeeded(daemon) {
@@ -260,9 +263,14 @@ func daemon() {
 	}
 
 	if *listen != "" {
+		var bg func(context.Context, string, string) ([]byte, error)
+		if cp != nil {
+			bg = breakGlassHandler(eng, func() *cpclient.Client { return client }, *stateDir)
+		}
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
-			Hook: hookHandler(eng, func() *cpclient.Client { return client }),
+			Hook:       hookHandler(eng, func() *cpclient.Client { return client }),
+			BreakGlass: bg,
 			Stats: func() map[string]any {
 				out := map[string]any{
 					"tetragon_connected": tgConnected.Load(),
@@ -273,6 +281,9 @@ func daemon() {
 				}
 				if vms != nil {
 					out["unmanaged_agents"] = vms.Running()
+				}
+				if id, until, active := eng.BreakGlass(); active {
+					out["break_glass"] = map[string]any{"id": id, "until": until}
 				}
 				if cp != nil {
 					out["endpoint_id"], out["control_plane"], out["tenant"] = cp.EndpointID, cp.Server, cp.Tenant

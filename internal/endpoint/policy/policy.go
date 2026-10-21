@@ -217,9 +217,27 @@ func (r Rule) NeedsApproval() bool {
 //
 // Directory entries (a trailing /) are left out: the kernel matches a path
 // suffix, and only hooks match everything under a directory.
-func (r Rule) Kernel() Rule {
+func (r Rule) Kernel() Rule { return r.kernel(false) }
+
+// KernelLifted is Kernel while a break-glass window is active (FR Q18): the
+// approval lists are NOT folded into denies (a match would pause and ask, but
+// the control plane is unreachable, so break-glass lets it run). Deny lists
+// are untouched — break-glass never lifts a deny. In allowlist mode the
+// programs that would need approval become allowed.
+func (r Rule) KernelLifted() Rule { return r.kernel(true) }
+
+func (r Rule) kernel(lift bool) Rule {
 	k := r
 	k.FileAlert = filePaths(r.FileAlert)
+	if lift {
+		// Approvals lifted: the kernel enforces only the deny lists and the
+		// allowlist (plus any program that needed approval, now allowed).
+		k.FileDeny = filePaths(r.FileDeny)
+		if r.Mode == Allowlist && len(r.ExecApprove) > 0 {
+			k.ExecAllow = append(append([]string(nil), r.ExecAllow...), r.ExecApprove...)
+		}
+		return k
+	}
 	if !r.NeedsApproval() {
 		k.FileDeny = filePaths(r.FileDeny)
 		return k

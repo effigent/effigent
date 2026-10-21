@@ -34,6 +34,7 @@ var webhookEvents = []string{
 	"endpoint.enrolled", "endpoint.revoked", "policy.published", "policy.proposed",
 	"pricing_leaks.runaway_cost",
 	"endpoint.hooks_missing", "endpoint.offline", "endpoint.online",
+	"break_glass.created", "break_glass.used",
 }
 
 var defaultWebhookEvents = []string{"approval.requested", "approval.decided"}

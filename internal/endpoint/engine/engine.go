@@ -71,6 +71,9 @@ type Engine struct {
 	procfs   string                                          // to read each agent's own resolv.conf
 	empty    map[string]bool                                 // domain_deny names currently resolving to nothing (reported once)
 	scan     func() ([]event.Proc, map[uint32]uint32, error) // running processes, once rescans are enabled
+	bgUntil  time.Time                                       // break-glass window end (zero = none); while active approval lists are lifted
+	bgID     string                                          // the active grant's id, for events
+	bgTimer  *time.Timer
 }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
@@ -279,12 +282,25 @@ func (e *Engine) stopUnlaunched(root *Root, r event.Raw) {
 }
 
 // ruleFor is the rule the kernel enforces for a tracked agent: approval lists
-// it can see are denies there (only a hook can pause and ask).
+// it can see are denies there (only a hook can pause and ask). While a
+// break-glass window is active (FR Q18), those approval lists are lifted
+// instead; deny lists are never lifted. Caller holds e.mu.
 func (e *Engine) ruleFor(root *Root) policy.Rule {
+	agent := root.Agent
 	if root.Orphan {
-		return e.pol.RuleFor("").Kernel()
+		agent = ""
 	}
-	return e.pol.RuleFor(root.Agent).Kernel()
+	r := e.pol.RuleFor(agent)
+	if e.bgActiveLocked() {
+		return r.KernelLifted()
+	}
+	return r.Kernel()
+}
+
+// bgActiveLocked reports whether a break-glass window is currently open.
+// Caller holds e.mu.
+func (e *Engine) bgActiveLocked() bool {
+	return !e.bgUntil.IsZero() && time.Now().Before(e.bgUntil)
 }
 
 // apply loads the new policies before removing the old ones, so a reload

@@ -180,6 +180,9 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 					s.Logf("endpoint %s: record stop: %v", ep.ID, err)
 				}
 			}
+			if e.Type == "break_glass_start" {
+				s.recordBreakGlassUse(r.Context(), ep, e.Time, e.Body)
+			}
 		}
 	}
 	_ = s.Store.Heartbeat(r.Context(), ep.ID, ep.PolicyVersion, "")
