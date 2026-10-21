@@ -46,7 +46,8 @@ useradd -m agent
 # the agent's session: Copilot sets GITHUB_ACTIONS; the token isn't in the hook's environment
 echo "--curl"; call 'curl -s https://x.example' | su agent -c 'unset EFFIGENT_CLOUD_TOKEN; cd /workspace && GITHUB_ACTIONS=true sh .effigent/cloud-hook.sh copilot'; echo " rc=$?"
 echo "--ls"; call 'ls -la' | su agent -c 'unset EFFIGENT_CLOUD_TOKEN; cd /workspace && GITHUB_ACTIONS=true sh .effigent/cloud-hook.sh copilot'; echo " rc=$?"
-echo "--local"; call 'curl -s x' | su agent -c 'unset EFFIGENT_CLOUD_TOKEN; cd /workspace && sh .effigent/cloud-hook.sh copilot'; echo " rc=$?"
+echo "--local"; call 'curl -s x' | su agent -c 'unset EFFIGENT_CLOUD_TOKEN; cd /workspace && EFFIGENT_STATE_DIR=/nonexistent sh .effigent/cloud-hook.sh copilot'; echo " rc=$?"
+echo "--marker"; call 'curl -s x' | su agent -c 'unset EFFIGENT_CLOUD_TOKEN; cd /workspace && sh .effigent/cloud-hook.sh copilot'; echo " rc=$?"
 echo "--root"; call 'curl -s https://x.example' | (unset EFFIGENT_CLOUD_TOKEN; cd /workspace && GITHUB_ACTIONS=true sh .effigent/cloud-hook.sh copilot); echo " rc=$?"
 rm /usr/local/bin/effigentd
 echo "--missing"; call 'ls' | su agent -c 'unset EFFIGENT_CLOUD_TOKEN; cd /workspace && GITHUB_ACTIONS=true sh .effigent/cloud-hook.sh copilot' 2>&1; echo " rc=$?"
@@ -59,6 +60,7 @@ grep -q -- '-rw-r--r--.* root root .*endpoint.json' "$W/out.txt" && ok "state sh
 sec curl | grep -q '"permissionDecision":"deny"' && ok "non-root agent: curl denied by the cloud policy" || bad "curl: $(sec curl)"
 sec ls | grep -q '^{} rc=0' && ok "non-root agent: ls runs" || bad "ls: $(sec ls)"
 sec local | grep -q '^ rc=0' && ok "outside a cloud session: no decision, no output" || bad "local: $(sec local)"
+sec marker | grep -q '"permissionDecision":"deny"' && ok "no vendor marker, but the setup step's state: decided (curl denied)" || bad "marker: $(sec marker)"
 sec root | grep -q '"permissionDecision":"deny"' && ok "root agent: curl denied" || bad "root: $(sec root)"
 sec missing | grep -q 'not installed in this cloud environment' && sec missing | grep -q 'rc=2' && ok "effigentd missing in a cloud session: blocked (exit 2)" || bad "missing: $(sec missing)"
 curl -s "${A[@]}" "http://$CP/api/v1/events?paged=1&limit=100" | python3 -c '

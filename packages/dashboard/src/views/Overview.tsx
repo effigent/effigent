@@ -74,7 +74,7 @@ export function Overview() {
 
   const since = now - RANGE_MS[range];
   const evs = consoleEvents.filter((e) => (e.at ?? 0) >= since);
-  const eps = endpointRows.filter((e) => !e.revoked);
+  const eps = endpointRows.filter((e) => !e.revoked && !e.cloud); // cloud environments are idle between sessions
   const online = eps.filter((e) => e.status === 'online').length;
 
   // Agents = distinct (agent, endpoint) pairs with events in the range.

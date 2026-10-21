@@ -450,8 +450,9 @@ Full write-up, vendor research with links: `docs/cloud-agents.md`.
   step. `https://effigent.ai/cloud-setup.sh` (`packages/site/public/cloud-setup.sh`) downloads +
   checksums effigentd and runs it with `--shared` (sudo when available).
 - `deploy/cloud/cloud-hook.sh` is committed to customer repos as `.effigent/cloud-hook.sh`. It decides
-  only in a cloud session (`CLAUDE_CODE_REMOTE=true`, Copilot `GITHUB_ACTIONS=true`, or the token in the
-  env) and exits 2 there when effigentd is missing. The console card (`components/CloudEnvironments.tsx`)
+  only in a cloud session and exits 2 there when effigentd is missing. Session markers:
+  `CLAUDE_CODE_REMOTE=true`; Copilot `GITHUB_COPILOT_API_TOKEN`, or `GITHUB_ACTIONS=true` (unverified in
+  the agent phase); the token in the env; or the setup step's `endpoint.json`, owned by root or the caller. The console card (`components/CloudEnvironments.tsx`)
   carries a copy: keep them in step.
 - `effigentd hook copilot` (`hooks.ParseCopilot`, policy agent `copilot-agent`) reads `preToolUse`
   (toolArgs as a JSON string, Copilot tool names) and `PreToolUse` (Claude's shape). Its answer is the
@@ -648,6 +649,8 @@ npm run -w @effigent/site build                     # site
   the Copilot cloud agent and Cursor cloud agents run repo hooks; Codex cloud and Devin are not covered.
   - Hooks: the agent can edit the repository's hook files (`file_write_deny` on them catches what the hook
     sees; Claude's `allowManagedHooksOnly` is the only vendor-enforced hook).
+  - `EFFIGENT_CLOUD_TOKEN` in a developer's own shell turns their local hooks into remote mode.
+  - `--shared` writes the token 0644 under `/var/tmp`: for single-tenant session VMs only.
   - Token: the agent can read it. With it, anything can fetch that environment's policy, post its events
     and file approvals, but not decide them.
   - Fail-open paths: Copilot lets a call run when the hook times out (effigentd answers within 20s), and a

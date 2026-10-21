@@ -13,7 +13,7 @@ export function Sidebar({ open, onClose, collapsed = false, onToggle }: { open: 
   const { pending, env, dispatch } = useStore();
   const { endpointRows, loaded, fixture, pendingApprovals } = useLive();
   const { demo } = useDemoMode();
-  const eps = endpointRows.filter((e) => !e.revoked);
+  const eps = endpointRows.filter((e) => !e.revoked && !e.cloud); // cloud environments are idle between sessions
   const online = eps.filter((e) => e.status === 'online').length;
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`));
 

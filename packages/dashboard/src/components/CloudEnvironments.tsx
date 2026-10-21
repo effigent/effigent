@@ -31,9 +31,12 @@ agent="$1"
 cloud=
 case "$agent" in
   claude) [ "\${CLAUDE_CODE_REMOTE:-}" = true ] && cloud=1 ;;  # Claude Code on the web
-  copilot) [ "\${GITHUB_ACTIONS:-}" = true ] && cloud=1 ;;     # Copilot cloud agent (GitHub Actions)
+  copilot) [ -n "\${GITHUB_COPILOT_API_TOKEN:-}" ] || [ "\${GITHUB_ACTIONS:-}" = true ] && cloud=1 ;;  # Copilot cloud agent
 esac
-[ -n "\${EFFIGENT_CLOUD_TOKEN:-}" ] && cloud=1                 # Cursor: the Runtime Secret
+[ -n "\${EFFIGENT_CLOUD_TOKEN:-}" ] && cloud=1                 # the token (Cursor: the Runtime Secret)
+# The setup step ran here (effigentd cloud-setup), if the state is root's or this user's:
+f="\${EFFIGENT_STATE_DIR:-/var/tmp/effigent-cloud}/endpoint.json"
+if [ -r "$f" ] && { [ -O "$f" ] || [ -n "$(find "$f" -prune -user 0 2>/dev/null)" ]; }; then cloud=1; fi
 [ -n "$cloud" ] || exit 0
 if command -v effigentd >/dev/null 2>&1; then
   exec effigentd hook "$agent" --remote

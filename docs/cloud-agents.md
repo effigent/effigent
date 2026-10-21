@@ -106,7 +106,13 @@ The control plane still makes every other decision: what the policy is, approval
 - Runs `cloud-setup --shared` with the token from `$EFFIGENT_CLOUD_TOKEN`.
 
 The repository commits `.effigent/cloud-hook.sh` (`deploy/cloud/cloud-hook.sh`). Every vendor's hook config runs it.
-- It decides only in a cloud session: `CLAUDE_CODE_REMOTE=true`, Copilot under `GITHUB_ACTIONS=true`, or `EFFIGENT_CLOUD_TOKEN` set. A developer's laptop that clones the repo is left to its own effigentd.
+- It decides only in a cloud session. The markers:
+  - `CLAUDE_CODE_REMOTE=true`.
+  - Copilot's `GITHUB_COPILOT_API_TOKEN` or `GITHUB_ACTIONS=true`.
+  - `EFFIGENT_CLOUD_TOKEN` set.
+  - The setup step's `endpoint.json`, when owned by root or the caller (so another user can't plant one).
+  - A developer's laptop that clones the repo is left to its own effigentd.
+  - `CLAUDE_CODE_REMOTE` and `GITHUB_COPILOT_API_TOKEN` are documented. `GITHUB_ACTIONS` in the Copilot agent phase is unverified.
 - In a cloud session without effigentd it blocks with exit 2.
 
 Copilot answers: `hooks.ParseCopilot` reads both payload spellings and maps Copilot's tools onto the canonical ones:
@@ -166,7 +172,10 @@ The console builds the snippets with the real token and control plane host: Mach
   - Copilot lets a call run when the hook times out. Effigent stays inside 20 s; set `timeoutSec` above that.
   - On Claude Code a hook that exits with an error other than 2 doesn't block. `cloud-hook.sh` exits 2 when effigentd is missing, and `effigentd hook` prints a deny on every internal failure.
   - Cursor needs `failClosed: true`.
-  - If the setup step didn't run and the session has no cloud marker (Cursor without its secret), the wrapper can't tell it is in the cloud, and the call runs.
+  - If the setup step didn't run and the session has no other marker (Cursor without its secret), the wrapper can't tell it is in the cloud, and the call runs.
+- **Local side effects.**
+  - `EFFIGENT_CLOUD_TOKEN` set in a developer's own shell turns their local hooks into remote mode, under the cloud environment's identity.
+  - `--shared` (what `cloud-setup.sh` uses) writes the token world-readable (0644) in `/var/tmp/effigent-cloud`. That is fine in a single-tenant session VM; don't run it on a shared machine.
 - **Copilot specifics.**
   - Its tool argument fields aren't documented. The spellings read are the likely ones and are not verified against a live agent.
   - Whether the `copilot` environment's secrets reach hooks isn't documented, which is why `cloud-setup` saves the credentials in the setup step.
