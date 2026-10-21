@@ -26,7 +26,7 @@ Priority items (1, 2, 4, 5, 6, 16, 17, 21) come first.
 
 ## Priority items
 
-### 1. SQL awareness: **Partly**
+### 1. SQL awareness: **Yes** for agent commands and MCP tools, **No** for code that connects directly
 **Before this round:** no. `psql*` could be gated as a command and MCP database tools by name.
 Nothing read the statements.
 
@@ -51,9 +51,15 @@ Where it finds the SQL:
 Policy can deny or require approval on these kinds, and only for prod targets if you want
 (see 2): `actions_deny: [destructive_sql@prod]`, `actions_approve: [sql_write@prod]`.
 
-**MCP database tools:** gated by server name (`tool_approve: [mcp__postgres__*]`, `mcp_allow`).
-`access@prod` covers every call to a server listed under the prod environment. The SQL inside an
-MCP tool's input is not parsed yet.
+**MCP database tools (new):** the SQL inside the tool call is read too.
+- It covers Postgres, Supabase, Neon, MySQL, SQLite, Snowflake, ClickHouse, BigQuery, DBHub and
+  others. Argument names were taken from the servers' own source code.
+- Statements are classified the same way, with the MCP server as the target, so
+  `destructive_sql@prod` applies when the server is listed under `environments.prod.mcp_servers`.
+- Neon branch and project deletes count as destructive. MongoDB and Redis tools are classified
+  by tool name.
+- **Limit:** detection relies on server and tool names. A database server you named `notes`
+  with a `query` tool isn't read.
 
 **Code that connects directly** (an app, an ORM, a script in Python/Node): no SQL visibility.
 The kernel sees the connection, not the statement. The control there is the network: on Linux,
@@ -63,7 +69,8 @@ in the kernel.
 **Limits:** SQL built at run time, `psql` fed by another program's output, stored procedures,
 and GUI clients are invisible.
 
-**Where:** `internal/endpoint/hooks/sql.go`, `bashact.go`; tests in `hooks/actions_test.go`.
+**Where:** `internal/endpoint/hooks/sql.go`, `bashact.go`, `mcpsql.go`; tests in
+`hooks/actions_test.go`, `mcpsql_test.go`.
 
 ### 2. Prod vs non-prod: **Yes** (hooks), **Partly** (kernel)
 **New:** policy defines environments by their targets:
@@ -298,18 +305,24 @@ A Linux machine that never had hooks doesn't alert.
   source (it skips our file silently), and a Gemini hook disabled in a project's own
   `.gemini/settings.json`.
 
-### 8. Discovery: **Partly**
-**Today:**
-- Agents detected on enrolled machines, including unknown MCP servers (`track_orphan_mcp`).
-- Claude Cowork VMs reported as "not under policy".
-- Agent processes on Linux tracked from their exec.
-- The console's Agent Graph shows them.
-- **New:** `mcp_unlisted` flags calls to servers outside `mcp_allow`.
+### 8. Discovery: **Yes** on enrolled machines, **Partly** beyond them
+**New: Monitor → Inventory** (`GET /api/v1/inventory`, also readable with API keys):
+- **Agents:** every agent per machine with its coverage: enforced, hooks off, detection only
+  (agents without a hook, such as Aider), or unmanaged (Claude Cowork).
+- **MCP servers:** per machine, agent and person, with the tools used, first and last seen,
+  orphan servers, whether each is in `mcp_allow`, and calls to unlisted servers.
+- **Unmanaged people:** someone with a Cursor, Copilot, Claude or OpenAI seat or usage (from
+  Pricing Leaks) but no enrolled machine or no activity. This is how unenrolled machines show
+  up.
 
-**Gaps:**
-- Machines that should be enrolled but aren't: Effigent only knows enrolled machines.
-  Compare against your MDM / asset inventory.
-- No MCP inventory page yet.
+**Already there:** Claude Cowork VMs reported as "not under policy", agent processes on Linux
+tracked from their exec, the Agent Graph.
+
+**Limits:**
+- Unmanaged people are only as good as the People mapping and the vendor connectors.
+- An unenrolled machine whose user has no vendor seat is invisible. Compare against your MDM
+  for that.
+- MCP tool names come only from hooks.
 
 ### 9. Server-side bots: **Partly**
 A Windmill integration (resource type, scripts, Slack/Teams approval flow) is in
@@ -341,16 +354,43 @@ values).
 
 Effigent doesn't issue short-lived credentials.
 
-### 13. Event outcomes: **Partly**
-- **Recorded today:** blocked (with the rule), would_block, approval pending, approved, denied.
-- **Not recorded:** a network failure or a target-side denial (exit codes, HTTP status).
-  Recording them needs the agents' post-tool hooks. Planned, not built.
+### 13. Event outcomes: **Yes** (hooks)
+**New:** post-tool hooks record how each call ended, as a `tool_result` tied to the call:
+- status (ok, error, interrupted, timeout, denied), exit code where the agent gives one,
+  duration, and the first line of the error (redacted, at most 300 characters)
+- never the tool's output
+- Audit → Agent events shows the outcome under each call and in the CSV export.
+- Registered for Claude Code, Codex, Gemini CLI and Cursor by `install-hooks`. Post hooks never
+  block the agent.
 
-### 14. Reporting: **Partly**
-- **Console today:** Overview, an audit trail with filters, approvals history, exceptions, and
-  Pricing Leaks (spend by vendor and person).
-- **Not built:** a posture report for non-technical readers (usage by team, blocks, approvals
-  and exceptions over time).
+**Already there:** blocked (with the rule), would_block, approval pending, approved, denied.
+
+**Limits:**
+- Codex shell commands carry no exit code, and Claude Code sends none on success.
+- Gemini and Cursor results are matched to their call approximately.
+- Payloads come from the vendors' docs; not yet captured from live agents.
+- The kernel layer has no outcome.
+
+### 14. Reporting: **Yes**
+**New: Monitor → Posture report** (`/report`, 7/30/90 days, print-friendly):
+- machines enrolled, online, and with healthy hooks
+- agents in use by person and team
+- blocks by kind
+- approvals: requested, approved, denied, expired, median time to decide, self-approval
+  refusals
+- exceptions and policy changes
+- new behaviour counts and Pricing Leaks savings
+
+**Scheduled email:** weekly or monthly, to up to 20 addresses, sent once across instances and
+audited.
+
+**Already there:** Overview, audit trail, approvals history, Pricing Leaks.
+
+**Limits:**
+- Spend numbers are as of today, not as of the report period.
+- History before the deploy starts from a 35-day backfill.
+- Checked in a browser with a local control plane; a real report email and print preview
+  weren't checked.
 
 ### 15. Credential paths and env secrets: **Yes** (new)
 **Default alerts** now also cover:
@@ -424,10 +464,18 @@ Root can still stop or remove it. Preventing that needs OS-level protection, suc
 Endpoint Security or MDM-locked services.
 
 ### 22. MCP governance: **Partly**
-- **New:** `mcp_allow` (server names, `*` wildcards). A call to another server is
-  `mcp_unlisted`: deny or require approval. This covers remote servers when the agent names them.
-- **Already there:** `tool_deny` / `tool_approve` by tool name.
-- **Not built:** detecting a change to a server's tool list after approval.
+- **Already there:** `mcp_allow` (server names, `*` wildcards); a call to another server is
+  `mcp_unlisted` (deny or require approval). `tool_deny` / `tool_approve` by tool name.
+- **New: server pinning.** Policy `mcp_pins` fixes each server's definition as a fingerprint:
+  transport, command, args, URL, and the names (never values) of its env vars and headers.
+  - The agent's MCP config (Claude Code, Codex, Gemini, Cursor) is read as the agent's user.
+  - A pinned server whose definition changed, or can't be read, raises `mcp_changed`, which
+    you can deny or send for approval.
+  - Each session's start lists every server with its fingerprint, so pins can be copied from
+    the console.
+- **New:** the Inventory page lists every MCP server seen (see 8).
+- **Limit:** pinning detects a changed configuration. It doesn't see a remote server changing
+  its tools behind the same URL, or what an unversioned `npx` package resolves to.
 
 ### 23. Model and provider control: **Partly**
 **New:**
@@ -445,15 +493,30 @@ Endpoint Security or MDM-locked services.
 - Which model is used is recorded when the agent reports it.
 - An agent that changes its own environment mid-session isn't re-read.
 
-### 24. Prompt injection and anomalies: **No**
-Not detected. What exists is deterministic:
-- `remote_script` (`curl | sh`, `bash <(curl …)`)
-- `credential_read`
-- `guardrail_edit`
-- `fs_destroy`
-- deny/approve on all of them
+### 24. Prompt injection and anomalies: **Partly**
+Effigent doesn't detect prompt injection itself. What's new is pattern matching on what
+happens next.
 
-Anomaly detection over sequences is on the roadmap, not built.
+**Session rules (new, on the machine):**
+- `untrusted_then_risky`: outside content entered the session (WebFetch, WebSearch, a curl
+  download, or an MCP server not in `mcp_allow`), then a risky action follows: deleting files,
+  destructive SQL, cloud deletes, force push, guardrail edits, `curl | sh`, credential reads.
+- `exfil_sequence`: a credential read, then a network call to a host not seen before in that
+  session.
+- Both can deny or require approval. The window is the last 50 calls or 30 minutes.
+
+**New behaviour (new, control plane):** Monitor → New behaviour lists the first time an agent
+on a machine runs a program, reaches a host, uses an MCP server or triggers an action kind,
+against a 30-day baseline. A new agent learns silently for 7 days first. Optional webhook
+`anomaly.first_seen`, capped at 60 per minute.
+
+**Already there:** `remote_script`, `credential_read`, `guardrail_edit`, `fs_destroy`.
+
+**Limits:**
+- Session state is in memory: a daemon restart forgets it, and calls without a session id
+  aren't tracked.
+- A host reached through a variable or another program isn't seen.
+- Novelty isn't maliciousness.
 
 ### 25. EDR / eBPF coexistence, footprint, MDM: **Partly**
 - **Linux:** uses Tetragon's BPF LSM. Several BPF LSM programs can coexist, and we have no
