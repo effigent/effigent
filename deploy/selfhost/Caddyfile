@@ -1,0 +1,17 @@
+# TLS in front of the control plane and the console (compose.yaml).
+# Certificates come from Let's Encrypt unless EFFIGENT_CADDY_TLS="tls internal".
+
+{$EFFIGENT_API_HOST} {
+	{$EFFIGENT_CADDY_TLS}
+	reverse_proxy cp:8080 {
+		# Approval long-polls wait up to 90s.
+		transport http {
+			read_timeout 120s
+		}
+	}
+}
+
+{$EFFIGENT_CONSOLE_HOST} {
+	{$EFFIGENT_CADDY_TLS}
+	reverse_proxy console:3000
+}

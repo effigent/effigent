@@ -1,0 +1,178 @@
+# Self-hosted Effigent: the control plane (effigent-cp: endpoint protocol
+# /ep/v1, console API /api/v1) and the console (effigent-console), signed in
+# with your OIDC provider. One workspace per install. See docs/self-hosting.md
+# (https://effigent.ai/docs/self-hosting).
+#
+# Minimum:
+#   helm install effigent effigent/effigent-cp -n effigent --create-namespace \
+#     --set controlPlane.url=https://effigent-api.example.com \
+#     --set console.url=https://effigent.example.com \
+#     --set oidc.issuer=https://login.example.com --set oidc.clientId=effigent-console \
+#     --set oidc.adminGroups='{effigent-admins}' \
+#     --set database.existingSecret=effigent-db \
+#     --set keys.existingSecret=effigent-keys
+
+image:
+  controlPlane:
+    repository: ghcr.io/effigent/effigent-cp
+    tag: ""               # default: the chart's appVersion
+  console:
+    repository: ghcr.io/effigent/effigent-console
+    tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Keys the control plane and console run with (all in one Secret):
+#   signing-key      base64 32-byte ed25519 seed that signs every policy.
+#                    Endpoints pin its public key at enrollment: LOSING OR
+#                    CHANGING IT MEANS RE-ENROLLING EVERY MACHINE. Back it up.
+#   admin-token      bearer token for automation (Authorization: Bearer … plus
+#                    X-Effigent-Tenant: <controlPlane.tenant>)
+#   secrets-key      ≥ 32 chars; seals vendor API keys and Slack credentials at
+#                    rest (changing it means re-entering them)
+#   session-secret   ≥ 32 chars; seals the console's session cookies
+#   postgres-password  only with postgres.enabled
+# Create it yourself (recommended; required with `helm template` / GitOps,
+# where the chart can't see an existing Secret):
+#   kubectl -n effigent create secret generic effigent-keys \
+#     --from-literal=signing-key="$(openssl rand -base64 32)" \
+#     --from-literal=admin-token="$(openssl rand -hex 24)" \
+#     --from-literal=secrets-key="$(openssl rand -hex 24)" \
+#     --from-literal=session-secret="$(openssl rand -hex 24)"
+# Left empty, the chart generates them once into "<release>-effigent-cp-keys",
+# reuses them on upgrades and keeps the Secret on uninstall.
+keys:
+  existingSecret: ""
+
+controlPlane:
+  # Public URL of the control plane: what effigentd enrolls with
+  # (`effigentd enroll --server <url>`), what browsers call from the console,
+  # and the base of links in approval emails. Required.
+  url: ""
+  # The workspace this install serves (console users, enrollment tokens,
+  # policies). Keep it once endpoints are enrolled.
+  tenant: org:self-hosted
+  replicas: 1
+  # Serve HTTPS directly (no Ingress in front): a kubernetes.io/tls Secret.
+  # effigentd trusts a private CA with `effigentd enroll --ca-file`.
+  tls:
+    secretName: ""
+  # Keep events at least this many days (minimum 90). Older days are archived
+  # to `archive` and then deleted; without an archive nothing is deleted.
+  eventRetentionDays: ""
+  # Mark a machine offline after this long without a sync (Go duration).
+  endpointOfflineAfter: ""
+  extraEnv: []
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 8080
+
+console:
+  enabled: true
+  # Public URL of the console. Your OIDC client's redirect URI is
+  # <url>/auth/callback (and <url>/sign-in?signed_out=1 after sign-out).
+  # Required.
+  url: ""
+  replicas: 1
+  # Absolute session lifetime; the provider's refresh token keeps the access
+  # token fresh within it.
+  sessionHours: 12
+  extraEnv: []
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 3000
+
+# Your identity provider (Okta, Entra ID, Google, Keycloak, Dex, Authentik, …).
+# Register one client for the console (authorization code + PKCE). Both the
+# console and the control plane must reach the issuer.
+oidc:
+  issuer: ""              # required; must equal the tokens' `iss` exactly
+  clientId: ""            # required; also the audience the control plane checks
+  clientSecret: ""        # confidential clients; or clientSecretExistingSecret
+  clientSecretExistingSecret: ""
+  clientSecretKey: client-secret
+  scopes: openid email profile offline_access   # add `groups` where your provider needs it
+  providerName: ""        # shown on the sign-in button ("Sign in with Okta")
+  # Which token the console sends to the control plane: id_token (default;
+  # audience = clientId) or access_token (when your provider issues JWT access
+  # tokens for the console's client id as audience).
+  token: id_token
+  # Claim names (dotted paths allowed, e.g. realm_access.roles).
+  claims:
+    user: sub
+    email: email
+    name: name
+    groups: groups
+  # Roles come from the token on every request: admin > security_admin > viewer.
+  adminGroups: []
+  securityAdminGroups: []
+  adminEmails: []         # verified emails that are admins (e.g. the first one in)
+  allowedGroups: []       # non-empty: refuse everyone outside these groups
+  allowUnverifiedEmail: false
+  jwksUrl: ""             # default: from the issuer's discovery document
+
+# Postgres 14+. The control plane creates and migrates schema `cp` on start.
+database:
+  url: ""                 # postgres://user:pass@host:5432/db?sslmode=require
+  existingSecret: ""      # or a Secret holding the URL
+  existingSecretKey: url
+
+# Bundled Postgres: a single-replica StatefulSet for evaluation only (no
+# backups, no HA, no upgrades between major versions). Use a managed or
+# operated Postgres in production.
+postgres:
+  enabled: false
+  image: postgres:16-alpine
+  storage: 8Gi
+  storageClass: ""
+  resources: {}
+
+# Approval and alert emails. Without SMTP, approvals still work in the console.
+smtp:
+  url: ""                 # smtp://user:pass@host:587 or smtps://user:pass@host:465
+  existingSecret: ""
+  existingSecretKey: url
+  from: ""                # Effigent <effigent@example.com>
+
+# Event archive (S3 or S3-compatible: MinIO, Ceph, R2, …): day files written
+# before retention deletes events. Credentials come from the Secret (keys
+# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) or the pod's cloud identity.
+archive:
+  bucket: ""
+  region: us-east-1
+  endpoint: ""            # e.g. https://minio.example.com; empty = AWS S3
+  pathStyle: false        # true for MinIO and most S3-compatible stores
+  sse: true               # false when the store doesn't support SSE-S3 (AES256)
+  existingSecret: ""
+
+# Extra CA certificates (your IdP, SMTP or S3 behind a private CA): a ConfigMap
+# with PEM files, trusted by both the control plane and the console.
+caBundle:
+  configMap: ""
+  key: ca.crt
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}         # e.g. eks.amazonaws.com/role-arn for the archive bucket
+
+# One Ingress for both hosts (taken from controlPlane.url and console.url).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  tls: []                 # [{secretName: effigent-tls, hosts: [effigent.example.com, effigent-api.example.com]}]

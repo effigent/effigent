@@ -1,0 +1,89 @@
+{{- if .Values.postgres.enabled }}
+{{- /* Evaluation only: one replica, no backups. Use your own Postgres in production. */}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "effigent-cp.postgresHost" . }}
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ include "effigent-cp.postgresHost" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "effigent-cp.selector" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "effigent-cp.selector" (dict "root" . "component" "postgres") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsUser: 70          # postgres in the alpine image
+        runAsGroup: 70
+        fsGroup: 70
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: effigent
+            - name: POSTGRES_DB
+              value: effigent
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ include "effigent-cp.keysSecret" . }}, key: postgres-password}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "effigent", "-d", "effigent", "-h", "127.0.0.1"]
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: run
+              mountPath: /var/run/postgresql
+      volumes:
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgres.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "effigent-cp.postgresHost" . }}
+  labels:
+    {{- include "effigent-cp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  selector:
+    {{- include "effigent-cp.selector" (dict "root" . "component" "postgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}
