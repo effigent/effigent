@@ -146,6 +146,11 @@ func daemon() {
 			SpoolDir: filepath.Join(*stateDir, "spool"), CloseTimeout: 3 * time.Second}))
 		logger.Printf("enrolled as %s with %s", cp.EndpointID, cp.Server)
 	}
+	if cp != nil {
+		// The run marker (written below, once set up) is removed after sinks.Close: a
+		// stop cut short (kill -9 during the last flush) is reported at the next start.
+		defer clearMarker(*stateDir)
+	}
 	defer sinks.Close()
 	emit := sinks.Write
 	if name := strings.TrimSpace(os.Getenv("EFFIGENT_HOSTNAME")); name != "" {
@@ -199,7 +204,6 @@ func daemon() {
 		if prev := startMarker(*stateDir); prev != nil {
 			emit(event.Event{Time: time.Now(), Type: event.DaemonUncleanRestart, Severity: "high", Rule: via, Message: uncleanMessage(prev)})
 		}
-		defer clearMarker(*stateDir) // runs before sinks.Close: a stop cut short by kill -9 is still reported next start
 	}
 
 	eng := engine.New(pol, raw, enf, emit, logger.Printf, *verbose)

@@ -79,7 +79,14 @@ func startMarker(dir string) (prev *runMarker) {
 	return prev
 }
 
-func clearMarker(dir string) { _ = os.Remove(markerPath(dir)) }
+// clearMarker removes this run's marker (not one a newer run already wrote).
+func clearMarker(dir string) {
+	var m runMarker
+	if b, err := os.ReadFile(markerPath(dir)); err == nil && json.Unmarshal(b, &m) == nil && m.PID != os.Getpid() {
+		return
+	}
+	_ = os.Remove(markerPath(dir))
+}
 
 func uncleanMessage(m *runMarker) string {
 	s := "effigentd's previous run ended without stopping cleanly (killed, crashed or the machine lost power)"
