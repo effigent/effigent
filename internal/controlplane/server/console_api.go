@@ -118,54 +118,32 @@ func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, p Principal) 
 	}
 	// Omitted policies keep the published ones; exceptions are always kept
 	// (they are managed under /api/v1/exceptions).
-	prev, err := s.Store.LatestPolicy(r.Context(), p.Tenant)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		s.fail(w, err)
-		return
-	}
-	prevSrc, err := decodeSource(prev.Source)
+	c := policyChange{Body: req.Body, Comment: clip(req.Comment, 1000), Policies: req.Policies}
+	on, err := s.changeApproval(r.Context(), p.Tenant)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	src := source{Policies: prevSrc.Policies, Exceptions: prevSrc.Exceptions}
-	if req.Policies != nil {
-		if src.Policies, err = decodePolicies(req.Policies); err != nil {
+	if on {
+		// checked now with the same parser and compiler, so a proposal can be applied as is
+		rep, err := s.checkPolicy(r.Context(), p.Tenant, c)
+		var bad badRequest
+		if errors.As(err, &bad) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
-		}
-	}
-	ps := src.Policies
-	if !src.empty() {
-		v, rep, code, err := s.publishCentral(r, p, req.Body, src, req.Comment)
-		if code == http.StatusInternalServerError {
+		} else if err != nil {
 			s.fail(w, err)
 			return
 		}
-		if err != nil {
-			writeErr(w, code, err.Error())
-			return
+		summary := "Publish the policy"
+		if c.Comment != "" {
+			summary += ": " + c.Comment
 		}
-		s.Logf("policy v%d (%d central policies) published for %s by %s", v, len(ps), p.Tenant, p.UserID)
-		s.audit(r, p, "policy.publish", fmt.Sprintf("v%d", v), map[string]any{"version": v, "comment": req.Comment,
-			"bytes": len(req.Body), "policies": len(ps), "unsupported": len(rep.Unsupported)})
-		s.emit(r.Context(), p.Tenant, "policy.published", map[string]any{"version": v, "comment": req.Comment, "by": p.UserID, "central_policies": len(ps)})
-		writeJSON(w, http.StatusOK, map[string]any{"version": v, "report": rep})
+		s.propose(w, r, p, "policy", summary, c, map[string]any{"report": rep})
 		return
 	}
-	if _, err := policy.Parse([]byte(req.Body)); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	v, err := s.Store.PutPolicy(r.Context(), p.Tenant, req.Body, nil, req.Comment, p.UserID, time.Now().UTC().Truncate(time.Microsecond))
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.Logf("policy v%d published for %s by %s", v, p.Tenant, p.UserID)
-	s.audit(r, p, "policy.publish", fmt.Sprintf("v%d", v), map[string]any{"version": v, "comment": req.Comment, "bytes": len(req.Body)})
-	s.emit(r.Context(), p.Tenant, "policy.published", map[string]any{"version": v, "comment": req.Comment, "by": p.UserID})
-	writeJSON(w, http.StatusOK, map[string]any{"version": v})
+	code, resp, err := s.applyPolicy(r, p, c, "")
+	s.writeApplied(w, code, resp, err)
 }
 
 func (s *Server) policyHistory(w http.ResponseWriter, r *http.Request, p Principal) {

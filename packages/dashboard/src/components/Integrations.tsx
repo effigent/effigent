@@ -26,10 +26,12 @@ const SCOPES: { id: string; label: string }[] = [
 const EVENTS: { id: string; label: string }[] = [
   { id: 'approval.requested', label: 'Approval requested' },
   { id: 'approval.decided', label: 'Approval decided' },
+  { id: 'approval.voted', label: 'Approval vote (first of two)' },
   { id: 'action.blocked', label: 'Action blocked (busy: max 60/min)' },
   { id: 'endpoint.enrolled', label: 'Machine enrolled' },
   { id: 'endpoint.revoked', label: 'Machine revoked' },
   { id: 'policy.published', label: 'Policy published' },
+  { id: 'policy.proposed', label: 'Policy change waiting for approval' },
   { id: 'pricing_leaks.runaway_cost', label: 'Runaway AI spend (Pricing Leaks)' },
 ];
 

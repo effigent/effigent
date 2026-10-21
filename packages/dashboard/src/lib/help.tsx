@@ -40,6 +40,7 @@ export const HELP: Record<string, ReactNode> = {
 
   // approvals
   approveOnce: <>The approval binds to a fingerprint of this exact action (command, files, session, user). It runs once; a retry of anything else asks again.</>,
+  requester: <>The machine’s owner, the OS user the agent ran as (if it maps to a person in People) and the git emails that OS user committed with on that machine in the last 30 days. With “requester can’t approve” on, none of them may approve the request — admins included. The OS user and git emails are what the machine reports, not verified.</>,
   decidedBy: <>Routing rules in Team &amp; Approvers decide which group gets each request. Only that group is emailed and can decide; admins can step in, recorded as an override.</>,
 
   // machines
@@ -51,9 +52,13 @@ export const HELP: Record<string, ReactNode> = {
   members: <>People in your organization. Invite and change roles in the organization settings. Admins and security admins change policy; members are read-only unless an approver group includes them.</>,
   groups: <>A set of members who decide one kind of request — e.g. Security (the CISO) or DevOps. Members get the email and can approve from it or from the console.</>,
   rules: <>Checked top to bottom; the first match wins. Match on the kind of request, text in the action (case-insensitive, <code>*</code> as a wildcard), machines or agent. Anything unmatched goes to the default.</>,
+  decision: <><b>Approvals needed</b>: with two, two different people must approve before the agent may run it (an admin stepping in counts as one of them); any deny denies. <b>Requester can’t approve</b>: whoever is behind the request (machine owner, mapped OS user, git emails) can’t approve it. <b>Ticket</b>: approving needs a ticket reference, so approvers must use the console (the email and Slack buttons open it).</>,
   tryIt: <>Uses the control plane’s own matcher on the rules above, including unsaved edits.</>,
 
   // settings
   notifications: <>Who is told when an agent pauses for approval. Each email carries Approve / Deny buttons signed for that person and that request.</>,
+  changeApproval: <>With this on, publishing a policy, adding or removing an exception and changing a machine’s owner become <b>proposals</b>: another admin or security admin approves them before anything is published. API keys can propose but never approve; turning this off is a proposal too. There is no emergency bypass.</>,
+  ticketTemplate: <>Approvers can attach a ticket (SEC-123 or a link) when they approve. With a template, keys become links to your tracker.</>,
+  retention: <>How long agent events stay in the database before they move to the archive (never under 90 days). A <b>legal hold</b> keeps every event and archive object until it is released: nothing is deleted, and the archive objects get an S3 Object Lock legal hold.</>,
   integrations: <><b>API keys</b> let your scripts and automations read and act (each key has scopes). <b>Webhooks</b> push events to your systems, signed so the receiver can check they came from Effigent.</>,
 };

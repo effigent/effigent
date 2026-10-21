@@ -22,31 +22,55 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// memArchive stands in for S3.
+// memArchive stands in for S3 (the current version of each key, and which
+// keys carry a legal hold).
 type memArchive struct {
-	mu   sync.Mutex
-	objs map[string][]byte
-	fail bool
+	mu       sync.Mutex
+	objs     map[string][]byte
+	held     map[string]bool
+	versions int
+	fail     bool
+	holdFail bool
 }
 
-func (m *memArchive) Put(_ context.Context, key string, r io.Reader) (int64, error) {
+func (m *memArchive) Put(_ context.Context, key string, r io.Reader) (int64, string, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if m.fail {
-		return 0, errors.New("s3 is down")
+		return 0, "", errors.New("s3 is down")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.objs[key] = b
-	return int64(len(b)), nil
+	m.versions++
+	return int64(len(b)), fmt.Sprintf("v%d", m.versions), nil
+}
+
+func (m *memArchive) SetLegalHold(_ context.Context, prefix string, on bool) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.holdFail {
+		return 0, errors.New("s3 legal hold: AccessDenied")
+	}
+	if m.held == nil {
+		m.held = map[string]bool{}
+	}
+	n := 0
+	for k := range m.objs {
+		if strings.HasPrefix(k, prefix) {
+			m.held[k] = on
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (m *memArchive) Check(context.Context) error { return nil }
 
-func (m *memArchive) PresignGet(_ context.Context, key, filename string, _ time.Duration) (string, error) {
-	return "https://s3.example/" + key + "?name=" + filename, nil
+func (m *memArchive) PresignGet(_ context.Context, key, version, filename string, _ time.Duration) (string, error) {
+	return "https://s3.example/" + key + "?versionId=" + version + "&name=" + filename, nil
 }
 
 // TestEventsPagingIntegrityRetention needs a throwaway Postgres database (see TestCentralPolicyEndToEnd).

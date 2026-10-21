@@ -76,7 +76,11 @@ func (s *Server) approvalActions(a store.Approval, recipient, channel string) []
 	}
 	tok := s.signLink(linkClaims{Approval: a.ID, Tenant: a.Tenant, Recipient: recipient, Channel: channel, Expires: a.ExpiresAt.Unix()})
 	base := strings.TrimSuffix(s.PublicBaseURL, "/") + "/a/" + tok
-	return []notify.Action{{Label: "Approve", URL: base + "?d=approve", Style: "primary"}, {Label: "Deny", URL: base + "?d=deny", Style: "danger"}}
+	deny := notify.Action{Label: "Deny", URL: base + "?d=deny", Style: "danger"}
+	if a.RequireTicket { // the approval needs a ticket: approving is in the console
+		return []notify.Action{deny}
+	}
+	return []notify.Action{{Label: "Approve", URL: base + "?d=approve", Style: "primary"}, deny}
 }
 
 func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
@@ -113,26 +117,33 @@ func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, page("Request not found", `<p>This approval request no longer exists.</p>`))
 		return
 	}
+	cfg, err := s.Store.GetRouting(r.Context(), c.Tenant)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	who := c.Recipient + " (via " + c.Channel + ")"
-	if a.GroupID != "" {
-		cfg, err := s.Store.GetRouting(r.Context(), c.Tenant)
-		if err != nil {
-			s.fail(w, err)
+	groupName := ""
+	if g := cfg.Group(a.GroupID); g != nil {
+		groupName = g.Name
+		m := memberOf(g, "", c.Recipient)
+		if m == nil {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, page("Not an approver for this", `<p>This request is decided by <b>`+html.EscapeString(g.Name)+`</b>, and `+
+				html.EscapeString(c.Recipient)+` is no longer in that group. Ask one of its members, or a workspace admin, to decide it in the console.</p>`))
 			return
 		}
-		if g := cfg.Group(a.GroupID); g != nil {
-			m := memberOf(g, "", c.Recipient)
-			if m == nil {
-				w.WriteHeader(http.StatusForbidden)
-				fmt.Fprint(w, page("Not an approver for this", `<p>This request is decided by <b>`+html.EscapeString(g.Name)+`</b>, and `+
-					html.EscapeString(c.Recipient)+` is no longer in that group. Ask one of its members, or a workspace admin, to decide it in the console.</p>`))
-				return
-			}
-			if m.Name != "" {
-				who = m.Name + " <" + c.Recipient + "> (via email)"
-			}
+		if m.Name != "" {
+			who = m.Name + " <" + c.Recipient + "> (via email)"
 		}
 	}
+	e := html.EscapeString
+	console := ""
+	if s.ConsoleOrigin != "" {
+		console = ` <a href="` + e(s.ConsoleOrigin+"/approvals?id="+a.ID) + `">Open it in the Effigent console</a>.`
+	}
+	voter := approver{Voter: "link:" + c.Channel + ":" + c.Recipient, UserID: userIDOf(cfg, c.Recipient), Emails: []string{strings.ToLower(c.Recipient)},
+		Name: who, Via: "email", Person: true}
 	if r.Method == http.MethodPost {
 		_ = r.ParseForm()
 		d := r.PostForm.Get("decision")
@@ -141,25 +152,39 @@ func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, page("Choose Approve or Deny", ""))
 			return
 		}
-		note := clip(strings.TrimSpace(r.PostForm.Get("note")), 500)
-		got, err := s.Store.DecideApproval(r.Context(), c.Tenant, a.ID, d == "approve", "link:"+c.Channel+":"+c.Recipient, who, note, approvalUseWindow)
-		if errors.Is(err, store.ErrAlreadyDecided) {
-			cur, _ := s.Store.GetApproval(r.Context(), c.Tenant, a.ID)
-			fmt.Fprint(w, page("Already decided", `<p>This request is already <b>`+html.EscapeString(cur.State)+`</b>`+byLine(cur)+`.</p>`))
-			return
-		} else if err != nil {
-			s.fail(w, err)
+		if d == "approve" && a.RequireTicket && a.State == store.ApprovalPending {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, page("Approve in the console", `<p>Approving this request needs a ticket reference, which an email button can't carry.`+console+`</p>`))
 			return
 		}
-		p := Principal{UserID: "link:" + c.Channel + ":" + c.Recipient, Tenant: c.Tenant, Role: "approver", Via: "approval-link"}
-		s.audit(r, p, "approval."+d, a.ID, map[string]any{"summary": got.Summary, "hostname": got.Hostname, "rule": got.Rule, "note": note, "via": c.Channel})
-		s.emit(r.Context(), c.Tenant, "approval.decided", s.approvalEvent(got))
+		note := clip(strings.TrimSpace(r.PostForm.Get("note")), 500)
+		p := Principal{UserID: voter.Voter, Tenant: c.Tenant, Role: "approver", Via: "approval-link"}
+		res := s.castVote(r.Context(), r, p, a, voter, d == "approve", note, "", false, groupName, map[string]any{"via": c.Channel})
+		got := res.A
+		switch res.Refusal {
+		case "":
+		case "already_decided":
+			fmt.Fprint(w, page("Already decided", `<p>This request is already <b>`+e(got.State)+`</b>`+byLine(got)+`.</p>`))
+			return
+		case "error":
+			s.fail(w, errors.New("vote failed"))
+			return
+		default:
+			w.WriteHeader(res.Code)
+			fmt.Fprint(w, page("Not decided", `<p>`+e(upperFirst(res.Msg))+`.`+console+`</p>`))
+			return
+		}
+		if !res.Final {
+			fmt.Fprint(w, page("Approval recorded", `<p style="font-size:15px"><b style="color:#16a34a">`+e(progressLine(got))+`</b> — `+e(got.Summary)+`</p>`+
+				`<p>The agent on <b>`+e(got.Hostname)+`</b> keeps waiting: this request needs another approver.</p>`))
+			return
+		}
 		verb, color := "Approved", "#16a34a"
 		if d == "deny" {
 			verb, color = "Denied", "#dc2626"
 		}
-		fmt.Fprint(w, page(verb, `<p style="font-size:15px"><b style="color:`+color+`">`+verb+`</b> — `+html.EscapeString(got.Summary)+`</p>`+
-			`<p>The agent on <b>`+html.EscapeString(got.Hostname)+`</b> gets the answer now.`+map[bool]string{true: ` The action may run once.`, false: ``}[d == "approve"]+`</p>`))
+		fmt.Fprint(w, page(verb, `<p style="font-size:15px"><b style="color:`+color+`">`+verb+`</b> — `+e(got.Summary)+`</p>`+
+			`<p>The agent on <b>`+e(got.Hostname)+`</b> gets the answer now.`+map[bool]string{true: ` The action may run once.`, false: ``}[d == "approve"]+`</p>`))
 		return
 	}
 
@@ -168,24 +193,36 @@ func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
 		if state == store.ApprovalPending {
 			state = "expired"
 		}
-		fmt.Fprint(w, page("No longer waiting", `<p>This request is <b>`+html.EscapeString(state)+`</b>`+byLine(a)+`.</p>`))
+		fmt.Fprint(w, page("No longer waiting", `<p>This request is <b>`+e(state)+`</b>`+byLine(a)+`.</p>`))
 		return
 	}
 	pre := r.URL.Query().Get("d")
 	approveStyle, denyStyle := btnStyle("#16a34a", pre != "deny"), btnStyle("#dc2626", pre == "deny")
-	e := html.EscapeString
 	machine := a.Hostname
 	if a.OSUser != "" {
 		machine = a.OSUser + " on " + a.Hostname
 	}
-	body := `<table style="width:100%;border-collapse:collapse;margin:0 0 18px">` +
-		row("Action", `<code style="font-family:Menlo,Consolas,monospace;font-size:13px;background:#f1f3f9;border:1px solid #e3e7f0;border-radius:6px;padding:6px 8px;display:inline-block;word-break:break-all">`+e(a.Summary)+`</code>`) +
-		row("Why", e(a.Reason)) + row("Machine", e(machine)) + row("Rule", e(a.Rule)) +
-		row("Expires", e(a.ExpiresAt.UTC().Format("Jan 2 15:04 MST"))) + `</table>` +
+	approveBtn := `<button name="decision" value="approve" style="` + approveStyle + `">Approve once</button>`
+	why := ""
+	if code, msg := voteRefusal(a, a.Requester, voter, true, "-"); code != "" {
+		approveBtn, why = "", `<p style="color:#b45309;font-size:13px;margin:0 0 14px">You can't approve this: `+e(msg)+`.</p>`
+	} else if a.RequireTicket {
+		approveBtn, why = "", `<p style="color:#b45309;font-size:13px;margin:0 0 14px">Approving needs a ticket reference: approve it in the console.`+console+`</p>`
+	}
+	rows := row("Action", `<code style="font-family:Menlo,Consolas,monospace;font-size:13px;background:#f1f3f9;border:1px solid #e3e7f0;border-radius:6px;padding:6px 8px;display:inline-block;word-break:break-all">`+e(a.Summary)+`</code>`) +
+		row("Why", e(a.Reason)) + row("Machine", e(machine)) + row("Rule", e(a.Rule))
+	if a.Requester.Label != "" {
+		rows += row("Requested by", e(a.Requester.Label))
+	}
+	if a.ApprovalsRequired > 1 {
+		rows += row("Approvals", e(progressLine(a)))
+	}
+	body := `<table style="width:100%;border-collapse:collapse;margin:0 0 18px">` + rows +
+		row("Expires", e(a.ExpiresAt.UTC().Format("Jan 2 15:04 MST"))) + `</table>` + why +
 		`<form method="post">` +
 		`<label style="display:block;font-size:13px;color:#6b7280;margin:0 0 6px">Note for the agent and the audit trail (optional)</label>` +
 		`<textarea name="note" rows="2" style="width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:8px;font:inherit;margin:0 0 14px"></textarea>` +
-		`<button name="decision" value="approve" style="` + approveStyle + `">Approve once</button>` +
+		approveBtn +
 		`<button name="decision" value="deny" style="` + denyStyle + `">Deny</button>` +
 		`</form><p style="color:#6b7280;font-size:12px;margin:14px 0 0">Deciding as <b>` + e(who) + `</b>. Approving lets this exact action run once.</p>`
 	fmt.Fprint(w, page("Approval needed", body))

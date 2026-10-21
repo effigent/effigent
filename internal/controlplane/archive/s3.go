@@ -36,24 +36,56 @@ func NewS3(ctx context.Context, bucket, region string) (*S3, error) {
 }
 
 // Put uploads r to key (streaming, multipart when large) and returns the
-// stored object's size as S3 reports it afterwards.
-func (a *S3) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
-	_, err := a.up.Upload(ctx, &s3.PutObjectInput{
+// stored version's size as S3 reports it afterwards, and its version id.
+func (a *S3) Put(ctx context.Context, key string, r io.Reader) (int64, string, error) {
+	in := &s3.PutObjectInput{
 		Bucket: &a.Bucket, Key: &key, Body: r,
 		ContentType:     aws.String("application/x-ndjson"),
 		ContentEncoding: aws.String("gzip"),
 		// Object Lock buckets require an integrity checksum on every write
 		ChecksumAlgorithm:    types.ChecksumAlgorithmCrc32,
 		ServerSideEncryption: types.ServerSideEncryptionAes256,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("s3 upload %s: %w", key, err)
 	}
-	h, err := a.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &a.Bucket, Key: &key})
+	out, err := a.up.Upload(ctx, in)
 	if err != nil {
-		return 0, fmt.Errorf("s3 head %s: %w", key, err)
+		return 0, "", fmt.Errorf("s3 upload %s: %w", key, err)
 	}
-	return aws.ToInt64(h.ContentLength), nil
+	h, err := a.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &a.Bucket, Key: &key, VersionId: out.VersionID})
+	if err != nil {
+		return 0, "", fmt.Errorf("s3 head %s: %w", key, err)
+	}
+	return aws.ToInt64(h.ContentLength), aws.ToString(out.VersionID), nil
+}
+
+// SetLegalHold puts (on) or lifts an Object Lock legal hold on every
+// version under prefix and returns how many it set. Delete markers are
+// skipped (they hold no data). Each call is idempotent, so a failed run is
+// simply run again. Needs s3:ListBucketVersions and s3:PutObjectLegalHold.
+func (a *S3) SetLegalHold(ctx context.Context, prefix string, on bool) (int, error) {
+	status := types.ObjectLockLegalHoldStatusOff
+	if on {
+		status = types.ObjectLockLegalHoldStatusOn
+	}
+	n := 0
+	var keyMarker, versionMarker *string
+	for {
+		page, err := a.client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{Bucket: &a.Bucket, Prefix: &prefix,
+			KeyMarker: keyMarker, VersionIdMarker: versionMarker})
+		if err != nil {
+			return n, fmt.Errorf("s3 list versions %s: %w", prefix, err)
+		}
+		for _, v := range page.Versions {
+			if _, err := a.client.PutObjectLegalHold(ctx, &s3.PutObjectLegalHoldInput{Bucket: &a.Bucket, Key: v.Key, VersionId: v.VersionId,
+				LegalHold: &types.ObjectLockLegalHold{Status: status}, ChecksumAlgorithm: types.ChecksumAlgorithmCrc32}); err != nil {
+				return n, fmt.Errorf("s3 legal hold %s@%s: %w", aws.ToString(v.Key), aws.ToString(v.VersionId), err)
+			}
+			n++
+		}
+		if !aws.ToBool(page.IsTruncated) {
+			return n, nil
+		}
+		keyMarker, versionMarker = page.NextKeyMarker, page.NextVersionIdMarker
+	}
 }
 
 // Check proves the role can write to the bucket (a tiny object under
@@ -70,11 +102,15 @@ func (a *S3) Check(ctx context.Context) error {
 	return nil
 }
 
-// PresignGet returns a short-lived download link.
-func (a *S3) PresignGet(ctx context.Context, key, filename string, ttl time.Duration) (string, error) {
-	r, err := a.presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &a.Bucket, Key: &key,
-		ResponseContentDisposition: aws.String(`attachment; filename="` + filename + `"`)},
-		s3.WithPresignExpires(ttl))
+// PresignGet returns a short-lived download link to one version ("" = the
+// current one; a version needs s3:GetObjectVersion).
+func (a *S3) PresignGet(ctx context.Context, key, versionID, filename string, ttl time.Duration) (string, error) {
+	in := &s3.GetObjectInput{Bucket: &a.Bucket, Key: &key,
+		ResponseContentDisposition: aws.String(`attachment; filename="` + filename + `"`)}
+	if versionID != "" {
+		in.VersionId = &versionID
+	}
+	r, err := a.presign.PresignGetObject(ctx, in, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", err
 	}

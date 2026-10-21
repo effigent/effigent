@@ -30,8 +30,38 @@ type ClerkDirectory struct {
 	BaseURL   string // default https://api.clerk.com
 	HTTP      *http.Client
 
-	mu    sync.Mutex
-	cache map[string]dirEntry
+	mu     sync.Mutex
+	cache  map[string]dirEntry
+	emails map[string]userEntry // Clerk user id → verified emails
+}
+
+type userEntry struct {
+	emails []string
+	at     time.Time
+}
+
+// UserEmails returns a console user's verified emails, so the requester
+// rule can recognise a person who signs in with an address the approver
+// group doesn't list.
+func (d *ClerkDirectory) UserEmails(ctx context.Context, tenant, userID string) ([]string, error) {
+	d.mu.Lock()
+	e, ok := d.emails[userID]
+	d.mu.Unlock()
+	if ok && time.Since(e.at) <= directoryTTL {
+		return e.emails, nil
+	}
+	var u clerkUser
+	if err := d.get(ctx, "/v1/users/"+url.PathEscape(userID), nil, &u); err != nil {
+		return nil, err
+	}
+	e = userEntry{emails: u.verifiedEmails(), at: time.Now()}
+	d.mu.Lock()
+	if d.emails == nil {
+		d.emails = map[string]userEntry{}
+	}
+	d.emails[userID] = e
+	d.mu.Unlock()
+	return e.emails, nil
 }
 
 type dirEntry struct {

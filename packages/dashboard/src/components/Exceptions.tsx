@@ -8,6 +8,8 @@ import { useLive } from '@/live.tsx';
 import { ApiError, apiErrorText } from '@/lib/api.ts';
 import { ago } from '@/lib/live-map.ts';
 import { Card, CardHead, ReadOnlyNote } from '@/components/ui.tsx';
+import { announcePending } from '@/components/PolicyProposals.tsx';
+import { useStore } from '@/store.tsx';
 
 interface Exception {
   id: string; endpoints?: string[]; owners?: string[]; teams?: string[]; agents?: string[];
@@ -40,6 +42,8 @@ function until(at: string | null | undefined, now: number): string {
  *  optionally for a while. Each change publishes a new policy version. */
 export function Exceptions() {
   const { api, canWrite, endpointRows, now, refresh } = useLive();
+  const { dispatch } = useStore();
+  const toast = (text: string) => dispatch({ t: 'toast', text });
   const [list, setList] = useState<Exception[] | null>(null);
   const [opts, setOpts] = useState<Options | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -69,14 +73,14 @@ export function Exceptions() {
   const create = async () => {
     setBusy(true); setErr(null);
     try {
-      await api.send('POST', '/exceptions', { endpoints: machines, agents: agent ? [agent] : [], list: list0, value: value0, reason, expires_hours: hours });
+      announcePending(await api.send('POST', '/exceptions', { endpoints: machines, agents: agent ? [agent] : [], list: list0, value: value0, reason, expires_hours: hours }), toast);
       setWhat(''); setAllowPath(''); setReason(''); setMachines([]);
       await load(); void refresh();
     } catch (e) { setErr(apiErrorText(e)); } finally { setBusy(false); }
   };
   const remove = async (id: string) => {
     setBusy(true); setErr(null);
-    try { await api.send('DELETE', `/exceptions/${encodeURIComponent(id)}`); await load(); void refresh(); }
+    try { announcePending(await api.send('DELETE', `/exceptions/${encodeURIComponent(id)}`), toast); await load(); void refresh(); }
     catch (e) { setErr(apiErrorText(e)); } finally { setBusy(false); }
   };
 

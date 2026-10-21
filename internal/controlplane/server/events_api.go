@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/effigent/effigent/internal/controlplane/store"
@@ -26,9 +25,14 @@ const MinRetentionDays = 90
 
 // Archiver stores archived tenant-days (archive.S3 in production).
 type Archiver interface {
-	// Put stores r at key and returns the stored size as the store reports it.
-	Put(ctx context.Context, key string, r io.Reader) (int64, error)
-	PresignGet(ctx context.Context, key, filename string, ttl time.Duration) (string, error)
+	// Put stores r at key and returns the stored size as the store reports
+	// it and the version id.
+	Put(ctx context.Context, key string, r io.Reader) (size int64, versionID string, err error)
+	// PresignGet links one version ("" = the current one).
+	PresignGet(ctx context.Context, key, versionID, filename string, ttl time.Duration) (string, error)
+	// SetLegalHold puts or lifts the legal hold on every version under
+	// prefix; idempotent. It returns how many versions it set.
+	SetLegalHold(ctx context.Context, prefix string, on bool) (int, error)
 	// Check proves the archive can be written (run at start).
 	Check(ctx context.Context) error
 }
@@ -49,6 +53,15 @@ func (s *Server) checkArchive(ctx context.Context) {
 }
 
 func (s *Server) retentionDays() int { return max(s.RetentionDays, MinRetentionDays) }
+
+// tenantRetentionDays is how long a tenant's events stay in the database:
+// its override, else the control plane's setting.
+func (s *Server) tenantRetentionDays(ctx context.Context, tenant string) int {
+	if e, err := s.Store.GetEventRetention(ctx, tenant); err == nil && e.RetentionDays > 0 {
+		return max(e.RetentionDays, MinRetentionDays)
+	}
+	return s.retentionDays()
+}
 
 // listEvents returns the newest events (?limit, ?type). With ?paged=1 it
 // returns one page {events, next_before} and also takes ?before (cursor),
@@ -89,7 +102,7 @@ func (s *Server) listEvents(w http.ResponseWriter, r *http.Request, p Principal)
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": evs, "next_before": next, "retention_days": s.retentionDays()})
+	writeJSON(w, http.StatusOK, map[string]any{"events": evs, "next_before": next, "retention_days": s.tenantRetentionDays(r.Context(), p.Tenant)})
 }
 
 func (s *Server) verifyEvents(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -107,8 +120,9 @@ func (s *Server) listEventArchives(w http.ResponseWriter, r *http.Request, p Pri
 		s.fail(w, err)
 		return
 	}
+	days := s.tenantRetentionDays(r.Context(), p.Tenant)
 	s.archiveMu.Lock()
-	status := map[string]any{"retention_days": s.retentionDays(), "archive_enabled": s.Archive != nil, "archives": as,
+	status := map[string]any{"retention_days": days, "archive_enabled": s.Archive != nil, "archives": as,
 		"archive_checked": s.archiveChecked, "archive_error": s.archiveErr}
 	s.archiveMu.Unlock()
 	writeJSON(w, http.StatusOK, status)
@@ -125,7 +139,7 @@ func (s *Server) eventArchiveLink(w http.ResponseWriter, r *http.Request, p Prin
 		writeErr(w, http.StatusServiceUnavailable, "event archiving is not set up on this control plane")
 		return
 	}
-	key, err := s.Store.ArchiveKeyOf(r.Context(), p.Tenant, day)
+	key, version, err := s.Store.ArchiveKeyOf(r.Context(), p.Tenant, day)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "no archive for that day")
 		return
@@ -133,19 +147,19 @@ func (s *Server) eventArchiveLink(w http.ResponseWriter, r *http.Request, p Prin
 		s.fail(w, err)
 		return
 	}
-	u, err := s.Archive.PresignGet(r.Context(), key, "effigent-events-"+day+".jsonl.gz", 10*time.Minute)
+	u, err := s.Archive.PresignGet(r.Context(), key, version, "effigent-events-"+day+".jsonl.gz", 10*time.Minute)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.audit(r, p, "events.archive.download", day, map[string]any{"key": key})
+	s.audit(r, p, "events.archive.download", day, map[string]any{"key": key, "version_id": version})
 	writeJSON(w, http.StatusOK, map[string]any{"url": u, "expires_in": 600})
 }
 
 // ---- retention ----
 
 func archiveKey(a store.ArchiveDay) string {
-	return fmt.Sprintf("events/%s/%s.jsonl.gz", strings.NewReplacer("/", "_", "..", "_").Replace(a.Tenant), a.Day.Format("2006/01/02"))
+	return archivePrefix(a.Tenant) + a.Day.Format("2006/01/02") + ".jsonl.gz"
 }
 
 // runRetention archives every tenant-day older than the retention period,
@@ -163,14 +177,15 @@ func (s *Server) runRetention(ctx context.Context) {
 		return
 	}
 	defer release()
-	cutoff := time.Now().Add(-time.Duration(s.retentionDays()) * 24 * time.Hour)
-	days, err := s.Store.DueArchiveDays(ctx, cutoff, 100)
+	days, err := s.Store.DueArchiveDays(ctx, time.Now(), s.retentionDays(), 100)
 	if err != nil {
 		s.Logf("event retention: %v", err)
 		return
 	}
 	for _, d := range days {
-		if err := s.archiveDay(ctx, d); err != nil {
+		if err := s.archiveDay(ctx, d); errors.Is(err, store.ErrLegalHold) {
+			continue // put on hold while this run was going: kept
+		} else if err != nil {
 			s.Logf("event retention %s %s: %v", d.Tenant, d.Day.Format("2006-01-02"), err)
 			return // try again next run; nothing was deleted
 		}
@@ -179,6 +194,16 @@ func (s *Server) runRetention(ctx context.Context) {
 
 func (s *Server) archiveDay(ctx context.Context, d store.ArchiveDay) error {
 	key := archiveKey(d)
+	// While a tenant is on hold nothing of it is archived (or deleted). A
+	// hold set during the upload makes CompleteArchiveDay (under the hold
+	// lock) refuse to delete, and the new object is put on hold right away.
+	held, err := s.Store.LegalHold(ctx, d.Tenant)
+	if err != nil {
+		return err
+	}
+	if held {
+		return store.ErrLegalHold
+	}
 	pr, pw := io.Pipe()
 	h := sha256.New()
 	var written int64
@@ -195,7 +220,7 @@ func (s *Server) archiveDay(ctx context.Context, d store.ArchiveDay) error {
 		contents = c
 		pw.CloseWithError(err)
 	}()
-	size, err := s.Archive.Put(ctx, key, pr)
+	size, version, err := s.Archive.Put(ctx, key, pr)
 	if err == nil {
 		err = errors.New("upload finished") // only matters if the writer is still going
 	}
@@ -211,7 +236,12 @@ func (s *Server) archiveDay(ctx context.Context, d store.ArchiveDay) error {
 		return nil
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
-	if err := s.Store.CompleteArchiveDay(ctx, d, contents, key, sum, size); err != nil {
+	if err := s.Store.CompleteArchiveDay(ctx, d, contents, key, version, sum, size); errors.Is(err, store.ErrLegalHold) {
+		if _, herr := s.Archive.SetLegalHold(ctx, key, true); herr != nil {
+			s.Logf("event retention %s: legal hold on %s: %v (the hold sync retries)", d.Tenant, key, herr)
+		}
+		return err
+	} else if err != nil {
 		return err
 	}
 	p := Principal{UserID: "system", Tenant: d.Tenant, Role: "admin", Via: "system"}

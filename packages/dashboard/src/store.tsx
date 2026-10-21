@@ -37,7 +37,7 @@ interface State {
 }
 
 type Act =
-  | { t: 'decide'; id: string; decision: 'approved' | 'approval_denied'; note?: string }
+  | { t: 'decide'; id: string; decision: 'approved' | 'approval_denied'; note?: string; ticket?: string }
   | { t: 'policy'; id: string; patch: Partial<Policy> }
   | { t: 'addRule'; id: string; rule: PolicyRule }
   | { t: 'removeRule'; id: string; ruleId: string }
@@ -55,10 +55,16 @@ function reducer(s: State, a: Act): State {
       const ap = s.approvals.find((x) => x.id === a.id);
       if (!ap || ap.state !== 'approval_pending') return s;
       const approved = a.decision === 'approved';
+      const vote = { by: s.viewer.name, decision: approved ? 'approve' as const : 'deny' as const, ticket: a.ticket, ago: 'just now', note: a.note };
+      const yes = (ap.votes ?? []).filter((v) => v.decision === 'approve').length + (approved ? 1 : 0);
+      if (approved && yes < (ap.approvalsRequired ?? 1)) { // the first of two: still pending
+        return { ...s, approvals: s.approvals.map((x) => (x.id === a.id ? { ...x, votes: [...(x.votes ?? []), vote] } : x)),
+          toast: `Your approval is recorded — waiting for a second approver` };
+      }
       return {
         ...s,
         approvals: s.approvals.map((x) =>
-          x.id === a.id ? { ...x, state: a.decision, decidedBy: s.viewer.name, decidedAgo: 'just now', note: a.note || x.note } : x),
+          x.id === a.id ? { ...x, state: a.decision, decidedBy: s.viewer.name, decidedAgo: 'just now', note: a.note || x.note, votes: [...(x.votes ?? []), vote] } : x),
         toast: `${approved ? 'Approved' : 'Denied'} — ${ap.title}`,
       };
     }
@@ -98,7 +104,7 @@ const initial = (demo: boolean): State => ({
 interface Store extends State {
   dispatch: (a: Act) => void;
   pending: Approval[];
-  decide: (id: string, decision: 'approved' | 'approval_denied', note?: string) => void;
+  decide: (id: string, decision: 'approved' | 'approval_denied', note?: string, ticket?: string) => void;
   /** Demo rows carry an environment; control-plane data has none, so it always passes. */
   inEnv: (env: Env | null) => boolean;
 }
@@ -115,7 +121,7 @@ export function StoreProvider({ demo, children }: { demo: boolean; children: Rea
   }, [s.toast]);
 
   const decide = useCallback(
-    (id: string, decision: 'approved' | 'approval_denied', note?: string) => dispatch({ t: 'decide', id, decision, note }),
+    (id: string, decision: 'approved' | 'approval_denied', note?: string, ticket?: string) => dispatch({ t: 'decide', id, decision, note, ticket }),
     [],
   );
   const value = useMemo<Store>(() => ({

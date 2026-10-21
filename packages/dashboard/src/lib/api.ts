@@ -164,6 +164,88 @@ export interface ApiApproval {
   group_name?: string;
   can_decide?: boolean; // the signed-in person may decide it
   decide_is_override?: boolean; // ...as an admin stepping in for the group
+  /** Two-person approval and tickets (control planes with migration 012). */
+  approvals_required?: number; // 1 or 2 different people
+  exclude_requester?: boolean; // the people behind the request may not approve it
+  require_ticket?: boolean; // approving needs a ticket reference
+  requester?: ApiRequester;
+  votes?: ApiVote[]; // in the order they were cast
+  can_approve?: boolean; // this person may approve (a ticket may still be needed)
+  approve_refusal?: string; // self_approval_refused | not_a_person | already_voted | …
+  approve_refusal_message?: string;
+  quorum_warning?: string; // the group can't reach the quorum without an admin
+}
+
+/** store.Requester: who is behind a request (the machine's owner, the hook's OS user, git emails). */
+export interface ApiRequester { user_ids: string[] | null; emails: string[] | null; label: string }
+
+/** store.Vote: one person's approve / deny on a request. */
+export interface ApiVote {
+  voter: string;
+  user_id: string;
+  emails: string[] | null;
+  name: string;
+  via: string; // console | api-key | email | slack
+  decision: 'approve' | 'deny';
+  note: string;
+  ticket: string;
+  ticket_url?: string;
+  admin_override: boolean;
+  at: string;
+}
+
+/** How a routed request is decided (store.ApprovalRules; each routing rule and the default). */
+export interface ApiApprovalRules {
+  approvals_required: number; // 0/1 = one person, 2 = two different people
+  exclude_requester?: boolean; // absent = true
+  require_ticket: boolean;
+}
+
+/** A policy change waiting for a second admin (cp.policy_proposals). */
+export interface ApiProposal {
+  id: string;
+  kind: 'policy' | 'exception.create' | 'exception.delete' | 'endpoint.owner' | 'settings';
+  payload: Record<string, unknown>;
+  summary: string;
+  base_version: number;
+  author: string;
+  author_name: string;
+  author_via: string;
+  state: 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'superseded';
+  decided_by?: string;
+  decided_by_name?: string;
+  note?: string;
+  version?: number; // the policy version it published
+  created_at: string;
+  decided_at?: string | null;
+  /** list view */
+  stale?: boolean; // the policy changed since it was proposed: approving would supersede it
+  can_decide?: boolean;
+  why?: string; // why this person can't decide it
+  base?: ApiPolicyVersion; // the version it was written against, for the diff
+}
+
+/** GET /policy/settings */
+export interface ApiPolicySettings { policy_change_approval: boolean; updated_by?: string; updated_at?: string }
+
+/** A write that needs a second admin answers 202 with this. */
+export interface ApiPending { pending_approval: true; proposal: ApiProposal; message: string }
+export const isPending = (v: unknown): v is ApiPending => !!v && typeof v === 'object' && (v as { pending_approval?: unknown }).pending_approval === true;
+
+/** GET|PUT /events/retention (Settings → Storage). */
+export interface ApiEventRetention {
+  retention_days: number; // in effect
+  retention_override: number; // 0 = the control plane's default
+  default_days: number;
+  min_days: number;
+  archive_enabled: boolean;
+  legal_hold: boolean;
+  hold_reason: string;
+  hold_set_by?: string;
+  hold_set_at?: string | null;
+  hold_sync: { state: 'none' | 'no_archive' | 'pending' | 'error' | 'done'; objects: number; synced_at?: string | null; error?: string };
+  updated_by?: string;
+  updated_at?: string | null;
 }
 
 /** Where approval requests are announced. The webhook URL itself is never returned. */
@@ -178,6 +260,8 @@ export interface ApiNotifications {
   slack_enabled?: boolean;
   /** the workspace's own Slack app (absent on control planes before it) */
   slack_app?: ApiSlackApp;
+  /** links ticket references on approvals: https://acme.atlassian.net/browse/{key} ("" = plain text) */
+  ticket_url_template?: string;
 }
 
 /** server.slackAppView */

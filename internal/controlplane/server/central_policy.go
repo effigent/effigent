@@ -221,7 +221,7 @@ func (s *Server) setEndpointOwner(w http.ResponseWriter, r *http.Request, p Prin
 		}
 	}
 	slices.Sort(teams)
-	e, err := s.Store.SetEndpointOwner(r.Context(), p.Tenant, r.PathValue("id"), strings.TrimSpace(req.Owner), teams)
+	e, err := s.Store.GetEndpoint(r.Context(), p.Tenant, r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 		return
@@ -230,33 +230,16 @@ func (s *Server) setEndpointOwner(w http.ResponseWriter, r *http.Request, p Prin
 		s.fail(w, err)
 		return
 	}
-	s.audit(r, p, "endpoint.owner", e.ID, map[string]any{"hostname": e.Hostname, "owner": e.Owner, "teams": e.Teams})
-	resp := map[string]any{"endpoint": e}
-	pv, err := s.Store.LatestPolicy(r.Context(), p.Tenant)
-	if err == nil && pv.Source != nil {
-		src, err := decodeSource(pv.Source)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		comment := fmt.Sprintf("recompiled: %s owner %q teams %v", e.Hostname, e.Owner, e.Teams)
-		v, rep, code, err := s.publishCentral(r, p, pv.Body, src, comment)
-		if err != nil {
-			if code == http.StatusInternalServerError {
-				s.fail(w, err)
-				return
-			}
-			// The owner is saved; the policy can't be compiled for it.
-			resp["policy_error"] = err.Error()
-		} else {
-			s.audit(r, p, "policy.publish", fmt.Sprintf("v%d", v), map[string]any{"version": v, "comment": comment})
-			resp["version"], resp["report"] = v, rep
-		}
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
-		s.fail(w, err)
+	// A machine's owner and teams pick its central policies, so with change
+	// approval on this waits for a second admin like a policy edit (the
+	// owner is not saved until then).
+	c := policyChange{EndpointID: e.ID, Hostname: e.Hostname, Owner: strings.TrimSpace(req.Owner), Teams: teams}
+	if s.proposeIfRequired(w, r, p, "endpoint.owner", fmt.Sprintf("Set %s's owner to %q, teams %v", e.Hostname, c.Owner, teams), c,
+		map[string]any{"endpoint": e}) {
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	code, resp, err := s.applyEndpointOwner(r, p, c, "")
+	s.writeApplied(w, code, resp, err)
 }
 
 // endpointCompiledPolicy previews what one machine enforces for the latest

@@ -6,10 +6,13 @@ import { useEffect, useState } from 'react';
 import { Ic } from '@/icons.tsx';
 import { SlackApp } from '@/components/SlackApp.tsx';
 import { useLive } from '@/live.tsx';
-import { API_BASE, ApiError, apiErrorText, type ApiNotifications } from '@/lib/api.ts';
+import { API_BASE, ApiError, apiErrorText, type ApiNotifications, type ApiPolicySettings } from '@/lib/api.ts';
 import { Integrations } from '@/components/Integrations.tsx';
 import { SpendVendors } from '@/components/SpendVendors.tsx';
 import { Storage } from '@/components/Storage.tsx';
+import { EventRetention } from '@/components/EventRetention.tsx';
+import { PROPOSALS_CHANGED, announcePending } from '@/components/PolicyProposals.tsx';
+import { useStore } from '@/store.tsx';
 import { Card, CardHead, DemoNote, PageGuide, PageHead, ReadOnlyNote, Switch, ThemeSelect } from '@/components/ui.tsx';
 import { useDemoMode } from '@/demo.tsx';
 
@@ -29,7 +32,7 @@ export function Settings({ dev }: { dev: boolean }) {
   const pendingMe = loaded ? '—' : '…';
   const { demo, setDemo } = useDemoMode();
   const [s, setS] = useState({
-    failClosed: true, unknownMode: 'monitor', orphanMcp: true, redact: true, retention: '365',
+    failClosed: true, unknownMode: 'monitor', orphanMcp: true, redact: true,
   });
   const set = <K extends keyof typeof s>(k: K, v: (typeof s)[K]) => setS({ ...s, [k]: v });
 
@@ -80,15 +83,10 @@ export function Settings({ dev }: { dev: boolean }) {
           </Row>
         </Card>
 
-        <Card>
-          <CardHead title="Data" sub="Audit trail retention for this workspace."><DemoNote title={NOT_STORED} label="Not saved yet" /></CardHead>
-          <Row title="Retention" desc="Events, decisions and policy versions.">
-            <select className="select" style={{ width: 130 }} value={s.retention} onChange={(e) => set('retention', e.target.value)} aria-label="Retention">
-              <option value="90">90 days</option><option value="365">1 year</option><option value="730">2 years</option>
-            </select>
-          </Row>
-        </Card>
+        <div id="policy-changes" style={{ scrollMarginTop: 88 }}><PolicyChangeApproval /></div>
       </div>
+
+      <div id="storage" style={{ scrollMarginTop: 88 }}><EventRetention /></div>
 
       <Card>
         <CardHead title="Appearance" sub="How the console looks in this browser." />
@@ -118,6 +116,44 @@ export function Settings({ dev }: { dev: boolean }) {
   );
 }
 
+/** Policy change approval: publishing needs a second admin (on applies at once, off is itself a proposal). */
+function PolicyChangeApproval() {
+  const { api, canWrite } = useLive();
+  const { dispatch } = useStore();
+  const [v, setV] = useState<ApiPolicySettings | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const load = () => api.get<ApiPolicySettings>('/policy/settings').then(setV)
+      .catch((e) => setErr(e instanceof ApiError && e.status === 404 ? 'The control plane does not support policy change approval yet — it needs to be updated.' : apiErrorText(e)));
+    void load();
+    window.addEventListener(PROPOSALS_CHANGED, load);
+    return () => window.removeEventListener(PROPOSALS_CHANGED, load);
+  }, [api]);
+  const toggle = async (on: boolean) => {
+    if (!canWrite || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.send<{ settings?: ApiPolicySettings }>('PUT', '/policy/settings', { policy_change_approval: on });
+      if (!announcePending(r, (text) => dispatch({ t: 'toast', text }))) {
+        if (r.settings) setV(r.settings);
+        dispatch({ t: 'toast', text: on ? 'Policy changes now need a second admin' : 'Policy change approval is off' });
+      }
+    } catch (e) { setErr(apiErrorText(e)); } finally { setBusy(false); }
+  };
+  return (
+    <Card>
+      <CardHead info={HELP.changeApproval} title="Policy changes" sub="Four eyes on everything that publishes a policy version." />
+      <Row title="Require a second admin" desc="Publishing a policy, adding or removing an exception and changing a machine’s owner wait in Policies until another admin or security admin approves. Turning this off needs approval too.">
+        {v ? <Switch on={v.policy_change_approval} onChange={toggle} label="Require a second admin" /> : <span className="muted">…</span>}
+      </Row>
+      {v?.policy_change_approval && <div className="muted" style={{ padding: '0 20px 14px', fontSize: 13 }}>Pending changes: <Link href="/policies" className="view-all">Policies</Link>. API keys can propose, never approve; there is no emergency bypass.</div>}
+      {err && <div className="callout bad" style={{ margin: '0 20px 14px' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
+      {!canWrite && <div style={{ padding: '0 20px 14px' }}><ReadOnlyNote what="change this" /></div>}
+    </Card>
+  );
+}
+
 /** Where approval requests go: a Slack incoming webhook and/or email
  *  recipients, stored by the control plane (the webhook URL is write-only). */
 function ApprovalNotifications() {
@@ -125,13 +161,14 @@ function ApprovalNotifications() {
   const [n, setN] = useState<ApiNotifications | null>(null);
   const [hook, setHook] = useState('');
   const [emails, setEmails] = useState('');
+  const [tmpl, setTmpl] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     let live = true;
     api.get<ApiNotifications>('/notifications')
-      .then((v) => { if (live) { setN(v); setEmails(v.emails.join(', ')); } })
+      .then((v) => { if (live) { setN(v); setEmails(v.emails.join(', ')); setTmpl(v.ticket_url_template ?? ''); } })
       .catch((e) => {
         if (!live) return;
         setMsg({ ok: false, text: e instanceof ApiError && e.status === 404
@@ -142,11 +179,11 @@ function ApprovalNotifications() {
 
   const list = emails.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
   const slack = !!n?.slack_enabled;
-  const save = async (body: { slack_webhook?: string; emails?: string[] }, done: string) => {
+  const save = async (body: { slack_webhook?: string; emails?: string[]; ticket_url_template?: string }, done: string) => {
     setBusy(true); setMsg(null);
     try {
       const v = await api.send<ApiNotifications>('PUT', '/notifications', body);
-      setN(v); setEmails(v.emails.join(', ')); setHook('');
+      setN(v); setEmails(v.emails.join(', ')); setHook(''); setTmpl(v.ticket_url_template ?? '');
       setMsg({ ok: true, text: done });
     } catch (e) {
       setMsg({ ok: false, text: apiErrorText(e) });
@@ -199,6 +236,15 @@ function ApprovalNotifications() {
         <input className="input" style={{ flex: '1 1 260px' }} placeholder="security@yourcompany.com, lead@yourcompany.com" value={emails} disabled={!canWrite}
           onChange={(e) => setEmails(e.target.value)} aria-label="Approver emails" />
         <button className="btn sm" disabled={!canWrite || busy || (n !== null && list.join(',') === n.emails.join(','))} onClick={() => save({ emails: list }, 'Email recipients saved.')}>Save</button>
+      </div>
+      <Row title="Ticket links" desc="Approvers can attach a ticket when they approve (a rule in Team & Approvers can require one). With a template, keys like SEC-123 link to your tracker.">
+        <span />
+      </Row>
+      <div style={{ padding: '0 20px 14px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input className="input mono" style={{ flex: '1 1 260px' }} placeholder="https://acme.atlassian.net/browse/{key}" value={tmpl} disabled={!canWrite}
+          onChange={(e) => setTmpl(e.target.value)} aria-label="Ticket link template" />
+        <button className="btn sm" disabled={!canWrite || busy || n === null || tmpl.trim() === (n.ticket_url_template ?? '')}
+          onClick={() => save({ ticket_url_template: tmpl.trim() }, tmpl.trim() ? 'Ticket links saved.' : 'Ticket links removed.')}>Save</button>
       </div>
       <Row title="Send a test" desc={fixture ? 'Demo Mode: nothing is actually sent.' : slack ? 'Posts a sample request to Slack and email, so you can see where they land.' : 'Emails a sample request, so you can see what approvers get.'}>
         <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
