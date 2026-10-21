@@ -122,7 +122,7 @@ func evaluate(rule policy.Rule, in ClaudeInput, facts facts) Decision {
 // is checkApproval's).
 func checkLists(rule policy.Rule, cmds []simpleCmd, facts facts, approve bool) finding {
 	verb, suffix := "deny", " is not allowed"
-	commands, writes, pkgs, acts := rule.CommandDeny, rule.FileWriteDeny, rule.PackageDeny, rule.ActionsDeny
+	commands, writes, pkgs, acts := rule.CommandDeny, rule.FileWriteDeny, rule.PackageDeny, rule.GatewayDeny()
 	if approve {
 		verb, suffix = "approve", " needs approval"
 		commands, writes, pkgs, acts = nil, rule.FileWriteApprove, rule.PackageApprove, rule.ActionsApprove

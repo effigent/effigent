@@ -163,9 +163,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ev.Rule, ev.Message = "models", why
 			if enforce {
 				ev.Type, ev.Severity = event.Blocked, "high"
-				mc.Status = http.StatusForbidden
+				// 400, not 403: agents read 401/403 as a login problem
+				// (Claude Code: "Failed to authenticate"), and don't retry a 400.
+				mc.Status = http.StatusBadRequest
 				g.cfg.Emit(ev)
-				writeError(w, prov, http.StatusForbidden, "permission_error", "Blocked by Effigent: "+why+
+				writeError(w, prov, http.StatusBadRequest, "invalid_request_error", "Blocked by Effigent: "+why+
 					". Choose an allowed model (Claude Code: /model) or ask your IT team.")
 				return
 			}

@@ -172,14 +172,14 @@ func TestDeniedModelIsRefusedInTheProvidersFormat(t *testing.T) {
 	f := setup(t, policy.Rule{Mode: policy.Denylist, Models: policy.ModelRule{Deny: []string{"*opus*"}}},
 		func(w http.ResponseWriter, r *http.Request) { called = true })
 	for _, c := range []struct{ path, body, want string }{
-		{"/anthropic/claude-code/v1/messages", `{"model":"claude-opus-4-1","max_tokens":10,"stream":true}`, `"type":"permission_error"`},
-		{"/openai/codex/v1/responses", `{"model":"o3-opus","stream":true}`, `"code":"permission_error"`},
-		{"/gemini/gemini-cli/v1beta/models/gemini-opus:streamGenerateContent?alt=sse", `{}`, `"status":"PERMISSION_DENIED"`},
+		{"/anthropic/claude-code/v1/messages", `{"model":"claude-opus-4-1","max_tokens":10,"stream":true}`, `"type":"invalid_request_error"`},
+		{"/openai/codex/v1/responses", `{"model":"o3-opus","stream":true}`, `"code":"invalid_request_error"`},
+		{"/gemini/gemini-cli/v1beta/models/gemini-opus:streamGenerateContent?alt=sse", `{}`, `"status":"INVALID_ARGUMENT"`},
 	} {
 		resp := post(t, f.gw.URL+c.path, c.body, nil)
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(b), c.want) || !strings.Contains(string(b), "Blocked by Effigent") ||
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), c.want) || !strings.Contains(string(b), "Blocked by Effigent") ||
 			!strings.Contains(string(b), "models.deny *opus*") {
 			t.Errorf("%s: %d %s", c.path, resp.StatusCode, b)
 		}
@@ -189,7 +189,7 @@ func TestDeniedModelIsRefusedInTheProvidersFormat(t *testing.T) {
 	}
 	evs := f.rec.waitFor(t, 3)
 	for _, e := range evs {
-		if e.Type != event.Blocked || e.Severity != "high" || e.Rule != "models" || e.ModelCall.Status != 403 {
+		if e.Type != event.Blocked || e.Severity != "high" || e.Rule != "models" || e.ModelCall.Status != 400 {
 			t.Errorf("event %+v", e)
 		}
 	}
