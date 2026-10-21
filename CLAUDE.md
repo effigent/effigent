@@ -463,8 +463,9 @@ carries them (`actions`), matched or not; `engine.scrub` redacts their targets.
     completions (without it there is no usage). Everything else is forwarded byte for byte.
 - `require_gateway`: hooks treat a Claude Code / Codex / Gemini session as `model_endpoint`
   (`Rule.GatewayDeny()` adds it to `actions_deny` unless it's already in the deny or approve lists) unless
-  - the gateway has seen that session in the last 30 min (Claude `x-claude-code-session-id`, Codex
-    `thread-id` = the hooks' `session_id`; a tool call always follows a model call), or
+  - the gateway has seen that session in the last 30 min (Claude `x-claude-code-session-id`; Codex
+    `thread-id`, which is the hooks' `session_id` by source reading of rust-v0.163.0, not seen live;
+    a tool call always follows a model call), or
   - the hook env points at the gateway (`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`; Bedrock/Vertex never count).
 - `effigentd install-gateway [--agents claude,codex] [--addr] [--remove]`:
   - Claude Code: `env.ANTHROPIC_BASE_URL = …/anthropic/claude-code` in managed-settings.json. A managed
@@ -472,6 +473,12 @@ carries them (`actions`), matched or not; `engine.scrub` redacts their targets.
   - Codex: `openai_base_url = …/codex/codex` in `/etc/codex/managed_config.toml`, managed defaults
     applied over config.toml and `--config` at every start
     (learn.chatgpt.com/docs/enterprise/managed-configuration). On Windows that file is per user: `--codex-file`.
+    These are defaults, not requirements: a user can change them mid-run. The enforced form would be
+    `model_provider` + `[model_providers.<id>]` (`requires_openai_auth = true`) in `requirements.toml`
+    (learn.chatgpt.com/docs/enterprise/sign-in-with-chatgpt-through-a-gateway), not done yet.
+    The base URL doesn't end in `/backend-api/codex`, so Codex's `supports_codex_backend_routes()` is false.
+    That turns off ChatGPT workspace routing (it could move the base URL off the gateway), per-model
+    response headers and experimental context management, by source reading.
   - Never replaces or removes someone else's base URL. Codex's original file is kept once as `.effigent-backup`.
   - hookstate reports `gateway: {state: on|off|elsewhere|other_port, url, file}` for claude and codex.
   - Not run by the installers: it changes where model traffic goes, so an admin opts in.
