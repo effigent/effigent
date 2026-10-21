@@ -426,20 +426,6 @@ carries them (`actions`), matched or not; `engine.scrub` redacts their targets.
   hook env through a real hook process, daemon and local control plane. OSV's response shape was
   checked against the live API (2026-10-21); the live lookup isn't in an automated test.
 
-## 3. Auth
-
-- Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
-  endpoint secret (`eps_…`, hashed) used as Bearer on `/ep/v1/*`. Revocation via console.
-- API keys: see 2c.
-- Console API: Clerk session JWT (verified via `CLERK_ISSUER`/.well-known/jwks.json;
-  tenant = `org:<id>` or `user:<id>`, same refs as v1 `tenants.clerk_ref`), or
-  `EFFIGENT_ADMIN_TOKEN` + `X-Effigent-Tenant` for automation.
-- Console dev bypass: `EFFIGENT_DEV_NOAUTH=1 NEXT_PUBLIC_EFFIGENT_DEV_NOAUTH=1` (never in production builds).
-- Self-hosted (2k): OIDC ID/access tokens from `EFFIGENT_OIDC_ISSUER` (`server/oidc.go`), Principal
-  `via: oidc` with `email`/`name`/`groups` (omitted for Clerk, so Clerk's `/me` is unchanged). With
-  both configured, a token whose unverified `iss` equals the OIDC issuer goes to OIDC, everything
-  else to Clerk. Characterization tests pin the Clerk and admin-token paths (`server/auth_test.go`).
-
 ## 2k. Self-hosted control plane
 
 Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENANT`, default
@@ -483,6 +469,20 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
   effigentd enroll with `--ca-file` and sync, `helm upgrade` keeps the signing key; passed 2026-10-22).
   Not exercised: a real IdP (Okta/Entra/Keycloak), the archive against MinIO, browser CORS in-cluster
   (checked locally in Chrome against Dex), the Clerk runtime path (covered by characterization tests).
+
+## 3. Auth
+
+- Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
+  endpoint secret (`eps_…`, hashed) used as Bearer on `/ep/v1/*`. Revocation via console.
+- API keys: see 2c.
+- Console API: Clerk session JWT (verified via `CLERK_ISSUER`/.well-known/jwks.json;
+  tenant = `org:<id>` or `user:<id>`, same refs as v1 `tenants.clerk_ref`), or
+  `EFFIGENT_ADMIN_TOKEN` + `X-Effigent-Tenant` for automation.
+- Console dev bypass: `EFFIGENT_DEV_NOAUTH=1 NEXT_PUBLIC_EFFIGENT_DEV_NOAUTH=1` (never in production builds).
+- Self-hosted (2k): OIDC ID/access tokens from `EFFIGENT_OIDC_ISSUER` (`server/oidc.go`), Principal
+  `via: oidc` with `email`/`name`/`groups` (omitted for Clerk, so Clerk's `/me` is unchanged). With
+  both configured, a token whose unverified `iss` equals the OIDC issuer goes to OIDC, everything
+  else to Clerk. Characterization tests pin the Clerk and admin-token paths (`server/auth_test.go`).
 
 ## 4. Running locally
 
