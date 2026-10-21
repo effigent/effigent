@@ -135,6 +135,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/endpoints/{id}/policy", s.console(read, s.endpointCompiledPolicy))
 	mux.HandleFunc("GET /api/v1/endpoint-health", s.console(read, s.getEndpointHealth))
 	mux.HandleFunc("PUT /api/v1/endpoint-health", s.console(write, s.putEndpointHealth))
+	// Break-glass: offline codes that lift approval lists (admins/security_admins only).
+	mux.HandleFunc("GET /api/v1/break-glass", s.console(read, s.listBreakGlass))
+	mux.HandleFunc("POST /api/v1/break-glass", s.console(write, s.createBreakGlass))
+	mux.HandleFunc("DELETE /api/v1/break-glass/{id}", s.console(write, s.revokeBreakGlass))
 	mux.HandleFunc("GET /api/v1/policy", s.console(read, s.getPolicy))
 	mux.HandleFunc("PUT /api/v1/policy", s.scoped("policy", write, s.putPolicy))
 	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))

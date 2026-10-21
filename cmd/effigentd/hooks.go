@@ -162,6 +162,17 @@ func hookHandlerSeen(eng *engine.Engine, cp func() *cpclient.Client, sess *sessi
 		ev.Actions = d.Actions // redacted with the rest of the event (engine.scrub)
 		if d.Approve {
 			seenBy := d.Seen
+			if id, until, active := eng.BreakGlass(); active {
+				// A break-glass window is open (FR Q18): the control plane is
+				// unreachable, so no approver can be asked — let it run and
+				// record it. Deny lists already ran before this point.
+				ev.Type, ev.Severity, ev.Rule = event.BreakGlass, "medium", d.Rule
+				ev.Message = "allowed under break-glass " + id + " (would need approval: " + d.Reason + "); window ends " +
+					until.UTC().Format("15:04 MST")
+				sessions.Record(key, seenBy, true)
+				eng.Emit(ev)
+				return ag.output(hooks.Decision{}), nil
+			}
 			d = askApproval(ctx, eng, cp(), c, pausedCall{
 				agent: ag.name, session: in.SessionID, tool: in.ToolName, cwd: in.Cwd,
 				summary: approvalSummary(call), action: callAction(call),

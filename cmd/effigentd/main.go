@@ -69,6 +69,8 @@ func main() {
 			installGatewayCmd(os.Args[2:])
 		case "cloud-setup":
 			cloudSetupCmd(os.Args[2:])
+		case "break-glass":
+			breakGlassCmd(os.Args[2:])
 			return
 		}
 	}
@@ -302,9 +304,14 @@ func daemon() {
 		logger.Printf("hook API on unix:%s", *hookSocket)
 	}
 	if *listen != "" {
+		var bg func(context.Context, string, string) ([]byte, error)
+		if cp != nil {
+			bg = breakGlassHandler(eng, func() *cpclient.Client { return client }, *stateDir)
+		}
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
-			Hook: hook,
+			Hook:       hook,
+			BreakGlass: bg,
 			Stats: func() map[string]any {
 				out := map[string]any{
 					"tetragon_connected": tgConnected.Load(),
@@ -315,6 +322,9 @@ func daemon() {
 				}
 				if vms != nil {
 					out["unmanaged_agents"] = vms.Running()
+				}
+				if id, until, active := eng.BreakGlass(); active {
+					out["break_glass"] = map[string]any{"id": id, "until": until}
 				}
 				if cp != nil {
 					out["endpoint_id"], out["control_plane"], out["tenant"] = cp.EndpointID, cp.Server, cp.Tenant
@@ -368,6 +378,11 @@ func daemon() {
 	go tg.Run(ctx, fromTetragon, func() {
 		logger.Printf("connected to Tetragon at %s", *tetragonAddr)
 		tgConnected.Store(true)
+		// Install self-protection (FR Q20) before any agent is tracked, and
+		// refresh it on every (re)connect so Tetragon's pid is current (it may
+		// have started after effigentd, or restarted). SetGuard reapplies live
+		// roots, so a later refresh takes effect.
+		eng.SetGuard(ctx, buildGuard(*stateDir, *procfs, logger.Printf))
 		if first && *procfs != "" {
 			if procs, ppid, err := procscan.Scan(*procfs); err != nil {
 				logger.Printf("procfs scan: %v", err)

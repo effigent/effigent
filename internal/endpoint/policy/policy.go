@@ -121,6 +121,22 @@ type Rule struct {
 	Models         ModelRule `yaml:"-" json:"-"`
 	RequireGateway bool      `yaml:"-" json:"-"`
 	GatewayAddr    string    `yaml:"-" json:"-"`
+
+	// SelfProtect is set by effigentd (never by policy authors): the kernel
+	// rules that stop processes in this agent's tree from killing effigentd /
+	// Tetragon or tampering with their binaries, state and config (FR Q20).
+	SelfProtect *SelfProtect `yaml:"-" json:"-"`
+}
+
+// SelfProtect is the daemon's self-protection, rendered into every tracked
+// agent's kernel policy (Linux): the agent's tree may not signal these pids
+// nor write / truncate / unlink / rename these paths. Always enforced, even
+// in monitor mode and during a break-glass window — an agent must never be
+// able to turn effigentd off. Scoped to the agent tree, so a non-agent root
+// shell is unaffected (the documented limit).
+type SelfProtect struct {
+	KillPIDs []uint32 // effigentd + Tetragon pids (empty when they can't be resolved, e.g. a dev daemon outside the agents' pid namespace)
+	Paths    []string // absolute files and directory prefixes to protect from writes
 }
 
 // Environment names the targets that make an action part of an environment
@@ -231,9 +247,27 @@ func (r Rule) NeedsApproval() bool {
 //
 // Directory entries (a trailing /) are left out: the kernel matches a path
 // suffix, and only hooks match everything under a directory.
-func (r Rule) Kernel() Rule {
+func (r Rule) Kernel() Rule { return r.kernel(false) }
+
+// KernelLifted is Kernel while a break-glass window is active (FR Q18): the
+// approval lists are NOT folded into denies (a match would pause and ask, but
+// the control plane is unreachable, so break-glass lets it run). Deny lists
+// are untouched — break-glass never lifts a deny. In allowlist mode the
+// programs that would need approval become allowed.
+func (r Rule) KernelLifted() Rule { return r.kernel(true) }
+
+func (r Rule) kernel(lift bool) Rule {
 	k := r
 	k.FileAlert = filePaths(r.FileAlert)
+	if lift {
+		// Approvals lifted: the kernel enforces only the deny lists and the
+		// allowlist (plus any program that needed approval, now allowed).
+		k.FileDeny = filePaths(r.FileDeny)
+		if r.Mode == Allowlist && len(r.ExecApprove) > 0 {
+			k.ExecAllow = append(append([]string(nil), r.ExecAllow...), r.ExecApprove...)
+		}
+		return k
+	}
 	if !r.NeedsApproval() {
 		k.FileDeny = filePaths(r.FileDeny)
 		return k
@@ -307,6 +341,10 @@ type Policy struct {
 	MCPPins map[string]PinList `yaml:"mcp_pins,omitempty"`
 	// Models is enforced by effigentd's local model gateway.
 	Models Models `yaml:"models,omitempty"`
+	// SelfProtection turns kernel self-protection on (default) or off (FR Q20):
+	// rules that stop an agent tree from stopping effigentd / Tetragon or
+	// editing their binaries, state and hook config. nil = on.
+	SelfProtection *bool `yaml:"self_protection,omitempty" json:"self_protection,omitempty"`
 }
 
 // PinList is one or more fingerprints: a string or a list in YAML.
@@ -358,6 +396,9 @@ func (p *Policy) validPins() error {
 	p.MCPPins = out
 	return nil
 }
+
+// SelfProtectionOn reports whether kernel self-protection is enabled (default on).
+func (p *Policy) SelfProtectionOn() bool { return p.SelfProtection == nil || *p.SelfProtection }
 
 // Redaction is the workspace's own masks: patterns (RE2) for internal ids,
 // hostnames, customer data, and the optional PII set (emails, phone, card

@@ -36,6 +36,7 @@ var webhookEvents = []string{
 	"pricing_leaks.runaway_cost",
 	"endpoint.hooks_missing", "endpoint.offline", "endpoint.online",
 	"anomaly.first_seen",
+	"break_glass.created", "break_glass.used",
 }
 
 // cappedEvents get at most webhookCap deliveries per webhook per minute.
