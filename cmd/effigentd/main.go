@@ -92,6 +92,9 @@ func daemon() {
 	)
 	flag.Parse()
 	logger := log.New(os.Stderr, "effigentd: ", log.LstdFlags)
+	if err := trustStateCA(*stateDir); err != nil { // private CA of a self-hosted control plane (cafile.go)
+		logger.Fatal(err)
+	}
 
 	pol, raw, err := policy.Load(*policyFile)
 	if err != nil {

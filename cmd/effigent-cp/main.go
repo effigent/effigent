@@ -81,7 +81,10 @@ func main() {
 	// Agent events older than EFFIGENT_EVENT_RETENTION_DAYS (default and minimum 90)
 	// move to this S3 bucket; without a bucket nothing is ever deleted.
 	if b := os.Getenv("EFFIGENT_ARCHIVE_BUCKET"); b != "" {
-		a, err := archive.NewS3(ctx, b, envOr("EFFIGENT_ARCHIVE_REGION", "us-east-1"))
+		// S3-compatible stores (self-hosted MinIO, …): endpoint, path-style, no SSE-S3.
+		a, err := archive.NewS3With(ctx, b, envOr("EFFIGENT_ARCHIVE_REGION", "us-east-1"), archive.S3Options{
+			Endpoint: os.Getenv("EFFIGENT_ARCHIVE_ENDPOINT"), PathStyle: os.Getenv("EFFIGENT_ARCHIVE_PATH_STYLE") == "1",
+			NoSSE: os.Getenv("EFFIGENT_ARCHIVE_SSE") == "none"})
 		if err != nil {
 			logger.Fatalf("archive: %v", err)
 		}

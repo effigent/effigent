@@ -19,16 +19,25 @@ func enrollCmd(args []string) {
 	server := fs.String("server", "", "control plane URL, e.g. https://api.effigent.ai")
 	token := fs.String("token", "", "one-time enrollment token from the console")
 	dir := fs.String("state-dir", cpclient.DefaultStateDir(), "where to store this endpoint's credentials")
+	caFile := fs.String("ca-file", os.Getenv("EFFIGENT_CA_FILE"), "PEM bundle of a private CA that signed a self-hosted control plane's certificate (kept in the state dir; system roots stay trusted)")
 	_ = fs.Parse(args)
 	if *server == "" || *token == "" {
 		fs.Usage()
 		os.Exit(2)
+	}
+	if err := trustCAFiles(*caFile); err != nil {
+		fatalf("%v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st, err := cpclient.Enroll(ctx, *server, *token, *dir, version)
 	if err != nil {
 		fatalf("%v", err)
+	}
+	if *caFile != "" {
+		if err := saveCA(*caFile, *dir); err != nil {
+			fatalf("enrolled, but couldn't keep the CA file in %s: %v", *dir, err)
+		}
 	}
 	fmt.Printf("enrolled: endpoint %s (tenant %s)\ncredentials saved in %s\nstart the daemon: effigentd --state-dir %s\n",
 		st.EndpointID, st.Tenant, *dir, *dir)
