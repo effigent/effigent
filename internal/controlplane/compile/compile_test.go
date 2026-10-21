@@ -51,6 +51,26 @@ func compile(t *testing.T, b string, ps []policy.Policy, m Machine) *Output {
 	return out
 }
 
+// gated_exec (FR Q3) is a base-policy field with no central-rule source; it
+// must survive compilation unchanged so the endpoint can gate the binary.
+func TestGatedExecSurvivesCompile(t *testing.T) {
+	const b = `
+defaults:
+  mode: denylist
+  gated_exec: [/usr/bin/aws, /usr/local/bin/kubectl]
+agents:
+  - name: claude-code
+    binary_names: [claude]
+`
+	out := compile(t, b, nil, payments)
+	for _, agent := range []string{"", "claude-code"} {
+		r := out.Policy.RuleFor(agent)
+		if !slices.Contains(r.GatedExec, "/usr/bin/aws") || !slices.Contains(r.GatedExec, "/usr/local/bin/kubectl") {
+			t.Fatalf("agent %q: gated_exec lost in compile: %v", agent, r.GatedExec)
+		}
+	}
+}
+
 func TestPaymentsCurlBlockedOnlyOnPaymentsMachine(t *testing.T) {
 	ps := blockCurlForPayments()
 

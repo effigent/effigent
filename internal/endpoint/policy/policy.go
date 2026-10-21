@@ -39,9 +39,20 @@ type Rule struct {
 	Mode      Mode     `yaml:"mode,omitempty" json:"mode"`
 	ExecDeny  []string `yaml:"exec_deny,omitempty" json:"exec_deny"`
 	ExecAllow []string `yaml:"exec_allow,omitempty" json:"exec_allow"`
-	FileAlert []string `yaml:"file_alert,omitempty" json:"file_alert"` // path suffixes
-	FileDeny  []string `yaml:"file_deny,omitempty" json:"file_deny"`   // path suffixes
-	Network   *bool    `yaml:"network,omitempty" json:"network"`       // report outbound TCP connects
+	// GatedExec (FR Q3) are absolute binary paths the agent tree may not exec
+	// directly: the kernel refuses the exec unless the calling process is
+	// effigentd, i.e. it was launched through `effigentd gate -- <bin> …`
+	// (which evaluates the argv against command/actions rules first). A shim on
+	// `effigentd run`'s PATH routes bare invocations through the gate; a
+	// detected agent must call `effigentd gate` itself. A deny list still wins.
+	GatedExec []string `yaml:"gated_exec,omitempty" json:"gated_exec"`
+	// GateExempt is set by effigentd (never by policy authors): effigentd's own
+	// resolved binary paths, which the kernel lets exec a gated binary (the
+	// gate). Injected per agent when GatedExec is non-empty.
+	GateExempt []string `yaml:"-" json:"-"`
+	FileAlert  []string `yaml:"file_alert,omitempty" json:"file_alert"` // path suffixes
+	FileDeny   []string `yaml:"file_deny,omitempty" json:"file_deny"`   // path suffixes
+	Network    *bool    `yaml:"network,omitempty" json:"network"`       // report outbound TCP connects
 	// NetDeny blocks connections to these IPs/CIDRs. NetAllow, when set,
 	// blocks every destination outside it (loopback is always allowed).
 	NetDeny  []string `yaml:"network_deny,omitempty" json:"network_deny"`
@@ -520,7 +531,7 @@ func (r Rule) check() error {
 			}
 		}
 	}
-	for _, list := range [][]string{r.ExecDeny, r.ExecAllow, r.ExecApprove} {
+	for _, list := range [][]string{r.ExecDeny, r.ExecAllow, r.ExecApprove, r.GatedExec} {
 		for _, b := range list {
 			if !strings.HasPrefix(b, "/") {
 				return fmt.Errorf("exec path %q must be absolute (the kernel matches resolved paths)", b)

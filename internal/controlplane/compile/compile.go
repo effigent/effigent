@@ -718,6 +718,7 @@ func overrides(def, r ep.Rule) ep.Rule {
 	}
 	o.ExecDeny = list(def.ExecDeny, r.ExecDeny)
 	o.ExecAllow = list(def.ExecAllow, r.ExecAllow)
+	o.GatedExec = list(def.GatedExec, r.GatedExec)
 	o.FileAlert = list(def.FileAlert, r.FileAlert)
 	o.FileDeny = list(def.FileDeny, r.FileDeny)
 	o.NetDeny = list(def.NetDeny, r.NetDeny)
@@ -762,7 +763,7 @@ func sameRule(a, b ep.Rule) bool {
 		l(a.CommandDeny, b.CommandDeny) && l(a.FileWriteDeny, b.FileWriteDeny) && l(a.FileWriteApprove, b.FileWriteApprove) &&
 		l(a.ProtectedBranches, b.ProtectedBranches) && l(a.PackageDeny, b.PackageDeny) && l(a.PackageApprove, b.PackageApprove) &&
 		l(a.PackageAllow, b.PackageAllow) && l(a.PackageRegistries, b.PackageRegistries) && l(a.MCPAllow, b.MCPAllow) &&
-		l(a.ModelHostsAllow, b.ModelHostsAllow)
+		l(a.ModelHostsAllow, b.ModelHostsAllow) && l(a.GatedExec, b.GatedExec)
 }
 
 func eqBool(a, b *bool) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }

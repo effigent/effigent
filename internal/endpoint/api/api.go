@@ -27,6 +27,10 @@ type Server struct {
 	Stats  func() map[string]any
 	// Hook answers an agent's pre-tool hook (POST /hook/{agent}); nil disables it.
 	Hook func(ctx context.Context, c HookCall) ([]byte, error)
+	// Gate decides a gated-binary launch (POST /gate/{agent}, FR Q3): it runs
+	// the same command/actions evaluation a Bash hook would and returns
+	// {"allow":bool,"reason":string}. nil disables it (hooks not enabled).
+	Gate func(ctx context.Context, c GateCall) ([]byte, error)
 	// BreakGlass applies an admin-issued offline break-glass code (POST
 	// /break-glass); nil disables it (not enrolled / hooks disabled).
 	BreakGlass func(ctx context.Context, code, osUser string) ([]byte, error)
@@ -44,6 +48,17 @@ type HookCall struct {
 	// Env is the agent's identity-related environment (hooks.AgentEnv),
 	// reported by the hook process in X-Effigent-Agent-Env.
 	Env map[string]string
+}
+
+// GateCall is one gated-binary launch (FR Q3): the full command line the gate
+// is about to exec, evaluated as if the agent had run it in a Bash tool.
+type GateCall struct {
+	Agent   string
+	Command string // the gated argv, shell-quoted
+	Cwd     string
+	Budget  time.Duration
+	OSUser  string
+	Env     map[string]string
 }
 
 func (s *Server) Handler() http.Handler {
@@ -68,6 +83,32 @@ func (s *Server) Handler() http.Handler {
 			OSUser: r.Header.Get("X-Effigent-OS-User"), Env: agentEnv(r.Header.Get("X-Effigent-Agent-Env"))})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	})
+	mux.HandleFunc("POST /gate/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		if s.Gate == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]any{"allow": false, "reason": "gating is not enabled on this endpoint"})
+			return
+		}
+		var req struct {
+			Command string `json:"command"`
+			Cwd     string `json:"cwd"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || req.Command == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"allow": false, "reason": "body must be {\"command\":\"...\"}"})
+			return
+		}
+		budget := 8 * time.Second
+		if v, err := strconv.Atoi(r.Header.Get("X-Effigent-Hook-Budget")); err == nil && v > 0 {
+			budget = min(time.Duration(v)*time.Second, 5*time.Minute)
+		}
+		out, err := s.Gate(r.Context(), GateCall{Agent: r.PathValue("agent"), Command: req.Command, Cwd: req.Cwd, Budget: budget,
+			OSUser: r.Header.Get("X-Effigent-OS-User"), Env: agentEnv(r.Header.Get("X-Effigent-Agent-Env"))})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"allow": false, "reason": err.Error()})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -107,6 +148,11 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /learned", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.Engine.Learned())
+	})
+	mux.HandleFunc("GET /gated/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		// `effigentd run` reads this to build PATH shims for the gated binaries
+		// (FR Q3). The absolute paths the agent may not exec directly.
+		writeJSON(w, http.StatusOK, map[string]any{"paths": s.Engine.RuleFor(r.PathValue("agent")).GatedExec})
 	})
 	mux.HandleFunc("GET /policy", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")

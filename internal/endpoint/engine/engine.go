@@ -54,27 +54,28 @@ type Root struct {
 }
 
 type Engine struct {
-	mu       sync.Mutex
-	pol      *policy.Policy
-	polRaw   []byte
-	enf      Enforcer
-	emit     func(event.Event)
-	logf     func(string, ...any)
-	verbose  bool
-	roots    map[uint32]*Root
-	byPolicy map[string]*Root
-	mcp      map[string]string         // exec_id -> MCP label, for processes inside agent trees
-	learned  map[string]map[string]int // agent -> binary -> exec count
-	recent   map[string]time.Time      // dedup of repeated kernel events
-	gen      uint64
-	dns      *domains.Resolver                               // domain_deny hostnames -> addresses
-	procfs   string                                          // to read each agent's own resolv.conf
-	empty    map[string]bool                                 // domain_deny names currently resolving to nothing (reported once)
-	scan     func() ([]event.Proc, map[uint32]uint32, error) // running processes, once rescans are enabled
-	bgUntil  time.Time                                       // break-glass window end (zero = none); while active approval lists are lifted
-	bgID     string                                          // the active grant's id, for events
-	bgTimer  *time.Timer
-	guard    *policy.SelfProtect // FR Q20 self-protection, injected into every tracked agent's kernel rule when SelfProtectionOn
+	mu         sync.Mutex
+	pol        *policy.Policy
+	polRaw     []byte
+	enf        Enforcer
+	emit       func(event.Event)
+	logf       func(string, ...any)
+	verbose    bool
+	roots      map[uint32]*Root
+	byPolicy   map[string]*Root
+	mcp        map[string]string         // exec_id -> MCP label, for processes inside agent trees
+	learned    map[string]map[string]int // agent -> binary -> exec count
+	recent     map[string]time.Time      // dedup of repeated kernel events
+	gen        uint64
+	dns        *domains.Resolver                               // domain_deny hostnames -> addresses
+	procfs     string                                          // to read each agent's own resolv.conf
+	empty      map[string]bool                                 // domain_deny names currently resolving to nothing (reported once)
+	scan       func() ([]event.Proc, map[uint32]uint32, error) // running processes, once rescans are enabled
+	bgUntil    time.Time                                       // break-glass window end (zero = none); while active approval lists are lifted
+	bgID       string                                          // the active grant's id, for events
+	bgTimer    *time.Timer
+	guard      *policy.SelfProtect // FR Q20 self-protection, injected into every tracked agent's kernel rule when SelfProtectionOn
+	gateExempt []string            // FR Q3 effigentd's own binary paths, injected into any rule that gates binaries
 }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
@@ -303,6 +304,12 @@ func (e *Engine) ruleFor(root *Root) policy.Rule {
 	// so neither approval-lifting nor break-glass can drop it.
 	if e.guard != nil && e.pol.SelfProtectionOn() {
 		k.SelfProtect = e.guard
+	}
+	// Gated binaries (FR Q3) need effigentd's own path so the kernel lets the
+	// gate exec them. Injected here (not authored) and always, independent of
+	// the self-protection switch, whenever the rule gates anything.
+	if len(k.GatedExec) > 0 {
+		k.GateExempt = e.gateExempt
 	}
 	return k
 }
@@ -668,6 +675,20 @@ func (e *Engine) SetPolicy(ctx context.Context, raw []byte) (int, error) {
 func (e *Engine) SetGuard(ctx context.Context, sp *policy.SelfProtect) {
 	e.mu.Lock()
 	e.guard = sp
+	pids := e.livePIDsLocked()
+	e.mu.Unlock()
+	for _, pid := range pids {
+		e.reapply(ctx, pid)
+	}
+}
+
+// SetGateExempt records effigentd's own binary paths (FR Q3): the processes the
+// kernel lets exec a gated binary, so `effigentd gate` can run it while a direct
+// exec by the agent is refused. Set once at startup, before any agent is
+// tracked; it also re-applies live roots so a later call takes effect.
+func (e *Engine) SetGateExempt(ctx context.Context, paths []string) {
+	e.mu.Lock()
+	e.gateExempt = paths
 	pids := e.livePIDsLocked()
 	e.mu.Unlock()
 	for _, pid := range pids {
