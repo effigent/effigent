@@ -2,7 +2,7 @@
  * Control-plane JSON → the console's view types. Kept pure (no React) so the
  * mapping rules — status thresholds, outcome per event type — live in one place.
  */
-import type { ApiEndpoint, ApiEvent } from './api.ts';
+import type { ApiEndpoint, ApiEvent, ApiToolOutcome } from './api.ts';
 import { classify, launchedAs, type Classified } from './live-graph.ts';
 import type { ConsoleEvent, EventType, Outcome, Severity } from '@/types.ts';
 
@@ -113,14 +113,14 @@ export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
   };
 }
 
-const KNOWN: EventType[] = ['agent_start', 'agent_exit', 'exec', 'exit', 'file_open', 'connect', 'blocked', 'would_block', 'policy'];
+const KNOWN: EventType[] = ['agent_start', 'agent_exit', 'exec', 'exit', 'file_open', 'connect', 'blocked', 'would_block', 'policy', 'tool_result'];
 /** Approval-flow events (agent hooks) all show as type "approval". */
 const APPROVAL_TYPES = ['approval_pending', 'approved', 'approval_denied'];
 
 const OUTCOME: Record<string, Outcome> = {
   blocked: 'blocked', would_block: 'would_block',
   exec: 'allowed', file_open: 'allowed', connect: 'allowed',
-  agent_start: 'system', agent_exit: 'system', exit: 'system', policy: 'system',
+  agent_start: 'system', agent_exit: 'system', exit: 'system', policy: 'system', tool_result: 'system',
   approval_pending: 'pending', approved: 'allowed', approval_denied: 'blocked',
 };
 
@@ -129,10 +129,22 @@ const TITLE: Record<string, string> = {
   file_open: 'Opened a sensitive file', connect: 'Outbound connection', blocked: 'Blocked by policy',
   would_block: 'Would block (monitor mode)', policy: 'Agent policy applied',
   approval_pending: 'Waiting for approval', approved: 'Approved and ran', approval_denied: 'Approval denied',
-  daemon_stop: 'effigentd stopped', daemon_unclean_restart: 'effigentd restarted after an unclean stop',
+  tool_result: 'Tool call ended', daemon_stop: 'effigentd stopped', daemon_unclean_restart: 'effigentd restarted after an unclean stop',
 };
 
 const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
+
+/** A tool call's outcome in a few words: "error · exit 2 · ~1.2s · No such file". */
+export function outcomeText(o: ApiToolOutcome): string {
+  const parts: string[] = [o.status === 'done' ? 'finished' : o.status];
+  if (o.exit_code !== undefined) parts.push(`exit ${o.exit_code}`);
+  if (o.duration_ms) {
+    const d = o.duration_ms >= 1000 ? `${(o.duration_ms / 1000).toFixed(1)}s` : `${o.duration_ms}ms`;
+    parts.push(o.duration_approx ? `~${d}` : d);
+  }
+  if (o.error) parts.push(o.error);
+  return parts.join(' · ');
+}
 
 /** An MCP tool call ("mcp__claude-in-chrome__computer: …") → "MCP · claude-in-chrome · computer". */
 const mcpCall = (c: Classified | null) => (c?.kind === 'tool' && c.mcp && c.sub === `${c.mcp} tool` ? `MCP · ${c.mcp} · ${c.label}` : null);
@@ -174,6 +186,7 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
           : `${e.type}${b.process?.pid ? ` · pid ${b.process.pid}` : ''}`;
       break;
     }
+    case 'tool_result': summary = `ended: ${b.target ?? '?'}${b.outcome ? ` — ${outcomeText(b.outcome)}` : ''}`; break;
     default: summary = b.message || e.type;
   }
   const severity: Severity = e.severity === 'high' || e.severity === 'medium' ? e.severity : 'info';
