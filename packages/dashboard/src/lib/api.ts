@@ -10,14 +10,24 @@
 
 /** Absolute on purpose: a relative `/api/v1/...` would hit this Next app's own
  *  route handlers (e.g. /api/v1/storage), not the control plane. */
-export const API_BASE = (process.env.NEXT_PUBLIC_EFFIGENT_API_URL || 'https://api.effigent.ai').replace(/\/+$/, '');
+export let API_BASE = (process.env.NEXT_PUBLIC_EFFIGENT_API_URL || 'https://api.effigent.ai').replace(/\/+$/, '');
+
+/** A self-hosted console learns the URL at run time (EFFIGENT_API_URL on its
+ *  server, handed down by lib/runtime.tsx); importers see the new value. */
+export function setApiBase(url: string) {
+  API_BASE = url.replace(/\/+$/, '');
+}
 
 /** server.Principal — GET /api/v1/me */
 export interface ApiMe {
   user_id: string;
   tenant: string; // "org:<id>" | "user:<id>"
   role: string; // org role without the "org:" prefix, e.g. admin | security_admin | member
-  via: 'clerk' | 'admin-token';
+  via: 'clerk' | 'oidc' | 'admin-token';
+  /** OIDC sign-ins (self-hosted) only */
+  email?: string;
+  name?: string;
+  groups?: string[];
 }
 
 /** store.Endpoint — GET /api/v1/endpoints */

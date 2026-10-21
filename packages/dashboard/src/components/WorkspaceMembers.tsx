@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useClerk, useOrganization, useUser } from '@clerk/nextjs';
+import { useLive } from '@/live.tsx';
 
 /** A workspace member, as approver groups store them (user_id = the Clerk user id the control plane sees). */
 export interface Member { user_id: string; email: string; name: string; role: string }
@@ -14,6 +15,24 @@ const roleOf = (r?: string) => (r ?? '').replace(/^org:/, '') || 'member';
  * Mode don't run Clerk and use their own member lists. A personal workspace
  * has one member, its owner. Up to 100 members are read.
  */
+/**
+ * Self-hosted (OIDC): there is no directory to read, so the members are the
+ * people who signed in (the control plane's GET /members, last 30 days).
+ * Inviting happens in the identity provider: no invite button.
+ */
+export function OidcMembers({ onMembers, onInvite }: { onMembers: (m: Member[], org: boolean) => void; onInvite: (open: (() => void) | null) => void }) {
+  const { api } = useLive();
+  useEffect(() => {
+    let live = true;
+    onInvite(null);
+    api.get<{ members: { user_id: string; email: string; name: string; role: string }[] }>('/members')
+      .then((r) => { if (live) onMembers((r.members ?? []).map((m) => ({ user_id: m.user_id, email: m.email, name: m.name || m.email, role: m.role || 'member' })), true); })
+      .catch(() => { if (live) onMembers([], true); });
+    return () => { live = false; };
+  }, [api, onMembers, onInvite]);
+  return null;
+}
+
 export function ClerkMembers({ onMembers, onInvite }: { onMembers: (m: Member[], org: boolean) => void; onInvite: (open: (() => void) | null) => void }) {
   const { user } = useUser();
   const clerk = useClerk();

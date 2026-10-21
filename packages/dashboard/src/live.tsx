@@ -21,6 +21,8 @@ import {
 } from '@/lib/api.ts';
 import { createFixtureApi } from '@/lib/fixture-api.ts';
 import { useDemoMode } from '@/demo.tsx';
+import { useRuntime } from '@/lib/runtime.tsx';
+import { oidcToken } from '@/lib/oidc-client.ts';
 import { ago, toConsoleEvent, toEndpointRow, type EndpointRow } from '@/lib/live-map.ts';
 import type { ConsoleEvent } from '@/types.ts';
 
@@ -185,6 +187,13 @@ function ClerkLiveProvider({ gate, children }: { gate: boolean; children: ReactN
   return <LiveProvider api={api} scope={`${userId ?? ''}/${orgId ?? 'personal'}`} ready={gate && isLoaded && !!isSignedIn} fixture={false}>{children}</LiveProvider>;
 }
 
+/** Self-hosted OIDC sign-in: the token comes from this console's /auth/token
+ *  (lib/oidc-client.ts); the workspace is the control plane's single tenant. */
+function OidcLiveProvider({ gate, children }: { gate: boolean; children: ReactNode }) {
+  const api = useMemo(() => createApi(oidcToken), []);
+  return <LiveProvider api={api} scope="oidc" ready={gate} fixture={false}>{children}</LiveProvider>;
+}
+
 /** Demo Mode: a fresh sample workspace each time it is switched on. */
 function FixtureLiveProvider({ children }: { children: ReactNode }) {
   const api = useMemo(() => createFixtureApi(), []);
@@ -238,9 +247,11 @@ function DevAdminLiveProvider({ ready, children }: { ready: boolean; children: R
 
 export function LiveDataProvider({ dev, children }: { dev: boolean; children: ReactNode }) {
   const { demo, ready } = useDemoMode();
+  const { auth } = useRuntime();
   if (demo) return <FixtureLiveProvider>{children}</FixtureLiveProvider>;
   if (dev && DEV_ADMIN) return <DevAdminLiveProvider ready={ready}>{children}</DevAdminLiveProvider>;
   if (dev) return <LiveProvider api={devEmptyApi} scope="dev" ready={ready} fixture={false}>{children}</LiveProvider>;
+  if (auth === 'oidc') return <OidcLiveProvider gate={ready}>{children}</OidcLiveProvider>;
   return <ClerkLiveProvider gate={ready}>{children}</ClerkLiveProvider>;
 }
 

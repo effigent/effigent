@@ -7,11 +7,13 @@ import { BrandMark, Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { useDemoMode } from '@/demo.tsx';
+import { useRuntime } from '@/lib/runtime.tsx';
 
 export function Sidebar({ open, onClose, collapsed = false, onToggle }: { open: boolean; onClose: () => void; collapsed?: boolean; onToggle?: () => void }) {
   const pathname = usePathname();
   const { pending, env, dispatch } = useStore();
   const { endpointRows, loaded, fixture, pendingApprovals } = useLive();
+  const selfHosted = useRuntime().auth === 'oidc';
   const { demo } = useDemoMode();
   const eps = endpointRows.filter((e) => !e.revoked);
   const online = eps.filter((e) => e.status === 'online').length;
@@ -77,7 +79,7 @@ export function Sidebar({ open, onClose, collapsed = false, onToggle }: { open: 
             <div className="deploy-line">
               {loaded ? <><span className="dot" style={online ? undefined : { background: 'var(--txt-4)', boxShadow: 'none' }} /> {online}/{eps.length} endpoints online</> : 'Connecting…'}
             </div>
-            <div className="deploy-line muted">Control plane: {fixture ? 'Demo Mode (sample)' : 'Cloud'}</div>
+            <div className="deploy-line muted">Control plane: {fixture ? 'Demo Mode (sample)' : selfHosted ? 'Self-hosted' : 'Cloud'}</div>
           </div>
         </div>
         <Link href="/enforcement" className="deploy-link" onClick={onClose}>Manage deployment <Ic n="arrowRight" size={13} /></Link>

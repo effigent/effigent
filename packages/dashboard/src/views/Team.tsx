@@ -8,7 +8,8 @@ import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { ApiError, apiErrorText, type ApiApprovalRules } from '@/lib/api.ts';
-import { ClerkMembers, type Member } from '@/components/WorkspaceMembers.tsx';
+import { ClerkMembers, OidcMembers, type Member } from '@/components/WorkspaceMembers.tsx';
+import { useRuntime } from '@/lib/runtime.tsx';
 import { Card, CardHead, InfoTip, Loading, PageGuide, PageHead, ReadOnlyNote } from '@/components/ui.tsx';
 
 interface Group { id: string; name: string; description?: string; members: { user_id: string; email: string; name?: string }[] }
@@ -66,6 +67,7 @@ const list = (v: string) => v.split(',').map((x) => x.trim()).filter(Boolean);
 /** Who decides what: approver groups (workspace members) and the rules that route each request to one. */
 export function Team({ dev }: { dev: boolean }) {
   const { api, canWrite, fixture, me, endpointRows } = useLive();
+  const runtime = useRuntime();
   const { dispatch } = useStore();
   const [members, setMembers] = useState<Member[] | null>(null);
   const [isOrg, setIsOrg] = useState(true);
@@ -138,7 +140,7 @@ export function Team({ dev }: { dev: boolean }) {
 
   return (
     <div className="page">
-      {!dev && !fixture && <ClerkMembers onMembers={onMembers} onInvite={onInvite} />}
+      {!dev && !fixture && (runtime.auth === 'oidc' ? <OidcMembers onMembers={onMembers} onInvite={onInvite} /> : <ClerkMembers onMembers={onMembers} onInvite={onInvite} />)}
       <PageHead info={HELP.team} title="Team & Approvers" sub="Who is in the workspace, and who decides which approval requests — e.g. AWS to DevOps, outside hosts to the CISO." >
         {ro && <ReadOnlyNote what="change approvers" />}
       </PageHead>
