@@ -7,8 +7,8 @@ Answers to the 28 points in "EFFIGENT: POINTS TO CHECK WITH THE VENDOR", from th
 - **Partly**: part of the ask is covered and the gap is stated.
 - **No**: not built.
 
-**Not released yet.** Everything marked *new* is on branch `feature/vendor-checklist` (plus
-the endpoint-health and governance branches merged into it). None of it is deployed or tagged.
+**Not released yet.** Everything marked *new* is on branch `feature/vendor-checklist`.
+None of it is deployed or tagged.
 
 **Two layers.** Effigent enforces in two places, and the answers say which one applies:
 - **Kernel** (Linux, Tetragon/BPF LSM). It matches binaries, file path suffixes and IP addresses.
@@ -173,7 +173,7 @@ These are also found inside scripts and npm scripts. Example policy:
 
 **Where:** `hooks/git.go`.
 
-### 6. Cursor: **Yes** (hooks, from the endpoint-health branch)
+### 6. Cursor: **Yes** (hooks)
 **New:**
 - `install-hooks` registers effigentd in Cursor's enterprise `hooks.json` for
   `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile` and `preToolUse`, with
@@ -193,34 +193,49 @@ Cursor's docs. Open questions:
 
 **Where:** `internal/endpoint/hooks` (`ParseCursor`), `cmd/effigentd/installhooks.go`.
 
-### 16. Requester vs approver: **Yes** (from the governance branch)
+### 16. Requester vs approver: **Yes**
 **New:**
-- **Who counts as the requester:** the machine's owner, plus whoever the request's OS user,
-  hostname or git email maps to.
+- **Who counts as the requester:** the machine's owner, whoever the request's OS user,
+  hostname or git emails map to in People, and any git email that OS user used on that machine
+  in the last 30 days.
 - **Self-approval is refused by default, admins included.** A refused attempt is audited as
-  `approval.self_approval_refused`. A routing rule can explicitly allow it.
+  `approval.self_approval_refused`. Each routing rule has this as a setting, on by default.
 - **Two approvers:** a routing rule (e.g. one matching prod) can require two different people.
   - Any single deny denies the request.
-  - An admin override counts as one vote.
+  - An admin stepping in counts as one vote, never a bypass.
   - API keys and the admin token never count toward a two-person quorum.
   - One person can't vote twice through two channels (console, email, Slack).
-  - The agent sees "1 of 2" until quorum.
+  - The agent is let through only at quorum. The console (and Slack, where enabled) shows
+    "1 of 2 approved" meanwhile.
+  - The console warns when an approver group is too small for its rule's quorum.
 
-**Where:** `internal/controlplane/server` (`castVote`), migration 012.
+**Limits:**
+- The OS user and git emails are what the machine reports, not verified.
+- Matching the requester against a console user's emails needs Clerk's backend key; without it
+  only user ids and the email/Slack address match.
+- When one approver is enough, API keys aren't checked as the requester.
 
-### 17. Policy change control: **Yes**, opt-in (from the governance branch)
+**Where:** `internal/controlplane/server` (`castVote`), migration 012. DB test
+`TestTwoPersonApproval`.
+
+### 17. Policy change control: **Yes**, opt-in
 **New:**
-- **Turn it on:** `policy_change_approval` (off by default). Once on, every change that would
-  publish a policy becomes a proposal: a policy publish, creating or removing an exception, or
-  changing a machine's owner or teams.
+- **Turn it on:** a workspace setting, off by default. Once on, every change that would
+  change what machines enforce becomes a proposal: a policy publish, adding or removing an
+  exception, or changing a machine's owner or teams. Each is validated first; a policy also
+  gets a dry-run compile.
 - **Approving:** another admin or security admin must approve. The author can't approve their
   own proposal, nor can the person who created the API key it came from. API keys never approve.
-- **Turning it off** is itself a proposal.
+- **Stale proposals:** a policy proposal written against an older version is marked
+  superseded instead of overwriting a newer policy.
+- **Turning it off** is itself a proposal. There is no emergency bypass.
 - **Exceptions:** expiring exceptions are still removed automatically, because that only
   tightens policy.
-- **Audit** records propose, approve, reject, withdraw and supersede.
+- **Visibility:** the Policies page shows waiting changes with a diff. Every step is audited
+  (propose, approve, reject, withdraw, supersede), fires a `policy.proposed` webhook and
+  emails the notification addresses.
 
-**Where:** migration 013, `/api/v1/policy/proposals`.
+**Where:** migration 013, `/api/v1/policy/proposals`. DB test `TestPolicyProposals`.
 
 ### 21. Guardrail files: **Yes** (hooks), **Partly** (kernel)
 **New:**
@@ -261,7 +276,7 @@ the same to it. With hooks (on Linux too), it works:
 
 For agents without hooks (e.g. Aider), the kernel can only allow or deny the whole binary.
 
-### 7. Fail-open hooks: **Yes**, detected and alerted (endpoint-health branch)
+### 7. Fail-open hooks: **Yes**, detected and alerted
 **New:** effigentd reads each agent's hook configuration back every minute and reports one
 state per agent: installed, missing, modified or unreadable. "Modified" includes:
 - the hook switched off
@@ -367,15 +382,22 @@ A break-glass option (signed offline codes that only lift approval lists, audite
 machine reconnects) is designed but not built.
 
 ### 19. Console access, SSO, SCIM, tickets: **Partly**
-- **SSO:** login is Clerk, which supports SAML/OIDC enterprise connections (Entra, Okta) per
-  organisation. SSO enforcement and SCIM deprovisioning are Clerk organisation settings. We
-  haven't set them up for a customer yet, so they need confirming on Clerk's plan.
-- **Ticket links (new, governance branch):** a routing rule can require a ticket reference
-  (e.g. `SEC-123` or a link) before approving, with a tenant link template for Jira and others.
-  Email and Slack then offer only Deny and send approvers to the console.
+- **SSO (available through Clerk, not yet set up for a customer):** console login is Clerk.
+  Clerk supports enterprise SSO (SAML for Okta, Entra, Google; OIDC) linked to an
+  organisation, which needs Clerk's Pro/Business plan plus its Enhanced B2B add-on.
+- **SCIM:** Clerk's Directory Sync (GA April 2026) deactivates deprovisioned users and revokes
+  their sessions. Mapping directory groups to roles is also available. Effigent's console roles
+  still come from org membership; nothing in Effigent depends on SCIM yet.
+- **Ticket references (new):** a routing rule can require a ticket before approving: a
+  Jira-style key (`SEC-123`) or an https link. A per-workspace link template turns keys into
+  links. When a ticket is required, the email and Slack buttons open the console instead of
+  deciding, because a link can't carry the ticket.
+
+Clerk plan details were read from Clerk's docs on 2026-10-21; re-check them before quoting
+prices to a customer.
 
 ### 20. Local admin tampering: **Partly** (detect, not prevent)
-**New (endpoint-health branch):**
+**New:**
 - **A stopped daemon:** SIGTERM, a service stop or a shutdown emits `daemon_stop` before
   teardown. It names who stopped it: a signal, the service manager, or the OS user at a
   terminal.
@@ -446,12 +468,23 @@ Anomaly detection over sequences is on the roadmap, not built.
 - **Data minimisation:** what's collected per user is listed in
   `docs/security/architecture-and-data-flow.md`.
 
-### 27. Retention and legal hold: **Partly**
-- **Online retention:** configurable (`EFFIGENT_EVENT_RETENTION_DAYS`, minimum 90).
+### 27. Retention and legal hold: **Yes**
+- **Online retention:** set per workspace (new), 90 to 3650 days. Without a setting the
+  control plane default applies (`EFFIGENT_EVENT_RETENTION_DAYS`, also never under 90).
 - **Archive:** daily gzip archives in S3 with Object Lock (governance mode, 365 days).
   Customers can bring their own bucket.
-- **Legal hold:** on the governance branch, in progress (migration 015). Status is in the merge
-  notes.
+- **Legal hold (new, migration 015):** a workspace can be put on legal hold (a reason is
+  required, and it is audited).
+  - Retention skips it.
+  - The database's delete guard refuses to delete its events.
+  - Every version of its S3 archive objects gets an Object Lock legal hold. Releasing the hold
+    works the same way, and the sync retries until it succeeds.
+  - Archive downloads are pinned to the stored object version.
+  - Without an archive bucket the hold works through the database alone.
+  - Unit and DB tests only (`TestLegalHold`); not yet run against the real S3 bucket.
+
+**Limits:** anyone with `s3:PutObjectLegalHold` on the AWS side can lift a hold, and a hold
+doesn't reach files people already downloaded or data webhook receivers hold.
 
 ### 28. SOC 2, self-hosting, redaction: **Partly**
 - **SOC 2:** in progress. No report yet; until then we answer questionnaires (SIG Lite, CAIQ)
@@ -490,3 +523,10 @@ events carrying actions and the agent environment, and no key values in events.
 - The new lists live in the base policy. Central per-user / per-team `require_approval` rules
   don't compile to them yet.
 - Policy exceptions don't cover the new lists yet; the API says so.
+
+**Deploy order for this branch:**
+1. Control plane (`deploy-cp.sh`; migrations 012–015).
+2. Rerun `deploy/aws/set-event-archive.sh` (adds the S3 legal-hold and version permissions).
+3. Push `main` for the console.
+4. Tag an effigentd release and reinstall endpoints (`install-hooks` adds Cursor).
+5. Only then publish policies that use the new lists.
