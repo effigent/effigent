@@ -67,6 +67,9 @@ func gatewayState(file, raw, addr string) *Gateway {
 	}
 	g.URL = cleanURL(raw)
 	switch {
+	case addr == "" && IsGatewayURL(raw, ""):
+		// pointed at a gateway, but effigentd runs none: the agent is cut off
+		g.State, g.Detail = GatewayOtherPort, "effigentd's model gateway is off on this machine (-gateway \"\" or it couldn't listen)"
 	case IsGatewayURL(raw, addr):
 		g.State = GatewayOn
 	case IsGatewayURL(raw, ""):

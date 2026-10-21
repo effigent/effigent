@@ -66,6 +66,12 @@ func TestInstallGatewayRoundTrip(t *testing.T) {
 	if st := hookstate.Check(o2); gw(st, "claude") != hookstate.GatewayOtherPort {
 		t.Errorf("other port: %+v", st.Agents["claude"].Gateway)
 	}
+	// the daemon's gateway off: the agent is cut off, never "on"
+	o2.GatewayAddr = ""
+	if st := hookstate.Check(o2); gw(st, "claude") != hookstate.GatewayOtherPort || gw(st, "codex") != hookstate.GatewayOtherPort ||
+		!strings.Contains(st.Agents["claude"].Gateway.Detail, "off") {
+		t.Errorf("gateway off: %+v %+v", st.Agents["claude"].Gateway, st.Agents["codex"].Gateway)
+	}
 
 	if _, err := gatewayClaude(o.Claude, o.GatewayAddr, true); err != nil {
 		t.Fatal(err)
