@@ -21,7 +21,7 @@ Keep this file current when architecture, data model or deployment change.
 | `test/endpoint` | Endpoint e2e against Tetragon (37 checks). On a Mac with effigentd installed run `PORT=7787 ./test/endpoint/e2e.sh` (the installed daemon holds 7777). | Docker Desktop |
 | `test/claude` | Real Claude Code in a container, enforced by effigentd, policy from the control plane. | Docker Desktop |
 | `Dockerfile.effigentd`, `deploy/helm/effigent`, `deploy/docker` | effigentd for container hosts and Kubernetes. Image `ghcr.io/effigent/effigentd:<version>` + `:latest` (amd64/arm64), Helm repo `https://effigent.ai/charts` (chart `effigent`, DaemonSet: hostPID, hostNetwork, privileged, `/var/lib/effigent` hostPath, `EFFIGENT_HOSTNAME` = node name, token from a Secret). Both published by `release-effigentd.yml` after the binaries; the ghcr package must be public. Tetragon comes from its official chart with `tetragon.grpc.address=localhost:54321` + `tetragon.processAncestors.enabled=base,kprobe,lsm`. `deploy/docker/compose.yaml` = Tetragon (event cache 2 × 1s) + effigentd on a plain host. | customer clusters / Docker hosts |
-| `test/containers` | `kind.sh` (2-node kind + Tetragon chart + our chart) and `docker.sh` (compose): stand-in agent's curl and `.env` blocked, blocks in the local control plane, restart keeps the machine. One Tetragon per kernel: stop the dev `tetragon` container first. | Docker Desktop |
+| `test/containers` | `kind.sh` (2-node kind + Tetragon chart + our chart) and `docker.sh` (compose): stand-in agent's curl and `.env` blocked, blocks in the local control plane, restart keeps the machine. `hooksock.sh`: the hook socket on kind without Tetragon (2i). One Tetragon per kernel: stop the dev `tetragon` container first. | Docker Desktop |
 
 ## 2. How policy reaches the kernel
 
@@ -553,6 +553,66 @@ All control plane (no effigentd change); everything is read from rollups, never 
 - Deploy order: control plane (migrations 016, 017; 016's backfill scans 35 days of `cp.events` once)
   → console.
 
+## 2i. Cloud agents and containers
+
+Full write-up, vendor research with links: `docs/cloud-agents.md`.
+- **Cloud environments** (migration 019): `cp.endpoints.kind` `machine` | `cloud`, plus `cloud_vendor`
+  (`claude-code-web`, `copilot`, `cursor`, `other`). `POST /api/v1/cloud-environments {name, vendor}`
+  (scope `endpoints`, audit `cloud_environment.create`, webhook `endpoint.enrolled` with `kind: cloud`)
+  makes one without enrollment and returns its token once: `efc_` + base64url(JSON {server, endpoint id,
+  tenant, `eps_` secret, signing key}) (`internal/shared/cloudtoken`). Same `/ep/v1/*` protocol as a
+  machine. Never marked offline (console: "idle"). Revoke = the endpoint revoke.
+- **Remote hook mode** (`cmd/effigentd/remote.go`): `effigentd hook <agent> --remote`, or any hook with
+  `EFFIGENT_CLOUD_TOKEN` set, decides in the hook process with no daemon:
+  - Credentials: the token env, else `<state>/endpoint.json`. State dir: `EFFIGENT_STATE_DIR`, default
+    `/var/tmp/effigent-cloud`; a dir owned by another non-root user is skipped; when it isn't writable,
+    the cache goes to `~/.effigent-cloud`.
+  - Policy: signed policy cache, refreshed when older than `EFFIGENT_REMOTE_REFRESH` (60s) with a
+    3s budget (6s with nothing cached). Then `hookHandlerSeen` (the daemon's handler, with file-based
+    session marks) and the approvals long-poll.
+  - Events: POSTed before answering (`batch_id`), spooled in `<state>/spool` when the control plane
+    can't take them (≤2000 batches, 10 replayed per call).
+  - No policy → deny; `EFFIGENT_REMOTE_FAIL_OPEN=1` → the built-in default decides.
+  - Copilot's hook budget is 20s (its timeouts fail open).
+- `effigentd cloud-setup [--token] [--state-dir] [--allow-offline] [--shared]` runs in the vendor's setup
+  step. `https://effigent.ai/cloud-setup.sh` (`packages/site/public/cloud-setup.sh`) downloads +
+  checksums effigentd and runs it with `--shared` (sudo when available).
+- `deploy/cloud/cloud-hook.sh` is committed to customer repos as `.effigent/cloud-hook.sh`. It decides
+  only in a cloud session and exits 2 there when effigentd is missing. Session markers:
+  `CLAUDE_CODE_REMOTE=true`; Copilot `GITHUB_COPILOT_API_TOKEN`, or `GITHUB_ACTIONS=true` (unverified in
+  the agent phase); the token in the env; or the setup step's `endpoint.json`, owned by root or the caller. The console card (`components/CloudEnvironments.tsx`)
+  carries a copy: keep them in step.
+- `effigentd hook copilot` (`hooks.ParseCopilot`, policy agent `copilot-agent`) reads `preToolUse`
+  (toolArgs as a JSON string, Copilot tool names) and `PreToolUse` (Claude's shape). Its answer is the
+  flat `permissionDecision` plus `hookSpecificOutput`.
+- **Hook socket for containers** (`internal/endpoint/peer`, `api/socket.go`, `cmd/effigentd/hooksocket.go`):
+  - `effigentd -hook-socket /var/run/effigent/hook.sock` serves only `POST /hook/{agent}` + `GET /health`,
+    mode 0666. Helm `hookSocket.enabled` (default on, hostPath `/var/run/effigent`); compose mounts
+    `${EFFIGENT_HOOK_DIR:-/var/run/effigent}`.
+  - `effigentd hook` picks the transport in this order: `EFFIGENT_HOOK_SOCKET`, `EFFIGENT_DAEMON_URL`
+    (`unix://…` or http), `EFFIGENT_API`, the default socket if present (Linux), then 127.0.0.1:7777.
+  - The caller is identified by the kernel: SO_PEERCRED (pid/uid/gid), `/proc/<pid>/cgroup` (container
+    id, pod UID), Tetragon exec events' pod (`peer.Pods`, by container id), the uid named from the
+    container's `/etc/passwd` via `openat2(RESOLVE_IN_ROOT)`.
+  - Files the evaluator reads are opened in `/proc/<pid>/root` when the mount namespace differs
+    (`ClaudeInput.Root`, `peer.OpenIn`).
+  - A tracked agent among the caller's ancestors names the policy agent. The kernel's identity wins over
+    `X-Effigent-OS-User` on events (`container`, `pod`, `agent_pid`) and approvals.
+- Tests:
+  - `cloud_envs_test.go` (DB)
+  - `cloudtoken_test.go`, `hooks/copilot_test.go`, `cmd/effigentd/remote_test.go`
+  - `peer_test.go`, `cred_linux_test.go`, `socket_linux_test.go` (Linux)
+  - `test/hooks/remote.sh` (32 checks: real hook binary, local control plane)
+  - `test/hooks/cloudsetup.sh` (9 checks: setup script + wrapper in a Linux container, root setup,
+    non-root agent)
+  - `test/containers/hooksock.sh` (kind without Tetragon: socket deny / approval / kernel identity;
+    passed 2026-10-22)
+  - the `agent-hook` section of `test/containers/kind.sh` (pod name via Tetragon; not run yet)
+- Deploy order: control plane (`deploy-cp.sh`, migration 019) → push `main` (console + `cloud-setup.sh`
+  on the site) → tag effigentd (remote mode, `cloud-setup`, hook socket) → chart/compose users upgrade
+  → customers add cloud environments. A cloud environment needs an effigentd release with `--remote`
+  at `effigent.ai/releases/effigentd/latest`.
+
 ## 2j. Model gateway
 
 - `internal/endpoint/gateway`: a plain-HTTP listener on loopback, `-gateway` (default
@@ -654,6 +714,7 @@ go run ./cmd/effigentd --state-dir ~/.effigent
 ./test/endpoint/e2e.sh                              # endpoint e2e (standalone, not enrolled)
 ./test/claude/run.sh                                # real Claude Code (needs ~/.effigent-claude.env)
 ./test/hooks/approval.sh                            # approval flow: real hook process -> hooks-mode daemon -> local control plane
+./test/hooks/remote.sh                              # cloud environment + `effigentd hook --remote` against a local control plane (2i)
 go test ./internal/controlplane/server/ -args -effigent.db=postgres://effigent:effigent@localhost:5433/effigent  # all DB tests (or EFFIGENT_TEST_DATABASE_URL)
 # console against a local control plane (dev only): add to the dev command
 #   NEXT_PUBLIC_EFFIGENT_API_URL=http://127.0.0.1:8080 NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN=devadmin NEXT_PUBLIC_EFFIGENT_DEV_TENANT=org:dev
@@ -812,8 +873,10 @@ npm run -w @effigent/site build                     # site
   already running applies without restarting effigentd, and removing it unblocks the same process.
   The installer double-forks the daemons so they leave the installing agent's tree at once. Tetragon's local log carries the installer's `--token` as an ancestor; the
   installer enrolls before Tetragon starts, so a one-time token is already spent.
-- Kubernetes / Docker hosts: kernel layer only for agents in containers (their hooks can't reach the node's
-  127.0.0.1:7777, so approvals and command/tool/MCP rules don't apply); one machine and policy per node;
+- Kubernetes / Docker hosts: agents in containers get the kernel layer, plus hooks when their pod mounts the
+  hook socket (2i). Without the mount their hooks can't reach the node's 127.0.0.1:7777, so approvals and
+  command/tool/MCP rules don't apply. The socket is 0666 behind a hostPath (Pod Security Admission must allow
+  it), and a container's root is treated as an unknown user for file reads; one machine and policy per node;
   exec/file paths are the container's; an agent's policy loads ~1–2s after it starts in a pod (use
   `effigentd run` in the agent image, verified 2026-10-18 on kind). Autoscaled nodes need a valid token in
   the Secret. Docker Desktop: a bind path that doesn't exist on the Mac is created in the VM, while
@@ -839,6 +902,21 @@ npm run -w @effigent/site build                     # site
     break-glass feature registers its section. Report email needs SMTP or SES (else recorded `off`).
   - Not checked in a browser: the print layout (only the `@media print` CSS was written) and a real
     report email.
+
+- Cloud agents (2i, `docs/cloud-agents.md`): hooks only, no kernel layer. Only Claude Code on the web,
+  the Copilot cloud agent and Cursor cloud agents run repo hooks; Codex cloud and Devin are not covered.
+  - Hooks: the agent can edit the repository's hook files (`file_write_deny` on them catches what the hook
+    sees; Claude's `allowManagedHooksOnly` is the only vendor-enforced hook).
+  - `EFFIGENT_CLOUD_TOKEN` in a developer's own shell turns their local hooks into remote mode.
+  - `--shared` writes the token 0644 under `/var/tmp`: for single-tenant session VMs only.
+  - Token: the agent can read it. With it, anything can fetch that environment's policy, post its events
+    and file approvals, but not decide them.
+  - Fail-open paths: Copilot lets a call run when the hook times out (effigentd answers within 20s), and a
+    cloud session the wrapper can't recognise (Cursor without its secret) runs unchecked.
+  - Unverified: Copilot's tool argument field names. None of the three vendors has been run live yet.
+  - OS user on events is the session's (usually root).
+- WSL2: on paper only (`docs/cloud-agents.md` §6): the 6.18 kernel config has BPF LSM in the LSM list, 6.6
+  needs `lsm=…,bpf` in `.wslconfig`; not tested.
 
 ## 6. Conventions
 

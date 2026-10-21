@@ -125,6 +125,8 @@ export function createFixtureApi(): Api {
     policy_version: e.policyVersion >= 42 ? 3 : 2, revoked: false,
     ...demoHealth(e.id, e.platform, e.version, iso),
   }));
+  endpoints.push({ id: '00000099-dem0-4000-8000-c10udc0de000', hostname: 'acme/web', os: 'cloud', arch: '', version: '', kind: 'cloud',
+    vendor: 'copilot', enrolled_at: iso(60 * 24 * 3), last_seen: iso(60 * 5), policy_version: 3, revoked: false });
   let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, email_hooks: true, default_minutes: 5, min_minutes: 2,
     tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing'], saved: false };
   const epId = new Map(ENDPOINTS.map((e, i) => [e.id, endpoints[i].id]));
@@ -408,6 +410,16 @@ export function createFixtureApi(): Api {
       if (method === 'POST' && path === '/notifications/test') {
         return delay({ ...(notifications.slack_webhook_set ? { slack: 'sent (Demo Mode: nothing was posted)' } : {}),
           ...(notifications.emails.length ? { email: 'sent (Demo Mode: nothing was sent)' } : {}) }) as Promise<T>;
+      }
+      if (method === 'POST' && path === '/cloud-environments') {
+        const b = (body ?? {}) as { name?: string; vendor?: string };
+        if (!b.name?.trim()) return Promise.reject(new ApiError(400, 'name is required (at most 100 characters), e.g. the repository'));
+        const ep: ApiEndpoint = { id: `00000098-dem0-4000-8000-${String(endpoints.length).padStart(12, '0')}`, hostname: b.name.trim(), os: 'cloud', arch: '',
+          version: '', kind: 'cloud', vendor: b.vendor ?? 'other', enrolled_at: new Date().toISOString(), last_seen: null, policy_version: 0, revoked: false };
+        endpoints.push(ep);
+        log('cloud_environment.create', ep.id, { name: ep.hostname, vendor: ep.vendor });
+        const hook = ep.vendor === 'copilot' ? 'copilot' : ep.vendor === 'cursor' ? 'cursor' : 'claude';
+        return delay({ endpoint: ep, token: `efc_demo_${Math.random().toString(36).slice(2, 14)}` /* not a real token */, server: 'https://api.demo.invalid', hook_agent: hook }) as Promise<T>;
       }
       if (method === 'POST' && path === '/enrollment-tokens') {
         const b = (body ?? {}) as { label?: string; ttl_hours?: number; max_uses?: number };

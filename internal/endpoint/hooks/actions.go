@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/effigent/effigent/internal/endpoint/event"
+	"github.com/effigent/effigent/internal/endpoint/peer"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 )
 
@@ -123,7 +124,7 @@ func readUserFile(in ClaudeInput, p string) ([]byte, error) {
 	if p == "" {
 		return nil, errSkip
 	}
-	f, err := os.Open(p)
+	f, err := peer.OpenIn(in.Root, p)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +137,19 @@ func readUserFile(in ClaudeInput, p string) ([]byte, error) {
 		return nil, errSkip
 	}
 	return io.ReadAll(io.LimitReader(f, maxRead))
+}
+
+// statIn stats p in the agent's file system (in.Root: a container's).
+func statIn(in ClaudeInput, p string) (os.FileInfo, error) {
+	if in.Root == "" {
+		return os.Stat(p)
+	}
+	f, err := peer.OpenIn(in.Root, p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.Stat()
 }
 
 func readUserText(in ClaudeInput, p string) string {
@@ -159,10 +173,10 @@ func resolveIn(p, cwd, home string) string {
 }
 
 // findUp returns the first dir/name walking up from dir ("" if none).
-func findUp(dir, name string) string {
+func findUp(in ClaudeInput, dir, name string) string {
 	for range maxWalk {
 		p := path.Join(dir, name)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		if st, err := statIn(in, p); err == nil && !st.IsDir() {
 			return p
 		}
 		parent := path.Dir(dir)
@@ -296,7 +310,7 @@ var npmBuiltins = map[string]bool{
 // A name starting with "?" is used only if the script exists.
 func packageScript(in ClaudeInput, cwd, mgr, name string) (string, string) {
 	name = strings.TrimPrefix(name, "?")
-	p := findUp(cwd, "package.json")
+	p := findUp(in, cwd, "package.json")
 	var pkg struct {
 		Scripts map[string]string `json:"scripts"`
 	}

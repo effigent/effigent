@@ -33,6 +33,11 @@ services:
     pid: host
     network_mode: host
     depends_on: [tetragon]
+    # The image's defaults plus the hook socket: agents in other containers run
+    # their hooks (`effigentd hook claude` …) against it with
+    #   docker run -v /var/run/effigent:/var/run/effigent -e EFFIGENT_HOOK_SOCKET=/var/run/effigent/hook.sock …
+    # Each caller is identified by the kernel (its container id), not by what it sends.
+    command: [-state-dir, /var/lib/effigent, -procfs, /host/proc, -output, json, -hook-socket, /var/run/effigent/hook.sock]
     environment:
       # Used on the first start only; afterwards the credentials in
       # /var/lib/effigent are reused and this host stays the same machine.
@@ -44,3 +49,4 @@ services:
       - ${EFFIGENT_STATE_DIR:-/var/lib/effigent}:/var/lib/effigent
       - /proc:/host/proc:ro
       - /sys/kernel/security:/sys/kernel/security:ro
+      - ${EFFIGENT_HOOK_DIR:-/var/run/effigent}:/var/run/effigent

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/hookstate"
+	"github.com/effigent/effigent/internal/endpoint/peer"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -139,7 +139,7 @@ func loadMCPFile(in ClaudeInput, p string) *mcpFile {
 	if p == "" {
 		return nil
 	}
-	f, err := os.Open(p)
+	f, err := peer.OpenIn(in.Root, p) // a container's file system when the agent runs in one
 	if err != nil {
 		return nil
 	}
@@ -148,8 +148,9 @@ func loadMCPFile(in ClaudeInput, p string) *mcpFile {
 	if err != nil || !st.Mode().IsRegular() || st.Size() > maxMCPConfig || !userCanRead(st, in) {
 		return nil
 	}
+	key := in.Root + "\x00" + p
 	mcpCacheMu.Lock()
-	c := mcpCache[p]
+	c := mcpCache[key]
 	mcpCacheMu.Unlock()
 	if c != nil && c.stable && c.mod.Equal(st.ModTime()) && c.size == st.Size() {
 		return c
@@ -197,7 +198,7 @@ func loadMCPFile(in ClaudeInput, p string) *mcpFile {
 	if len(mcpCache) > 256 {
 		clear(mcpCache)
 	}
-	mcpCache[p] = c
+	mcpCache[key] = c
 	mcpCacheMu.Unlock()
 	return c
 }
@@ -230,7 +231,7 @@ func mcpScopes(in ClaudeInput) []mcpScope {
 		if cwd == "" || !strings.HasPrefix(cwd, "/") && !isDrive(cwd) {
 			return ""
 		}
-		return findUp(cwd, name)
+		return findUp(in, cwd, name)
 	}
 	at := func(rel string) string {
 		if home == "" {

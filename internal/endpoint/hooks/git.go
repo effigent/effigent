@@ -1,7 +1,6 @@
 package hooks
 
 import (
-	"os"
 	"path"
 	"slices"
 	"strings"
@@ -166,7 +165,7 @@ func withAttr(m map[string]string, k, v string) map[string]string {
 func currentBranch(in ClaudeInput, dir string) string {
 	for range maxWalk {
 		g := path.Join(dir, ".git")
-		if st, err := os.Stat(g); err == nil {
+		if st, err := statIn(in, g); err == nil {
 			if !st.IsDir() {
 				gd, ok := strings.CutPrefix(strings.TrimSpace(readUserText(in, g)), "gitdir:")
 				if !ok {

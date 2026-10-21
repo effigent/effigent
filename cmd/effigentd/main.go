@@ -25,6 +25,7 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/event"
 	"github.com/effigent/effigent/internal/endpoint/gateway"
 	"github.com/effigent/effigent/internal/endpoint/hookstate"
+	"github.com/effigent/effigent/internal/endpoint/peer"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 	"github.com/effigent/effigent/internal/endpoint/procscan"
 	"github.com/effigent/effigent/internal/endpoint/sink"
@@ -66,6 +67,8 @@ func main() {
 			return
 		case "install-gateway":
 			installGatewayCmd(os.Args[2:])
+		case "cloud-setup":
+			cloudSetupCmd(os.Args[2:])
 			return
 		}
 	}
@@ -94,6 +97,7 @@ func daemon() {
 		dnsRefresh   = flag.Duration("dns-refresh", 30*time.Second, "how often domain_deny hostnames are re-resolved")
 		dnsServers   = flag.String("dns-servers", strings.Join(domains.DefaultUpstreams, ","), "resolvers queried for domain_deny next to the system resolver (comma-separated host:port, \"\" for the system resolver only)")
 		gatewayAddr  = flag.String("gateway", gateway.DefaultAddr, "model gateway address, loopback only (\"\" to disable); agents are pointed at it by `effigentd install-gateway`")
+		hookSocket   = flag.String("hook-socket", "", "also serve the agent hook API on this unix socket, for agents in containers (e.g. "+DefaultHookSocket+"; callers are identified by the kernel)")
 	)
 	flag.Parse()
 	logger := log.New(os.Stderr, "effigentd: ", log.LstdFlags)
@@ -281,10 +285,23 @@ func daemon() {
 		}
 	}
 
+	hook := hookHandler(eng, func() *cpclient.Client { return client }, sess, *gatewayAddr)
+	// Containers' pods, from Tetragon's events: who is behind a hook socket call.
+	pods := peer.NewPods()
+	if *hookSocket != "" {
+		hs := &api.HookSocket{Path: *hookSocket, Server: &api.Server{Engine: eng, Hook: hook}, Logf: logger.Printf,
+			Resolve: resolvePeer(eng, *procfs, pods)}
+		go func() {
+			if err := hs.Serve(ctx); err != nil {
+				logger.Fatalf("hook socket: %v", err)
+			}
+		}()
+		logger.Printf("hook API on unix:%s", *hookSocket)
+	}
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
-			Hook: hookHandler(eng, func() *cpclient.Client { return client }, sess, *gatewayAddr),
+			Hook: hook,
 			Stats: func() map[string]any {
 				out := map[string]any{
 					"tetragon_connected": tgConnected.Load(),
@@ -326,9 +343,26 @@ func daemon() {
 		return
 	}
 
-	events := make(chan event.Raw, 4096)
+	events, fromTetragon := make(chan event.Raw, 4096), make(chan event.Raw, 4096)
+	go func() { // note each process's pod on the way to the engine
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-fromTetragon:
+				if r.Pod.Name != "" {
+					pods.Observe(r.Pod.ContainerID, r.Pod.UID, r.Pod.Namespace, r.Pod.Name, r.Pod.Container)
+				}
+				select {
+				case events <- r:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
 	first := true
-	go tg.Run(ctx, events, func() {
+	go tg.Run(ctx, fromTetragon, func() {
 		logger.Printf("connected to Tetragon at %s", *tetragonAddr)
 		tgConnected.Store(true)
 		if first && *procfs != "" {

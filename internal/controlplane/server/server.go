@@ -126,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 	// console API
 	mux.HandleFunc("GET /api/v1/me", s.console(read, s.me))
 	mux.HandleFunc("POST /api/v1/enrollment-tokens", s.scoped("endpoints", write, s.createEnrollmentToken))
+	mux.HandleFunc("POST /api/v1/cloud-environments", s.scoped("endpoints", write, s.createCloudEnvironment))
 	mux.HandleFunc("GET /api/v1/endpoints", s.console(read, s.listEndpoints))
 	mux.HandleFunc("DELETE /api/v1/endpoints/{id}", s.scoped("endpoints", write, s.revokeEndpoint))
 	mux.HandleFunc("PATCH /api/v1/endpoints/{id}", s.scoped("endpoints", write, s.setEndpointOwner))

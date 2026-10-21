@@ -13,3 +13,9 @@ and process ancestors enabled:
 
 A pod that logs "enroll: … 401" used a token that is expired or has no machines
 left: create a token with Machines ≥ node count, update the Secret and delete the pod.
+{{- if .Values.hookSocket.enabled }}
+
+Agents in pods (Claude Code, Codex, Gemini CLI, Cursor hooks) reach effigentd through
+unix:{{ .Values.hookSocket.hostPath }}/hook.sock: mount {{ .Values.hookSocket.hostPath }} (hostPath) into the
+agent container and set EFFIGENT_HOOK_SOCKET={{ .Values.hookSocket.hostPath }}/hook.sock (see values.yaml).
+{{- end }}

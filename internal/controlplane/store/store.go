@@ -179,15 +179,30 @@ type Endpoint struct {
 	OfflineAt       *time.Time      `json:"offline_at"`
 	StoppedAt       *time.Time      `json:"stopped_at"`
 	Stop            json.RawMessage `json:"stop"`
+	// Kind (migration 019): "machine" (enrolled effigentd) or "cloud" (a
+	// vendor-hosted agent environment whose hooks run `effigentd hook
+	// --remote`); Vendor names the cloud agent (claude-code-web, copilot, cursor…).
+	Kind   string `json:"kind"`
+	Vendor string `json:"vendor,omitempty"`
+}
+
+// CreateCloudEnvironment registers a cloud environment: an endpoint every
+// session of that vendor environment shares, with no enrollment. Its secret
+// is returned once (stored hashed) and is revoked like any endpoint's.
+func (s *Store) CreateCloudEnvironment(ctx context.Context, tenant, name, vendor string) (Endpoint, string, error) {
+	secret := randomToken("eps_")
+	e, err := scanEndpoint(s.db.QueryRow(ctx, `insert into cp.endpoints (tenant_ref, secret_hash, hostname, os, arch, version, kind, cloud_vendor)
+		values ($1, $2, $3, 'cloud', '', '', 'cloud', $4) returning `+endpointCols, tenant, hash(secret), name, vendor))
+	return e, secret, err
 }
 
 const endpointCols = `id, tenant_ref, hostname, os, arch, version, enrolled_at, last_seen, policy_version, revoked_at is not null, owner, teams,
-	hooks, hooks_reported_at, hooks_changed_at, offline_at, stopped_at, stop`
+	hooks, hooks_reported_at, hooks_changed_at, offline_at, stopped_at, stop, kind, cloud_vendor`
 
 func scanEndpoint(r pgx.Row) (Endpoint, error) {
 	var e Endpoint
 	err := r.Scan(&e.ID, &e.Tenant, &e.Hostname, &e.OS, &e.Arch, &e.Version, &e.EnrolledAt, &e.LastSeen, &e.PolicyVersion, &e.Revoked, &e.Owner, &e.Teams,
-		&e.Hooks, &e.HooksReportedAt, &e.HooksChangedAt, &e.OfflineAt, &e.StoppedAt, &e.Stop)
+		&e.Hooks, &e.HooksReportedAt, &e.HooksChangedAt, &e.OfflineAt, &e.StoppedAt, &e.Stop, &e.Kind, &e.Vendor)
 	return e, err
 }
 

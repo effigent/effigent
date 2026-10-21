@@ -11,7 +11,7 @@ import type { ConsoleEvent, EventType, Outcome, Severity } from '@/types.ts';
 const ONLINE_MS = 60_000;
 const DEGRADED_MS = 5 * 60_000;
 
-export type EndpointStatus = 'online' | 'degraded' | 'offline' | 'revoked';
+export type EndpointStatus = 'online' | 'degraded' | 'offline' | 'revoked' | 'idle'; // idle: a cloud environment with no session running
 
 export interface EndpointRow {
   id: string;
@@ -34,6 +34,9 @@ export interface EndpointRow {
   offlineAt: number | null;
   /** The last deliberate stop effigentd reported, if it is why the machine went quiet. */
   stopped: { at: number; signal: string; via: string; user: string } | null;
+  /** A cloud environment (sessions in a vendor's cloud) rather than a machine. */
+  cloud: boolean;
+  vendor: string;
 }
 
 export interface HookRow {
@@ -98,7 +101,9 @@ export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
   const age = seen === null ? Infinity : now - seen;
   const offlineAt = ms(e.offline_at);
   // The control plane's detector is authoritative once it has marked the machine offline.
-  const status: EndpointStatus = e.revoked ? 'revoked' : offlineAt !== null && (seen === null || seen <= offlineAt) ? 'offline'
+  const cloud = e.kind === 'cloud';
+  // A cloud environment is only heard from while a session runs: quiet is normal.
+  const status: EndpointStatus = e.revoked ? 'revoked' : cloud ? (age < DEGRADED_MS ? 'online' : 'idle') : offlineAt !== null && (seen === null || seen <= offlineAt) ? 'offline'
     : age < ONLINE_MS ? 'online' : age < DEGRADED_MS ? 'degraded' : 'offline';
   const os = e.os.toLowerCase();
   const stoppedAt = ms(e.stopped_at);
@@ -110,6 +115,7 @@ export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
     platform: os === 'linux' ? 'linux' : os === 'darwin' ? 'macos' : 'other',
     version: e.version, policyVersion: e.policy_version, status, lastSeenAt: seen, enrolledAt: ms(e.enrolled_at) ?? 0, revoked: e.revoked,
     hooks, hookProblems: e.revoked ? [] : problems, hooksReportedAt: ms(e.hooks_reported_at), offlineAt, stopped,
+    cloud, vendor: e.vendor ?? '',
   };
 }
 

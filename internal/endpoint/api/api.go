@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/effigent/effigent/internal/endpoint/engine"
+	"github.com/effigent/effigent/internal/endpoint/peer"
 )
 
 type Server struct {
@@ -44,54 +45,50 @@ type HookCall struct {
 	// Result: a post-tool hook (POST /hook/{agent}/result) reporting how a
 	// call ended; the answer is ignored by the hook process.
 	Result bool
+	// Peer is the hook process as the kernel tells it (the hook socket, on
+	// Linux): it wins over OSUser. nil on the TCP API.
+	Peer *peer.Info
+}
+
+// hook answers POST /hook/{agent}, or with result POST /hook/{agent}/result.
+func (s *Server) hook(result bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { s.hookCall(w, r, result) }
+}
+
+func (s *Server) hookCall(w http.ResponseWriter, r *http.Request, result bool) {
+	if s.Hook == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "hooks are not enabled on this endpoint"})
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// The hook process says how long it will wait for an answer; older
+	// ones don't, and give up after 10s.
+	budget := 8 * time.Second
+	if v, err := strconv.Atoi(r.Header.Get("X-Effigent-Hook-Budget")); err == nil && v > 0 {
+		budget = min(time.Duration(v)*time.Second, 5*time.Minute)
+	}
+	call := HookCall{Agent: r.PathValue("agent"), Payload: body, Budget: budget, Result: result,
+		OSUser: r.Header.Get("X-Effigent-OS-User"), Env: agentEnv(r.Header.Get("X-Effigent-Agent-Env"))}
+	if p, ok := r.Context().Value(peerKey{}).(*peer.Info); ok {
+		call.Peer = p
+	}
+	out, err := s.Hook(r.Context(), call)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(out)
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /hook/{agent}/result", func(w http.ResponseWriter, r *http.Request) {
-		if s.Hook == nil {
-			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "hooks are not enabled on this endpoint"})
-			return
-		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		out, err := s.Hook(r.Context(), HookCall{Agent: r.PathValue("agent"), Payload: body, Result: true,
-			OSUser: r.Header.Get("X-Effigent-OS-User")})
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(out)
-	})
-	mux.HandleFunc("POST /hook/{agent}", func(w http.ResponseWriter, r *http.Request) {
-		if s.Hook == nil {
-			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "hooks are not enabled on this endpoint"})
-			return
-		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		// The hook process says how long it will wait for an answer; older
-		// ones don't, and give up after 10s.
-		budget := 8 * time.Second
-		if v, err := strconv.Atoi(r.Header.Get("X-Effigent-Hook-Budget")); err == nil && v > 0 {
-			budget = min(time.Duration(v)*time.Second, 5*time.Minute)
-		}
-		out, err := s.Hook(r.Context(), HookCall{Agent: r.PathValue("agent"), Payload: body, Budget: budget,
-			OSUser: r.Header.Get("X-Effigent-OS-User"), Env: agentEnv(r.Header.Get("X-Effigent-Agent-Env"))})
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(out)
-	})
+	mux.HandleFunc("POST /hook/{agent}/result", s.hook(true))
+	mux.HandleFunc("POST /hook/{agent}", s.hook(false))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"ok": true, "agents": len(s.Engine.Agents())}
 		if s.Stats != nil {

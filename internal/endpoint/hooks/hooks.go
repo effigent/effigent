@@ -56,6 +56,10 @@ type ClaudeInput struct {
 	// ViaGateway: effigentd's model gateway carried this session's model
 	// calls recently (require_gateway).
 	ViaGateway bool `json:"-"`
+	// Root is the agent's file system as the daemon sees it when the agent
+	// runs in a container (/proc/<pid>/root, from the hook socket's peer):
+	// files are read inside it. "" = the daemon's own.
+	Root string `json:"-"`
 }
 
 // ClaudeEvaluator decides a Claude Code tool call under the agent's rule.

@@ -30,7 +30,9 @@ func userCanRead(st os.FileInfo, in ClaudeInput) bool {
 	if int(sys.Uid) == in.UID {
 		return mode&0o400 != 0
 	}
-	if mode&0o040 != 0 {
+	// Group membership is the host's; a container's (in.Root) has its own
+	// /etc/group, so there only owner and world bits count.
+	if mode&0o040 != 0 && in.Root == "" {
 		for _, g := range userGroups(in.UID) {
 			if g == uint32(sys.Gid) {
 				return true

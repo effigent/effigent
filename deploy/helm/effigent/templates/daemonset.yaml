@@ -46,6 +46,9 @@ spec:
             - -tetragon={{ .Values.tetragon.address }}
             - -listen={{ .Values.listen }}
             - -output={{ .Values.output }}
+            {{- if .Values.hookSocket.enabled }}
+            - -hook-socket=/var/run/effigent/hook.sock
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -84,6 +87,11 @@ spec:
             - name: securityfs
               mountPath: /sys/kernel/security
               readOnly: true
+            {{- if .Values.hookSocket.enabled }}
+            # The hook API for agents in pods, which mount the same host directory.
+            - name: hook-socket
+              mountPath: /var/run/effigent
+            {{- end }}
       volumes:
         - name: state
           hostPath:
@@ -97,6 +105,12 @@ spec:
           hostPath:
             path: /sys/kernel/security
             type: ""   # not checked: some container hosts (Docker Desktop) have no securityfs
+        {{- if .Values.hookSocket.enabled }}
+        - name: hook-socket
+          hostPath:
+            path: {{ .Values.hookSocket.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
