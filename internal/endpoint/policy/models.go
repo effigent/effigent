@@ -28,8 +28,10 @@ type ModelRule struct {
 	Allow []string `yaml:"allow,omitempty" json:"allow"`
 	Deny  []string `yaml:"deny,omitempty" json:"deny"`
 	// MaxTokens caps the output tokens a request may ask for (0: no cap). A
-	// request asking for more is refused; one that names no limit is let
-	// through (the provider's own limit applies).
+	// request asking for more is lowered to the cap (Anthropic's thinking
+	// budget too, below it), so the agent keeps working with shorter
+	// answers; one that names no limit (Codex's Responses calls) is let
+	// through and the provider's own limit applies.
 	MaxTokens int `yaml:"max_tokens,omitempty" json:"max_tokens"`
 }
 
