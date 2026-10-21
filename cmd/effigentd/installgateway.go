@@ -37,8 +37,10 @@ func installGatewayCmd(args []string) {
 			msg, err = gatewayClaude(*claudeFile, *addr, *remove)
 		case "codex":
 			msg, err = gatewayCodex(*codexFile, *addr, *remove)
-		case "gemini", "cursor":
-			err = fmt.Errorf("not supported: %s can't be pointed at a gateway machine-wide (see CLAUDE.md 2j)", a)
+		case "gemini":
+			err = fmt.Errorf("not supported: Gemini CLI takes its base URL (GOOGLE_GEMINI_BASE_URL) only from the environment, and only with a Gemini API key")
+		case "cursor":
+			err = fmt.Errorf("not supported: Cursor sends its model calls from Cursor's servers, which can't reach this machine's gateway")
 		case "":
 			continue
 		default:
@@ -84,10 +86,10 @@ func gatewayClaude(file, addr string, remove bool) (string, error) {
 		return "", err
 	}
 	if remove {
-		return "Claude Code talks to its provider directly again (" + file + "; sessions started before keep the gateway)", nil
+		return "Claude Code talks to its provider directly again (" + file + ")", nil
 	}
 	return "Claude Code sends its model calls through effigentd's gateway at " + addr + " (" + file +
-		"; new sessions; Bedrock / Vertex setups bypass it)", nil
+		"; Bedrock / Vertex setups bypass it)", nil
 }
 
 // ---- Codex: managed_config.toml openai_base_url ----
