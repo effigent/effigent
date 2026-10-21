@@ -183,7 +183,49 @@ docker run --rm effigent-scenario bash -c "EFFIGENT_RUN_QUIET=1 effigentd run --
 check "$OUT/sp-off.txt" 'OFF' "with self_protection off the agent can write the protected path"
 api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
 
-echo "== 8. backend"
+echo "== 8. gated binaries (FR Q3): the kernel refuses an agent's direct exec of a gated path"
+# Gate /usr/bin/uname (NOT in exec_deny, so a block proves the gated selector,
+# not a plain deny). The daemon injects its own paths as GateExempt, so the
+# bprm selector is matchBinaries NotIn [effigentd] AND argv0 == the gated path:
+# the agent's own exec is refused, `effigentd gate`'s is not.
+awk '1; /^  mode: denylist/{print "  gated_exec: [/usr/bin/uname]"}' internal/endpoint/policy/default.yaml > "$OUT/gated.yaml"
+api -X PUT --data-binary @"$OUT/gated.yaml" $API/policy > "$OUT/put-gated.json"
+check "$OUT/put-gated.json" '"ok": true' "policy with gated_exec accepted"
+# The gate (like the hook) dials EFFIGENT_API, default 127.0.0.1:7777, and sends
+# no token. Inside the container 127.0.0.1 is the container's own loopback (no
+# daemon there), so the gate fails closed and `effigentd run` can't fetch the
+# gated list to build PATH shims. (host.docker.internal does reach the host
+# daemon, but this e2e's daemon runs with a token, which the gate doesn't send,
+# so it would 401 — fail closed either way.) We prove the kernel half + fail
+# closed; the shim happy-path (bash -> shim -> gate -> daemon allow -> real
+# binary) needs a tokenless, reachable daemon and is covered by unit tests, §5.
+docker run --rm effigent-scenario curl -s --max-time 2 "http://host.docker.internal:$PORT/health" > "$OUT/gate-reach.txt" 2>&1 || true
+echo "        host daemon from container (host.docker.internal:$PORT): [$(cat "$OUT/gate-reach.txt" | tr -d '\n ')]"
+docker run --rm effigent-scenario bash -c "EFFIGENT_RUN_QUIET=1 effigentd run --agent claude -- bash -c '/usr/bin/uname >/dev/null 2>&1; echo \"uname exit=\$?\"; effigentd gate -- /usr/bin/uname >/dev/null 2>gate.err; echo \"gate exit=\$?\"; cat gate.err'" > "$OUT/gated.txt" 2>&1; sleep 2
+sed 's/^/        /' "$OUT/gated.txt"
+check "$OUT/gated.txt" 'uname exit=12[67]' "agent's direct exec of a gated binary blocked by the kernel"
+check "$OUT/gated.txt" 'gate exit=1'       "effigentd gate fails closed when the daemon is unreachable"
+check "$OUT/gated.txt" 'not reachable'     "the gate says why it refused (daemon unreachable)"
+check "$OUT/events.jsonl" '"type":"blocked".*exec /usr/bin/uname' "gated exec block reported as an event"
+# Could a nested `effigentd run` bypass the gate? effigentd is the gate-exempt
+# binary, so if a nested run reached its exec it would run the gated path
+# unjudged. Two things stop it here: (a) run warns it can't verify the command
+# (API unreachable), and (b) the nested run is itself inside the tracked agent
+# tree, so its own canary open is refused by the kernel and it aborts BEFORE the
+# exec. We assert both. (The gate's happy-path exec — effigentd exec'ing the
+# gated binary on allow — is not reachable in this harness: the gate fails closed
+# on the unreachable/tokened daemon and the nested run aborts at the canary. The
+# matchBinaries-exempts-the-caller primitive was verified standalone; see §5.)
+docker run --rm effigent-scenario bash -c "EFFIGENT_RUN_QUIET=1 effigentd run --agent claude -- bash -c 'effigentd run --agent claude -- /usr/bin/uname >/dev/null 2>nest.err; echo \"nested exit=\$?\"; cat nest.err'" > "$OUT/gated-nested.txt" 2>&1; sleep 1
+sed 's/^/        /' "$OUT/gated-nested.txt"
+check "$OUT/gated-nested.txt" 'could not check .* against gated_exec'  "nested run warns it cannot verify the command when the API is unreachable"
+check "$OUT/gated-nested.txt" 'effigent-canary: operation not permitted' "nested run is stopped by the kernel at its own canary, before any exec"
+# A non-agent (untracked) process may still run the gated binary: the gate is scoped to agent trees.
+docker run --rm effigent-scenario /usr/bin/uname > "$OUT/gated-nonagent.txt" 2>&1
+check "$OUT/gated-nonagent.txt" 'Linux' "a non-agent process can still exec the gated binary (scoped to agent trees)"
+api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
+
+echo "== 9. backend"
 sleep 6
 check "$OUT/backend.log" "received batch"                            "backend received batches (bearer token)"
 check "$OUT/backend.jsonl" '"type":"blocked"'                         "blocked events shipped to backend"

@@ -95,6 +95,47 @@ func TestSelfProtectGuard(t *testing.T) {
 	}
 }
 
+// TestGatedExec: a gated binary renders a bprm selector that blocks a direct
+// exec (matchArgs Equal the path) unless the caller is effigentd
+// (matchBinaries NotIn the exempt paths). FR Q3.
+func TestGatedExec(t *testing.T) {
+	y := lsm(t, policy.Rule{Mode: policy.Denylist,
+		GatedExec: []string{"/usr/bin/aws"}, GateExempt: []string{"/usr/local/bin/effigentd"}})
+	for _, want := range []string{
+		"hook: bprm_check_security", "matchBinaries", "operator: NotIn",
+		"/usr/local/bin/effigentd", "/usr/bin/aws", "action: Override",
+	} {
+		if !strings.Contains(y, want) {
+			t.Errorf("missing %q in -lsm:\n%s", want, y)
+		}
+	}
+}
+
+// TestGatedExecAllowlist: in allowlist mode the gated path and effigentd are
+// folded into the allow set (so the gate's exec passes the allow selector),
+// and the separate gated selector still blocks a direct exec.
+func TestGatedExecAllowlist(t *testing.T) {
+	y := lsm(t, policy.Rule{Mode: policy.Allowlist, ExecAllow: []string{"/bin/ls"},
+		GatedExec: []string{"/usr/bin/aws"}, GateExempt: []string{"/usr/local/bin/effigentd"}})
+	// allow selector folds in the gated binary + effigentd
+	if !strings.Contains(y, "NotEqual") || !strings.Contains(y, "/usr/bin/aws") || !strings.Contains(y, "/usr/local/bin/effigentd") {
+		t.Errorf("gated binary/effigentd not folded into allow set:\n%s", y)
+	}
+	// and a NotIn matchBinaries selector gates the direct exec
+	if !strings.Contains(y, "operator: NotIn") {
+		t.Errorf("no gated (NotIn) selector in allowlist mode:\n%s", y)
+	}
+}
+
+// TestNoGatedWithoutExempt: a gated_exec list with no exempt paths injected
+// renders no gated selector (it would otherwise block the gate too).
+func TestNoGatedWithoutExempt(t *testing.T) {
+	y := lsm(t, policy.Rule{Mode: policy.Denylist, GatedExec: []string{"/usr/bin/aws"}})
+	if strings.Contains(y, "matchBinaries") {
+		t.Errorf("gated selector rendered without exempt paths:\n%s", y)
+	}
+}
+
 // TestGuardOverrideEvenInMonitor: self-protection always blocks, even in
 // monitor mode where every other selector is Post — an agent must never be
 // able to disable effigentd.

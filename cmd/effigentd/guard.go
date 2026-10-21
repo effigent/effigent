@@ -8,6 +8,28 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/procscan"
 )
 
+// gateExemptPaths is effigentd's own binary paths (FR Q3): the processes the
+// kernel lets exec a gated binary, so `effigentd gate -- <bin>` runs while a
+// direct exec by the agent is refused. The standard install path plus this
+// daemon's resolved executable, so a non-standard install still works.
+func gateExemptPaths() []string {
+	paths := map[string]bool{"/usr/local/bin/effigentd": true}
+	if exe, err := os.Executable(); err == nil {
+		if r, err := filepath.EvalSymlinks(exe); err == nil {
+			paths[r] = true
+		} else {
+			paths[exe] = true
+		}
+	}
+	out := make([]string, 0, len(paths))
+	for p := range paths {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // guardKillMax caps KillPIDs. task_kill matches arg 0 (an int) with the Equal
 // operator, and Tetragon limits a numeric Equal to 4 values; more would make
 // the whole -guard policy fail to load. effigentd itself plus up to 3 Tetragon

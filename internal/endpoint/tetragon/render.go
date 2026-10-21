@@ -53,9 +53,19 @@ type arg struct {
 }
 
 type selector struct {
-	MatchPIDs    []matchPID    `yaml:"matchPIDs"`
-	MatchArgs    []matchArg    `yaml:"matchArgs,omitempty"`
-	MatchActions []matchAction `yaml:"matchActions,omitempty"`
+	MatchPIDs     []matchPID    `yaml:"matchPIDs"`
+	MatchBinaries []matchBinary `yaml:"matchBinaries,omitempty"`
+	MatchArgs     []matchArg    `yaml:"matchArgs,omitempty"`
+	MatchActions  []matchAction `yaml:"matchActions,omitempty"`
+}
+
+// matchBinary filters on the binary of the process performing the action. On a
+// bprm_check_security hook that is the process calling execve (the parent of
+// the new image), so `NotIn [effigentd]` matches every exec of a gated binary
+// except one effigentd itself drives through `effigentd gate` (FR Q3).
+type matchBinary struct {
+	Operator string   `yaml:"operator"`
+	Values   []string `yaml:"values"`
 }
 
 type matchPID struct {
@@ -97,18 +107,36 @@ func Render(name string, rootPID uint32, r policy.Rule) ([]engine.Doc, error) {
 	}
 
 	// Exec control on the LSM hook that runs before a new program is loaded.
-	var execArgs []matchArg
+	var execSel []selector
 	switch {
 	case r.Mode == policy.Allowlist:
-		execArgs = []matchArg{{Index: 0, Operator: "NotEqual", Values: r.ExecAllow}}
+		// Allow mode blocks anything not in the allow set. Gated binaries and
+		// effigentd itself must pass this selector (the gated selector below is
+		// what actually stops a direct exec), so fold them into the allow set.
+		allow := append(append([]string(nil), r.ExecAllow...), r.GatedExec...)
+		allow = append(allow, r.GateExempt...)
+		execSel = append(execSel, selector{MatchPIDs: pids,
+			MatchArgs: []matchArg{{Index: 0, Operator: "NotEqual", Values: allow}}, MatchActions: act(true)})
 	case len(r.ExecDeny) > 0:
-		execArgs = []matchArg{{Index: 0, Operator: "Equal", Values: r.ExecDeny}}
+		execSel = append(execSel, selector{MatchPIDs: pids,
+			MatchArgs: []matchArg{{Index: 0, Operator: "Equal", Values: r.ExecDeny}}, MatchActions: act(true)})
 	}
-	if execArgs != nil {
+	// Gated binaries (FR Q3): refuse a direct exec of these paths unless the
+	// process doing the exec is effigentd (the gate). matchBinaries on a bprm
+	// hook matches the caller (verified on 6.11), so NotIn [effigentd] catches
+	// the agent's own exec but not `effigentd gate`'s. act(true): monitor/learn
+	// report would_block, like every other exec rule.
+	if len(r.GatedExec) > 0 && len(r.GateExempt) > 0 {
+		execSel = append(execSel, selector{MatchPIDs: pids,
+			MatchBinaries: []matchBinary{{Operator: "NotIn", Values: r.GateExempt}},
+			MatchArgs:     []matchArg{{Index: 0, Operator: "Equal", Values: r.GatedExec}},
+			MatchActions:  act(true)})
+	}
+	if len(execSel) > 0 {
 		p.Spec.LSMHooks = append(p.Spec.LSMHooks, hook{
 			Hook:      "bprm_check_security",
 			Args:      []arg{{Index: 0, Type: "linux_binprm"}},
-			Selectors: []selector{{MatchPIDs: pids, MatchArgs: execArgs, MatchActions: act(true)}},
+			Selectors: execSel,
 		})
 	}
 

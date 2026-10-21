@@ -1,12 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +42,29 @@ func runAgent(args []string) {
 	bin, err := exec.LookPath(cmd[0])
 	if err != nil {
 		fatalf("%v", err)
+	}
+
+	// Gated binaries (FR Q3): put PATH shims in front so bare invocations route
+	// through `effigentd gate`, and refuse to launch the agent command itself if
+	// it resolves to a gated binary. `effigentd run` execs its command in place,
+	// as effigentd, which the kernel exempts from the gate (run and gate share
+	// the one binary), so a gated binary launched directly here would run
+	// unjudged. When the daemon's API is unreachable we can't fetch the gated
+	// list to make that check or build shims; we warn rather than block, because
+	// --strict governs kernel-enforcement confirmation (the canary below), which
+	// works without the API (e.g. an agent in a container). See §5 limits.
+	runEnv := os.Environ()
+	gated, gotList := gatedPaths(*agent)
+	switch {
+	case !gotList:
+		fmt.Fprintf(os.Stderr, "effigentd: warning: could not check %q against gated_exec (daemon API unreachable); a gated binary launched this way would run unjudged\n", cmd[0])
+	case len(gated) > 0:
+		if real, rerr := filepath.EvalSymlinks(bin); rerr == nil {
+			if slices.Contains(gated, real) || slices.Contains(gated, bin) {
+				fatalf("%q is a gated binary; run it through `effigentd gate -- %s …`, not as the agent command (that would bypass the gate)", cmd[0], cmd[0])
+			}
+		}
+		runEnv = withShims(*agent, gated, runEnv)
 	}
 
 	dir, err := os.MkdirTemp("", "effigent-run-")
@@ -85,9 +113,103 @@ func runAgent(args []string) {
 	case os.Getenv("EFFIGENT_RUN_QUIET") == "":
 		fmt.Fprintf(os.Stderr, "effigentd: %s enforced after %s\n", *agent, time.Since(start).Round(time.Millisecond))
 	}
-	if err := syscall.Exec(bin, cmd, os.Environ()); err != nil {
+	if err := syscall.Exec(bin, cmd, runEnv); err != nil {
 		fatalf("exec %s: %v", bin, err)
 	}
+}
+
+// gatedPaths asks the daemon which binaries are gated for this agent (FR Q3).
+// ok is false when the daemon's API couldn't be reached or didn't answer 200
+// (e.g. an agent in a container, or a token-protected API the gate doesn't
+// authenticate to): the caller then can't verify the command against the list.
+func gatedPaths(agent string) (paths []string, ok bool) {
+	addr := os.Getenv("EFFIGENT_API")
+	if addr == "" {
+		addr = "127.0.0.1:7777"
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/gated/"+agent, nil)
+	if err != nil {
+		return nil, false
+	}
+	res, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var d struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&d); err != nil {
+		return nil, false
+	}
+	return d.Paths, true
+}
+
+// withShims builds a shim directory of symlinks (basename -> effigentd), prepends
+// it to PATH, and sets EFFIGENT_AGENT / EFFIGENT_SHIM_DIR, so the agent's bare
+// invocations of a gated binary route through `effigentd gate` (FR Q3). The
+// symlinks resolve to the real effigentd binary, so a noexec shim dir is fine.
+// On any failure it returns env unchanged (the kernel still blocks direct exec).
+func withShims(agent string, gated, env []string) []string {
+	self, err := os.Executable()
+	if err != nil {
+		return env
+	}
+	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+		self = resolved
+	}
+	base := os.Getenv("XDG_RUNTIME_DIR")
+	if base == "" {
+		base = os.TempDir()
+	}
+	dir, err := os.MkdirTemp(base, "effigent-shims-")
+	if err != nil {
+		return env
+	}
+	made := false
+	for _, p := range gated {
+		name := filepath.Base(p)
+		if name == "" || name == "." || name == "/" {
+			continue
+		}
+		link := filepath.Join(dir, name)
+		_ = os.Remove(link)
+		if os.Symlink(self, link) == nil {
+			made = true
+		}
+	}
+	if !made {
+		_ = os.RemoveAll(dir)
+		return env
+	}
+	out := make([]string, 0, len(env)+2)
+	for _, kv := range env {
+		switch {
+		case strings.HasPrefix(kv, "PATH="):
+			out = append(out, "PATH="+dir+string(os.PathListSeparator)+strings.TrimPrefix(kv, "PATH="))
+		case strings.HasPrefix(kv, "EFFIGENT_AGENT="), strings.HasPrefix(kv, "EFFIGENT_SHIM_DIR="):
+			// replaced below
+		default:
+			out = append(out, kv)
+		}
+	}
+	if !hasPrefix(out, "PATH=") {
+		out = append(out, "PATH="+dir+string(os.PathListSeparator)+"/usr/local/bin:/usr/bin:/bin")
+	}
+	out = append(out, "EFFIGENT_AGENT="+agent, "EFFIGENT_SHIM_DIR="+dir)
+	return out
+}
+
+func hasPrefix(env []string, prefix string) bool {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // childRefused starts a short-lived child (`effigentd run-probe CANARY`) and

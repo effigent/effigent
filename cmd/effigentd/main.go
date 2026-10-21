@@ -45,10 +45,20 @@ func bpfLSMEnabled() bool {
 }
 
 func main() {
+	// Shim form (FR Q3): a symlink on `effigentd run`'s PATH, named for a gated
+	// binary, points here. When invoked under any name but "effigentd" we are a
+	// gate for that binary: evaluate argv, then exec the real one.
+	if base := filepath.Base(os.Args[0]); base != "effigentd" && base != "effigentd.exe" {
+		gateShim(base, os.Args[1:])
+		return
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "run":
 			runAgent(os.Args[2:])
+			return
+		case "gate": // FR Q3: effigentd gate [--agent NAME] -- cmd args...
+			gateCmd(os.Args[2:])
 			return
 		case "run-probe": // internal: the child check of `effigentd run`
 			runProbe(os.Args[2:])
@@ -311,6 +321,7 @@ func daemon() {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
 			Hook:       hook,
+			Gate:       gateHandler(eng, func() *cpclient.Client { return client }),
 			BreakGlass: bg,
 			Stats: func() map[string]any {
 				out := map[string]any{
@@ -383,6 +394,9 @@ func daemon() {
 		// have started after effigentd, or restarted). SetGuard reapplies live
 		// roots, so a later refresh takes effect.
 		eng.SetGuard(ctx, buildGuard(*stateDir, *procfs, logger.Printf))
+		// Record effigentd's own paths so the kernel lets `effigentd gate` exec
+		// a gated binary (FR Q3) while a direct exec by the agent is refused.
+		eng.SetGateExempt(ctx, gateExemptPaths())
 		if first && *procfs != "" {
 			if procs, ppid, err := procscan.Scan(*procfs); err != nil {
 				logger.Printf("procfs scan: %v", err)
