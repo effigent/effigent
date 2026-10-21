@@ -13,7 +13,7 @@ Keep this file current when architecture, data model or deployment change.
 
 | Path | What | Runs on |
 |---|---|---|
-| `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync + heartbeat (incl. hook state), `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork), `hooks/` agent hook payloads → canonical tools, `hookstate/` hook file locations + per-agent hook health (see 2e). Subcommands: `enroll`, `run` (zero-gap launcher). | Linux host next to Tetragon (dev: Docker Desktop VM) |
+| `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync + heartbeat (incl. hook state), `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork), `hooks/` agent hook payloads → canonical tools, `hookstate/` hook file locations + per-agent hook health (see 2e), `gateway/` local model gateway (2j). Subcommands: `enroll`, `run` (zero-gap launcher), `install-hooks`, `install-gateway`. | Linux host next to Tetragon (dev: Docker Desktop VM) |
 | `cmd/effigent-cp`, `internal/controlplane/*` | Control plane (Go): `store/` Postgres (schema `cp`, embedded migrations tracked in `cp.schema_migrations`), `server/` endpoint protocol `/ep/v1/*` + console API `/api/v1/*`, `compile/` central policies per machine, `spend/` Pricing Leaks (see 2d). Image: `Dockerfile.cp`. | AWS App Runner `effigent-cp` (628713530358, us-east-1) at https://api.effigent.ai — redeploy with `AWS_PROFILE=effigent deploy/aws/deploy-cp.sh` |
 | `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
 | `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). No sample data by default: pages without a backend (Allow/Deny Lists) show "Coming soon" empty states; the Agent Graph is built client-side from real events (`src/lib/live-graph.ts`). **Demo Mode** (Settings / user menu; localStorage `effigent.demoMode`) swaps in a sample workspace from `src/lib/fixture-api.ts` on every page and never calls the real API. | Vercel, app.effigent.ai |
@@ -553,6 +553,81 @@ All control plane (no effigentd change); everything is read from rollups, never 
 - Deploy order: control plane (migrations 016, 017; 016's backfill scans 35 days of `cp.events` once)
   → console.
 
+## 2j. Model gateway
+
+- `internal/endpoint/gateway`: a plain-HTTP listener on loopback, `-gateway` (default
+  `127.0.0.1:7779`, `""` = off; not the 7777 API), started after the first policy sync. It is not TLS
+  interception: an agent uses it because its base URL says so. URL = `http://127.0.0.1:7779/<provider>/<agent>/<provider path>`,
+  providers fixed in `gateway.Providers` (`anthropic` → api.anthropic.com, `openai` → api.openai.com,
+  `codex` → chatgpt.com/backend-api/codex for a ChatGPT sign-in and api.openai.com/v1 for an `sk-` key,
+  `gemini` → generativelanguage.googleapis.com). The request picks only the path below that base, and `..` is cleaned.
+  Refused: `Origin` header or non-loopback `Host` (browsers, DNS rebinding), bodies > 64 MB,
+  `Upgrade: websocket` → 426 (Codex then falls back to HTTP streaming at once).
+- Per model call (Anthropic `/v1/messages`, OpenAI `…/chat/completions` + `…/responses`, Gemini
+  `…/models/{m}:generateContent|streamGenerateContent`; everything else passes through without an event):
+  1. Read the model and the output limit from the body (zstd/gzip bodies are decoded for this; Codex
+     zstd-compresses to the ChatGPT backend by default).
+  2. Check them against the policy's `models:`.
+  3. Forward the request, then stream the response back unbuffered (read → write → flush).
+  4. Parse usage from a tee of the response and emit a `model_call` event (`kind: model`, `model`,
+     `session_id`, `os_user`/`git_email`, `target` host+path without query) with `model_call:
+     {provider, requested_model, status, stream, latency_ms, first_byte_ms, request_id, rewritten,
+     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, stop_reason, error}`.
+  - Token rules: `input_tokens` excludes cache reads and writes, `output_tokens` includes reasoning.
+  - Bodies, prompts, query strings and credentials are never read into events or logs. `Authorization`,
+    `x-api-key`, `anthropic-beta` (it carries the claude.ai OAuth capability) etc. pass through as sent.
+  - The events feed `cp.agent_activity_daily` (model, OS user, git email) with no control plane change.
+- Policy (`policy/models.go`, top-level so compile keeps it):
+  `models: {allow: [..], deny: [..], max_tokens: N, require_gateway: bool, agents: {<agent>: {allow, deny, max_tokens}}}`.
+  - Patterns: case-insensitive `*` wildcards; no match-all; a deny wins. An agent's list replaces the default list.
+  - Denylist/allowlist mode: a refused model gets **400** in the provider's error shape
+    (`invalid_request_error`; Gemini `INVALID_ARGUMENT`), `X-Should-Retry: false`, and a `blocked` event.
+    Not 403: Claude Code shows a 403 as "Failed to authenticate"; verified with real Claude Code 2.1.306,
+    which shows "API Error: 400 Blocked by Effigent: model … is not allowed …".
+  - Monitor/learn: `would_block`, then forwarded.
+  - `max_tokens` lowers a larger request limit in enforcing modes only (Anthropic `thinking.budget_tokens`
+    below it). A request that names no limit passes.
+  - Body rewrites, the only ones: that cap, and `stream_options.include_usage` on streamed chat
+    completions (without it there is no usage). Everything else is forwarded byte for byte.
+- `require_gateway`: hooks treat a Claude Code / Codex / Gemini session as `model_endpoint`
+  (`Rule.GatewayDeny()` adds it to `actions_deny` unless it's already in the deny or approve lists) unless
+  - the gateway has seen that session in the last 30 min (Claude `x-claude-code-session-id`; Codex
+    `thread-id`, which is the hooks' `session_id` by source reading of rust-v0.163.0, not seen live;
+    a tool call always follows a model call), or
+  - the hook env points at the gateway (`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`; Bedrock/Vertex never count).
+- `effigentd install-gateway [--agents claude,codex] [--addr] [--remove]`:
+  - Claude Code: `env.ANTHROPIC_BASE_URL = …/anthropic/claude-code` in managed-settings.json. A managed
+    `env` beats the shell and every other settings file (code.claude.com/docs/en/settings-reference#env).
+  - Codex: `openai_base_url = …/codex/codex` in `/etc/codex/managed_config.toml`, managed defaults
+    applied over config.toml and `--config` at every start
+    (learn.chatgpt.com/docs/enterprise/managed-configuration). On Windows that file is per user: `--codex-file`.
+    These are defaults, not requirements: a user can change them mid-run. The enforced form would be
+    `model_provider` + `[model_providers.<id>]` (`requires_openai_auth = true`) in `requirements.toml`
+    (learn.chatgpt.com/docs/enterprise/sign-in-with-chatgpt-through-a-gateway), not done yet.
+    The base URL doesn't end in `/backend-api/codex`, so Codex's `supports_codex_backend_routes()` is false.
+    That turns off ChatGPT workspace routing (it could move the base URL off the gateway), per-model
+    response headers and experimental context management, by source reading.
+  - Never replaces or removes someone else's base URL. Codex's original file is kept once as `.effigent-backup`.
+  - hookstate reports `gateway: {state: on|off|elsewhere|other_port, url, file}` for claude and codex.
+  - Not run by the installers: it changes where model traffic goes, so an admin opts in.
+  - Gemini (`GOOGLE_GEMINI_BASE_URL` is env-only, Gemini-API-key auth only; Google login uses Code Assist)
+    and Cursor (calls leave from Cursor's servers) are refused.
+- Sessions: hook calls record agent + session → OS user / git email (`cmd/effigentd/gateway.go`). Gateway
+  events take them from there; without them, on Linux, the loopback peer's uid (`/proc/net/tcp`).
+- Fail-closed by construction: with effigentd stopped, a pointed agent can't reach its model, the same
+  posture as the hooks' `onFailure: block`. There is no fail-open switch, because the agent, not effigentd,
+  makes the connection. The way back is `install-gateway --remove` (Claude Code reloads managed `env`
+  live, per its docs; Codex at its next start), which the uninstallers (`install.sh`, `install.ps1`)
+  run. `require_gateway`
+  decides whether going around the gateway is a violation.
+- Tests: `gateway/gateway_test.go` (fake upstream; unbuffered SSE, refusals, caps, Codex both sign-ins,
+  zstd, 426, paths, upstream down), `usage_test.go` + `testdata/` (the providers' documented examples,
+  sources in `testdata/README`), `policy/models_test.go`, `hooks/gateway_test.go`,
+  `cmd/effigentd/installgateway_test.go`.
+  - Live, 2026-10-21: real Claude Code (claude.ai OAuth) through a dev gateway, one haiku call: streamed,
+    usage + session recorded; a denied model was refused locally.
+  - Not live: Codex, Gemini, the OpenAI/Gemini upstreams.
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -590,6 +665,27 @@ npm run -w @effigent/site build                     # site
 ## 5. Known limits (keep honest here and in the console; since Oct 2026 the marketing site and its docs state capabilities without these caveats, by the founder's copy rules, so check new site claims against this list)
 
 - Kernel blocking is per resolved binary path and file path suffix; argument-level rules alert only.
+- Model gateway (2j) limits:
+  - Only agents pointed at it are covered (Claude Code and Codex via `install-gateway`).
+  - Ways around it:
+    - Claude Code with Bedrock/Vertex skips it (SigV4 signing is host-bound, so there's no Bedrock
+      route; Vertex isn't routed yet).
+    - The Claude desktop app's launch env overrides a managed `env`.
+    - Codex's managed defaults can be changed during a run.
+    - Codex `model_provider` other than `openai` bypasses `openai_base_url`.
+    - Gemini and Cursor can't be pointed at it machine-wide.
+  - `require_gateway` is the backstop: a session the gateway hasn't seen is `model_endpoint`.
+  - The `<agent>` path segment is the agent's own label (self-asserted, like `effigentd run --agent`).
+  - The OS user comes from the hooks' session, else the Linux loopback peer; macOS/Windows get none without hooks.
+  - Not live-tested: Codex (both sign-ins, the ChatGPT-backend route, the zstd bodies, the 426 fallback)
+    and Gemini. Only Claude Code with a claude.ai login was run through it.
+  - No `model_call` token sums in the console or Pricing Leaks yet: the events carry them, Pricing Leaks
+    uses only the model. Migration 021 is reserved for a rollup.
+  - Fail-closed: a stopped daemon cuts pointed agents off from their model.
+  - Rollout: effigentd builds without `models:` refuse a policy that has it (parse error → they stay on
+    their current version). Upgrade endpoints, then run `install-gateway`, then publish `models:` /
+    `require_gateway`. Publishing `require_gateway` before the gateway is installed denies every tool call
+    of the covered agents.
 - Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet).
 - `domain_deny` (hostnames) is enforced by address: `internal/endpoint/domains` resolves each name every `-dns-refresh` (30s) via the system resolver + `-dns-servers` (1.1.1.1, 8.8.8.8, 9.9.9.9), keeps every address seen in the last 15 min (max 64 per name; a failed lookup never shrinks the set; loopback/link-local answers are dropped), and the engine adds them to `network_deny` at apply time, re-applying only agents whose names changed. While it is in force, a DNS bypass guard blocks agents from DoT (:853 anywhere) and from well-known public resolvers on :53/:443/:853, except the nameservers in effigentd's and the agent's own `resolv.conf` and single addresses listed in `network_allow`. effigentd itself queries the public resolvers every 30s; `-dns-servers ""` limits it to the system resolver. Limits: shared CDN IPs over-block or miss; names are exact (no wildcards, `www.` separate); private DoH, hard-coded IPs, `/etc/hosts` pins and proxies evade it; effigentd resolves from its own vantage point (split-horizon DNS can differ). `network_allow` is the stronger control. e2e section 6.
 - macOS / Windows: no kernel enforcement (macOS needs an Endpoint Security entitlement).

@@ -32,6 +32,9 @@ type Agent struct {
 	// Outcomes: the post-tool hooks that record how calls end are all there.
 	// Optional: their absence doesn't change State.
 	Outcomes bool `json:"outcomes,omitempty"`
+	// Gateway is whether the agent is pointed at effigentd's model gateway
+	// (agents it can carry only).
+	Gateway *Gateway `json:"gateway,omitempty"`
 }
 
 // Report is what effigentd sends the control plane, keyed by the agent names
@@ -48,13 +51,17 @@ type Options struct {
 	Homes                      []string // users' home directories (Gemini's per-user settings, agent installs)
 	PathDirs                   []string // directories searched for agent programs
 	Apps                       []string // Cursor app bundles / executables
+	// The model gateway: its address (effigentd -gateway; "" when off) and
+	// the Codex file install-gateway writes.
+	GatewayAddr, CodexManaged string
 }
 
 // Default is this machine: the files install-hooks writes, every user's home
 // (macOS /Users/*, Linux /home/* and /root, Windows C:\Users\*) and the usual
 // install locations.
 func Default(sensor string) Options {
-	o := Options{Sensor: sensor, Claude: ClaudeFile(), Codex: CodexFile(), Gemini: GeminiFile(), Cur: CursorFile()}
+	o := Options{Sensor: sensor, Claude: ClaudeFile(), Codex: CodexFile(), Gemini: GeminiFile(), Cur: CursorFile(),
+		CodexManaged: CodexManagedFile()}
 	switch runtime.GOOS {
 	case "darwin":
 		o.Homes, _ = filepath.Glob("/Users/*")
@@ -96,6 +103,7 @@ func Check(o Options) Report {
 		}
 		r.Agents[name] = a
 	}
+	checkGateways(o, &r)
 	return r
 }
 

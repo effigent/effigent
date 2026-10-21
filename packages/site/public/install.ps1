@@ -32,7 +32,13 @@ if (-not $admin) { throw "Run this from an elevated (Administrator) PowerShell."
 if ($Uninstall) {
   Say "Removing effigentd"
   if (Get-Service effigentd -ErrorAction SilentlyContinue) { Stop-Service effigentd -ErrorAction SilentlyContinue; sc.exe delete effigentd | Out-Null }
-  if (Test-Path $Exe) { & $Exe install-hooks --remove; Remove-Item $Exe -Force }
+  if (Test-Path $Exe) {
+    & $Exe install-hooks --remove
+    # agents pointed at the model gateway would lose their model without the daemon
+    # (only a build that has install-gateway: an older one would start as a daemon)
+    if (Select-String -Path $Exe -Pattern 'install-gateway' -SimpleMatch -Quiet) { & $Exe install-gateway --remove --agents claude }
+    Remove-Item $Exe -Force
+  }
   Write-Host "effigentd removed. Enrollment state kept in $State (delete it to unenroll this machine)."
   exit 0
 }

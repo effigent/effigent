@@ -1,0 +1,38 @@
+Usage fixtures for usage_test.go. Read 2026-10-22.
+
+Verbatim from the providers' documentation:
+
+  anthropic_stream.sse            https://platform.claude.com/docs/en/build-with-claude/streaming
+                                  ("Basic streaming request", the Response block)
+  anthropic_stream_tools.sse      same page, "Streaming request with tool use"
+  anthropic_stream_websearch.sse  same page, the web search example (message_delta
+                                  carries cumulative input and cache counts)
+  anthropic_message_cache.json    https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+                                  (1-hour cache example, "The response includes detailed cache
+                                  information"; only the usage object, as the docs show it)
+  anthropic_error.json            https://platform.claude.com/docs/en/api/errors ("Error shapes")
+  openai_chat.json                https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+                                  (the Default example's response)
+  openai_responses_stream.sse     https://developers.openai.com/api/reference/resources/responses/streaming-events
+                                  (response.completed, compacted onto one data: line)
+  openai_responses.json           the "response" object of that same event
+  openai_responses_error.sse      same page, the "error" event
+
+Composed from documented pieces (not a single verbatim example):
+
+  anthropic_stream_error.sse      the basic example's message_start + the streaming page's
+                                  "Error events" example (an error after HTTP 200)
+  openai_chat_stream.sse          first chunk verbatim from the chat streaming-events page; the
+                                  final usage chunk is built from the documented include_usage
+                                  behaviour ("choices field will always be an empty array",
+                                  usage null on other chunks); the docs show no verbatim one
+  openai_error.json               the error envelope as openai-python reads it
+                                  ({"error": {message, type, param, code}}); no verbatim example
+
+Built from the schema only (https://ai.google.dev/api/generate-content: GenerateContentResponse,
+UsageMetadata; the docs show requests, not responses):
+
+  gemini_stream.sse               two alt=sse chunks, running totals in usageMetadata
+  gemini_stream_array.json        the same without alt=sse (a JSON array of chunks), with cached
+                                  content (promptTokenCount includes cachedContentTokenCount)
+  gemini_error.json               Google's standard error envelope ({"error": {code, message, status}})

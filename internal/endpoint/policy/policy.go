@@ -114,6 +114,13 @@ type Rule struct {
 	// MCPPins is the policy's top-level mcp_pins (server name, lowercase →
 	// fingerprints), set by effigentd like Environments.
 	MCPPins map[string]PinList `yaml:"-" json:"-"`
+
+	// Model gateway, set by effigentd (RuleFor, the daemon), never by
+	// policy authors: this agent's part of the top-level models section,
+	// and the gateway address agents must be pointed at.
+	Models         ModelRule `yaml:"-" json:"-"`
+	RequireGateway bool      `yaml:"-" json:"-"`
+	GatewayAddr    string    `yaml:"-" json:"-"`
 }
 
 // Environment names the targets that make an action part of an environment
@@ -298,6 +305,8 @@ type Policy struct {
 	// to a pinned server whose definition differs, or can't be found, is the
 	// action mcp_changed.
 	MCPPins map[string]PinList `yaml:"mcp_pins,omitempty"`
+	// Models is enforced by effigentd's local model gateway.
+	Models Models `yaml:"models,omitempty"`
 }
 
 // PinList is one or more fingerprints: a string or a list in YAML.
@@ -469,6 +478,9 @@ func (p *Policy) validate() error {
 				}
 			}
 		}
+	}
+	if err := p.Models.check(); err != nil {
+		return err
 	}
 	for i := range p.MCPServers {
 		re, err := regexp.Compile(p.MCPServers[i].Pattern)
@@ -723,6 +735,7 @@ func (p *Policy) RuleFor(agent string) Rule {
 	}
 	r.Environments = p.Environments
 	r.MCPPins = p.MCPPins
+	r.Models, r.RequireGateway = p.Models.For(agent), p.Models.RequireGateway
 	return r
 }
 

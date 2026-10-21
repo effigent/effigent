@@ -53,6 +53,9 @@ type ClaudeInput struct {
 	// History is what earlier calls of this session did (session rules);
 	// nil when the call has no session.
 	History *History `json:"-"`
+	// ViaGateway: effigentd's model gateway carried this session's model
+	// calls recently (require_gateway).
+	ViaGateway bool `json:"-"`
 }
 
 // ClaudeEvaluator decides a Claude Code tool call under the agent's rule.

@@ -97,6 +97,8 @@ type Event struct {
 	// MCPServers are the MCP servers in the agent's config with their
 	// fingerprints (mcp_pins), on a hook session's agent_start.
 	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+	// ModelCall is set on model_call events from the model gateway.
+	ModelCall *ModelCall `json:"model_call,omitempty"`
 }
 
 // MCPServer is one MCP server definition an agent would use.
@@ -134,4 +136,37 @@ type Action struct {
 	Attrs  map[string]string `json:"attrs,omitempty"`  // aws_profile, aws_account, kube_context, db_host, registry, …
 	Envs   []string          `json:"envs,omitempty"`   // environments its target belongs to (prod)
 	In     string            `json:"in,omitempty"`     // the script or package.json script it was found in
+}
+
+// ModelCall is one request through effigentd's model gateway (event type
+// model_call): what was asked for and what it consumed, never the prompt,
+// the completion or the credentials.
+type ModelCall struct {
+	Provider       string `json:"provider"`                  // anthropic | openai | chatgpt | gemini
+	RequestedModel string `json:"requested_model,omitempty"` // the request's model (Event.Model is the provider's answer)
+	Status         int    `json:"status"`                    // HTTP status the agent got
+	Stream         bool   `json:"stream,omitempty"`
+	LatencyMS      int64  `json:"latency_ms"`
+	FirstByteMS    int64  `json:"first_byte_ms,omitempty"` // until the response headers
+	RequestID      string `json:"request_id,omitempty"`    // the provider's request id
+	Rewritten      string `json:"rewritten,omitempty"`     // what the gateway changed in the request (models.max_tokens, usage reporting)
+	ModelUsage
+}
+
+// ModelUsage is what a model call consumed, read from the provider's usage.
+// Counts are normalised so they add up to what is billed: InputTokens is
+// input at the full rate (cached tokens excluded); CacheRead/WriteTokens
+// input read from / written to the prompt cache (writes: Anthropic only);
+// OutputTokens everything generated, reasoning included; ReasoningTokens the
+// reasoning part of it, when reported.
+type ModelUsage struct {
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64  `json:"reasoning_tokens,omitempty"`
+	StopReason       string `json:"stop_reason,omitempty"`
+	Error            string `json:"error,omitempty"` // the provider's error type, from the body or the stream
+	Model            string `json:"-"`               // the model the provider answered with (copied to Event.Model)
+	Seen             bool   `json:"-"`               // the response carried usage
 }

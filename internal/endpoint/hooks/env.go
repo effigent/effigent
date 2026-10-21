@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -145,12 +146,25 @@ var modelKeys = map[string][]string{
 	"gemini": {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 }
 
-// model adds model_endpoint / model_api_key, only when a policy list names them.
+// model adds model_endpoint / model_api_key, only when a policy list names
+// them (or models.require_gateway is on).
 func (x *actx) model() {
+	if x.rule.RequireGateway && GatewayAgent(x.in.Agent) {
+		// The gateway carried this session's model calls, or the agent's
+		// environment points it there; anything else goes around it.
+		if !x.in.ViaGateway && !OnGateway(x.in.Agent, x.in.Env, x.rule.GatewayAddr) {
+			target := "unknown host"
+			if hs := ModelHosts(x.in.Agent, x.in.Env); len(hs) > 0 {
+				target = hs[0]
+			}
+			x.add(event.Action{Kind: "model_endpoint", Target: target + ", not through the Effigent model gateway",
+				Attrs: map[string]string{"agent": x.in.Agent, "gateway": firstNonEmpty(x.rule.GatewayAddr, "off")}})
+		}
+	}
 	if !listsName(x.rule, "model_endpoint", "model_api_key") || x.in.Env == nil {
 		return
 	}
-	if len(x.rule.ModelHostsAllow) > 0 && listsName(x.rule, "model_endpoint") {
+	if len(x.rule.ModelHostsAllow) > 0 && listsName(x.rule, "model_endpoint") && !x.rule.RequireGateway {
 		for _, h := range ModelHosts(x.in.Agent, x.in.Env) {
 			if !hostMatches(x.rule.ModelHostsAllow, h) {
 				x.add(event.Action{Kind: "model_endpoint", Target: h, Attrs: map[string]string{"agent": x.in.Agent}})
@@ -202,4 +216,70 @@ func mcpServer(tool string) string {
 	}
 	s, _, _ := strings.Cut(rest, "__")
 	return strings.ToLower(s)
+}
+
+// GatewayAgent reports whether effigentd's model gateway can carry an
+// agent's model traffic (require_gateway applies to it).
+func GatewayAgent(agent string) bool {
+	return isClaude(agent) || agent == "codex" || strings.HasPrefix(agent, "gemini")
+}
+
+// gatewayVars is where each agent's base URL points it at the gateway, and
+// the gateway providers it may name.
+var gatewayVars = map[string]struct {
+	vars  []string
+	provs []string
+}{
+	"claude": {[]string{"ANTHROPIC_BASE_URL"}, []string{"anthropic"}},
+	// Codex reads its base URL from config (openai_base_url), not from its
+	// environment (OPENAI_BASE_URL isn't one in Codex): only the gateway
+	// having seen the session counts (ClaudeInput.ViaGateway).
+	"codex":  {nil, []string{"codex", "openai"}},
+	"gemini": {[]string{"GOOGLE_GEMINI_BASE_URL"}, []string{"gemini"}},
+}
+
+// OnGateway reports whether an agent's environment points it at the gateway
+// listening on addr: a loopback base URL on that port whose path names one of
+// the agent's providers. Bedrock and Vertex bypass ANTHROPIC_BASE_URL.
+func OnGateway(agent string, env map[string]string, addr string) bool {
+	if addr == "" || env == nil {
+		return false
+	}
+	fam := agent
+	switch {
+	case isClaude(agent):
+		if truthy(env["CLAUDE_CODE_USE_BEDROCK"]) || truthy(env["CLAUDE_CODE_USE_VERTEX"]) {
+			return false
+		}
+		fam = "claude"
+	case strings.HasPrefix(agent, "gemini"):
+		fam = "gemini"
+	}
+	gv, ok := gatewayVars[fam]
+	if !ok {
+		return false
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	for _, k := range gv.vars {
+		u, err := url.Parse(env[k])
+		if err != nil || u.Port() != port || !loopbackName(u.Hostname()) {
+			continue
+		}
+		prov, _, _ := strings.Cut(strings.TrimPrefix(u.Path, "/"), "/")
+		if slices.Contains(gv.provs, prov) {
+			return true
+		}
+	}
+	return false
+}
+
+func loopbackName(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }

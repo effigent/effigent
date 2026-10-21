@@ -48,6 +48,9 @@ if [ "$(uname -s)" = Darwin ]; then
   if [ "$UNINSTALL" = 1 ]; then
     say "Removing effigentd"
     /usr/local/bin/effigentd install-hooks --remove 2>/dev/null || true
+    # agents pointed at the model gateway would lose their model without the daemon
+    # (grep first: an older effigentd would take the unknown subcommand for a daemon start)
+    { grep -a -q install-gateway /usr/local/bin/effigentd || grep -q install-gateway /usr/local/bin/effigentd; } 2>/dev/null && { /usr/local/bin/effigentd install-gateway --remove --agents claude,codex 2>/dev/null || true; }
     launchctl bootout system/ai.effigent.effigentd 2>/dev/null || true
     rm -f /Library/LaunchDaemons/ai.effigent.effigentd.plist /usr/local/bin/effigentd
     pkgutil --forget ai.effigent.effigentd >/dev/null 2>&1 || true
@@ -95,6 +98,8 @@ if [ "$UNINSTALL" = 1 ]; then
     systemctl daemon-reload 2>/dev/null || true
   fi
   pkill -x effigentd 2>/dev/null || true # a daemon started by hand
+  # agents pointed at the model gateway would lose their model without the daemon
+  { grep -a -q install-gateway /usr/local/bin/effigentd || grep -q install-gateway /usr/local/bin/effigentd; } 2>/dev/null && { /usr/local/bin/effigentd install-gateway --remove --agents claude,codex 2>/dev/null || true; }
   rm -f /usr/local/bin/effigentd
   if [ "$SYSTEMD" = 0 ] && pkill -x tetragon 2>/dev/null; then # nothing else manages it here
     sleep 1; umount /run/tetragon/cgroup2 2>/dev/null || true

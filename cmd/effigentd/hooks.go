@@ -18,6 +18,7 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/cpclient"
 	"github.com/effigent/effigent/internal/endpoint/engine"
 	"github.com/effigent/effigent/internal/endpoint/event"
+	"github.com/effigent/effigent/internal/endpoint/gateway"
 	"github.com/effigent/effigent/internal/endpoint/hooks"
 	"github.com/effigent/effigent/internal/endpoint/ident"
 	"github.com/effigent/effigent/internal/endpoint/redact"
@@ -52,7 +53,9 @@ var hookAgents = map[string]hookAgent{
 
 // hookHandler answers POST /hook/{agent} on the local API. cp is nil when
 // the machine isn't enrolled (approvals then can't be asked for).
-func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx context.Context, c api.HookCall) ([]byte, error) {
+// sess joins hook sessions with the model gateway's; gatewayAddr is where
+// the gateway listens ("" when it's off).
+func hookHandler(eng *engine.Engine, cp func() *cpclient.Client, sess *sessions, gatewayAddr string) func(ctx context.Context, c api.HookCall) ([]byte, error) {
 	var mu sync.Mutex
 	seen := map[string]time.Time{}  // agent/session id -> last call
 	sessions := hooks.NewSessions() // session rules (exfil_sequence, untrusted_then_risky)
@@ -81,11 +84,14 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 			// not let the daemon read root-only files on the agent's behalf.
 			uidKnown = uidKnown && uid != 0
 		}
+		in := call.Orig
+		sess.hook(ag.name, in.SessionID, gateway.Identity{OSUser: who.osUser, GitEmail: who.gitEmail})
+		via := sess.viaGateway(ag.name, in.SessionID)
 		for i := range call.Canon {
 			call.Canon[i].Agent, call.Canon[i].Env, call.Canon[i].Home = ag.name, env, home
 			call.Canon[i].UID, call.Canon[i].UIDKnown = uid, uidKnown
+			call.Canon[i].ViaGateway = via
 		}
-		in := call.Orig
 		// There is no kernel to report agents starting, so a session's first
 		// tool call stands in for it (the console counts agents from these).
 		mu.Lock()
@@ -128,6 +134,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		for i := range call.Canon {
 			call.Canon[i].History = hist
 		}
+		rule.GatewayAddr = gatewayAddr
 		d := hooks.EvaluateCall(hooks.Claude, rule, call)
 		ev.Mode = string(rule.Mode)
 		ev.Actions = d.Actions // redacted with the rest of the event (engine.scrub)

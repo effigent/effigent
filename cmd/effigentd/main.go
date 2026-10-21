@@ -23,6 +23,7 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/domains"
 	"github.com/effigent/effigent/internal/endpoint/engine"
 	"github.com/effigent/effigent/internal/endpoint/event"
+	"github.com/effigent/effigent/internal/endpoint/gateway"
 	"github.com/effigent/effigent/internal/endpoint/hookstate"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 	"github.com/effigent/effigent/internal/endpoint/procscan"
@@ -63,6 +64,9 @@ func main() {
 		case "install-hooks":
 			installHooksCmd(os.Args[2:])
 			return
+		case "install-gateway":
+			installGatewayCmd(os.Args[2:])
+			return
 		}
 	}
 	if runAsServiceIfNeeded(daemon) {
@@ -89,6 +93,7 @@ func daemon() {
 		syncEvery    = flag.Duration("sync-interval", 5*time.Second, "how often an enrolled endpoint checks for a new policy")
 		dnsRefresh   = flag.Duration("dns-refresh", 30*time.Second, "how often domain_deny hostnames are re-resolved")
 		dnsServers   = flag.String("dns-servers", strings.Join(domains.DefaultUpstreams, ","), "resolvers queried for domain_deny next to the system resolver (comma-separated host:port, \"\" for the system resolver only)")
+		gatewayAddr  = flag.String("gateway", gateway.DefaultAddr, "model gateway address, loopback only (\"\" to disable); agents are pointed at it by `effigentd install-gateway`")
 	)
 	flag.Parse()
 	logger := log.New(os.Stderr, "effigentd: ", log.LstdFlags)
@@ -222,7 +227,11 @@ func daemon() {
 		client = &cpclient.Client{
 			State: cp, Dir: *stateDir, Logf: logger.Printf, AgentVersion: version,
 			// each agent's hook, reported to the control plane when it changes
-			Hooks: func() any { return hookstate.Check(hookstate.Default(*sensor)) },
+			Hooks: func() any {
+				o := hookstate.Default(*sensor)
+				o.GatewayAddr = *gatewayAddr // "" when the gateway is off
+				return hookstate.Check(o)
+			},
 			Apply: func(ctx context.Context, body []byte) error {
 				_, err := eng.SetPolicy(ctx, body)
 				return err
@@ -259,10 +268,23 @@ func daemon() {
 		vms = vmwatch.New(vmwatch.Default(), emit, logger.Printf)
 	}
 
+	// The model gateway runs for as long as the daemon does: agents pointed
+	// at it can't reach their model without it (fail-closed by construction).
+	sess := newSessions()
+	if *gatewayAddr != "" {
+		stopGateway, err := startGateway(ctx, *gatewayAddr, eng, sess, logger)
+		if err != nil {
+			logger.Printf("%v (model gateway off)", err)
+			*gatewayAddr = ""
+		} else {
+			defer stopGateway()
+		}
+	}
+
 	if *listen != "" {
 		srv := &http.Server{Addr: *listen, Handler: (&api.Server{
 			Engine: eng, Token: os.Getenv("EFFIGENT_API_TOKEN"), Managed: cp != nil,
-			Hook: hookHandler(eng, func() *cpclient.Client { return client }),
+			Hook: hookHandler(eng, func() *cpclient.Client { return client }, sess, *gatewayAddr),
 			Stats: func() map[string]any {
 				out := map[string]any{
 					"tetragon_connected": tgConnected.Load(),
