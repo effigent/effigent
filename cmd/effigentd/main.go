@@ -64,6 +64,9 @@ func main() {
 		case "install-hooks":
 			installHooksCmd(os.Args[2:])
 			return
+		case "install-gateway":
+			installGatewayCmd(os.Args[2:])
+			return
 		}
 	}
 	if runAsServiceIfNeeded(daemon) {
@@ -224,7 +227,11 @@ func daemon() {
 		client = &cpclient.Client{
 			State: cp, Dir: *stateDir, Logf: logger.Printf, AgentVersion: version,
 			// each agent's hook, reported to the control plane when it changes
-			Hooks: func() any { return hookstate.Check(hookstate.Default(*sensor)) },
+			Hooks: func() any {
+				o := hookstate.Default(*sensor)
+				o.GatewayAddr = *gatewayAddr // "" when the gateway is off
+				return hookstate.Check(o)
+			},
 			Apply: func(ctx context.Context, body []byte) error {
 				_, err := eng.SetPolicy(ctx, body)
 				return err

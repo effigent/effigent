@@ -228,7 +228,10 @@ var gatewayVars = map[string]struct {
 	provs []string
 }{
 	"claude": {[]string{"ANTHROPIC_BASE_URL"}, []string{"anthropic"}},
-	"codex":  {[]string{"OPENAI_BASE_URL"}, []string{"openai", "chatgpt"}},
+	// Codex reads its base URL from config (openai_base_url), not from its
+	// environment (OPENAI_BASE_URL isn't one in Codex): only the gateway
+	// having seen the session counts (ClaudeInput.ViaGateway).
+	"codex":  {nil, []string{"codex", "openai"}},
 	"gemini": {[]string{"GOOGLE_GEMINI_BASE_URL"}, []string{"gemini"}},
 }
 

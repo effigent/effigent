@@ -34,6 +34,18 @@ func CodexFile() string {
 	return "/etc/codex/requirements.toml"
 }
 
+// CodexManagedFile is Codex's machine-wide managed defaults
+// (managed_config.toml): applied over the user's config.toml and --config
+// flags every time Codex starts. install-gateway sets openai_base_url there.
+// On Windows Codex reads it from the user's ~/.codex, so there is no
+// machine-wide file ("").
+func CodexManagedFile() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	return "/etc/codex/managed_config.toml"
+}
+
 // GeminiFile is Gemini CLI's system settings file, applied after user and
 // workspace settings.
 func GeminiFile() string {

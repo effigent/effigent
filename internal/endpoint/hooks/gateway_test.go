@@ -31,7 +31,8 @@ func TestRequireGateway(t *testing.T) {
 		{"another local proxy", "claude-code", map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:8080/anthropic/claude-code"}, false, true},
 		{"gateway port, wrong provider", "claude-code", map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:7779/openai/x"}, false, true},
 		{"Bedrock bypasses the base URL", "claude-code", map[string]string{"ANTHROPIC_BASE_URL": gw["ANTHROPIC_BASE_URL"], "CLAUDE_CODE_USE_BEDROCK": "1"}, false, true},
-		{"codex via its env", "codex", map[string]string{"OPENAI_BASE_URL": "http://127.0.0.1:7779/openai/codex/v1"}, false, false},
+		// Codex takes its base URL from config, not OPENAI_BASE_URL: only the gateway's word counts
+		{"codex env is not evidence", "codex", map[string]string{"OPENAI_BASE_URL": "http://127.0.0.1:7779/codex/codex"}, false, true},
 		{"codex seen", "codex", map[string]string{}, true, false},
 		{"codex direct", "codex", map[string]string{}, false, true},
 		{"cursor can't use the gateway: not judged", "cursor-agent", map[string]string{}, false, false},
