@@ -182,6 +182,7 @@ func (x *actx) mcp(tool string, input map[string]any) {
 	if len(x.rule.MCPAllow) > 0 && !slices.ContainsFunc(x.rule.MCPAllow, func(p string) bool { return wild(p, server) }) {
 		x.add(event.Action{Kind: "mcp_unlisted", Target: server, Attrs: map[string]string{"tool": tool}})
 	}
+	x.mcpPin(server)
 	if x.mcpDatabase(server, tool, input) {
 		return // its statements carry the server (access@env included)
 	}

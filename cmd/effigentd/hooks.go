@@ -99,8 +99,15 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		}
 		mu.Unlock()
 		if !known && in.SessionID != "" {
-			eng.Emit(who.on(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: ag.name,
-				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID), AgentEnv: env}))
+			start := event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: ag.name,
+				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID), AgentEnv: env}
+			if len(call.Canon) > 0 {
+				// the MCP servers its configs define, with the fingerprints mcp_pins takes
+				c0 := call.Canon[0]
+				c0.Cwd = in.Cwd
+				start.MCPServers = hooks.MCPServers(c0)
+			}
+			eng.Emit(who.on(start))
 		}
 		// One event per tool call, so the console sees everything the agent
 		// did; a policy match makes it blocked / would_block / file_open.

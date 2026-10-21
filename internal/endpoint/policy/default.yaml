@@ -67,9 +67,15 @@ defaults:
   # cloud_change, cloud_destroy, access, package_install, package_unlisted,
   # package_registry, package_scripts, package_malicious, package_vulnerable,
   # guardrail_edit, credential_read, remote_script, fs_destroy, mcp_unlisted,
-  # model_endpoint, model_api_key. kind@env limits an entry to an environment.
-  # actions_deny: [force_push, remote_script, package_malicious, destructive_sql@prod, cloud_destroy@prod]
-  # actions_approve: [protected_push, guardrail_edit, cloud_change@prod, access@prod, package_vulnerable]
+  # model_endpoint, model_api_key, mcp_changed (see mcp_pins below), and the
+  # session rules exfil_sequence (a host new to the session after a credential
+  # read) and untrusted_then_risky (a risky action after WebFetch/WebSearch, a
+  # fetch, or an MCP server not in mcp_allow) — last 50 calls / 30 minutes of
+  # the session; pattern matching on what ran, not prompt-injection detection.
+  # SQL in database MCP tools (execute_sql, query, run_sql…) counts like psql.
+  # kind@env limits an entry to an environment.
+  # actions_deny: [force_push, remote_script, package_malicious, destructive_sql@prod, cloud_destroy@prod, exfil_sequence, mcp_changed]
+  # actions_approve: [protected_push, guardrail_edit, cloud_change@prod, access@prod, package_vulnerable, untrusted_then_risky]
   # protected_branches: [main, "release/*"]
   # command_deny: ["* --dangerously-skip-permissions*"]   # * anywhere
   # file_write_deny: [/.github/workflows/, /CODEOWNERS]   # writes only; a trailing / is a tree
@@ -124,6 +130,15 @@ mcp_servers:
 #     hosts: ["*.prod.internal", 10.20.0.0/16]   # databases, hosts named in commands
 #     mcp_servers: [prod-db]
 #     match_unknown: false              # true: a cloud/database action with no known target counts as prod
+
+# Pin MCP servers to their definition in the agents' MCP configs: sha256 of
+# command, args, cwd, URL and env/header names (never values), reported per
+# server on each hook session's agent_start (mcp_servers). A call to a pinned
+# server whose definition differs or can't be read is mcp_changed. It sees a
+# changed config, not a remote server changing behind the same URL.
+# mcp_pins:
+#   github: sha256:3f5c…                 # one fingerprint, or a list
+#   postgres: [9a1e…, 77b0…]
 
 # An MCP server with no known agent above it (e.g. launched by an unknown
 # client) becomes its own tracked root and gets the `defaults` rule.

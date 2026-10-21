@@ -94,6 +94,17 @@ type Event struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	// Outcome is how the call ended (tool_result events only).
 	Outcome *Outcome `json:"outcome,omitempty"`
+	// MCPServers are the MCP servers in the agent's config with their
+	// fingerprints (mcp_pins), on a hook session's agent_start.
+	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+}
+
+// MCPServer is one MCP server definition an agent would use.
+type MCPServer struct {
+	Name        string `json:"name"`
+	Source      string `json:"source"`      // which config: user, project, local, managed, system
+	Transport   string `json:"transport"`   // stdio | remote
+	Fingerprint string `json:"fingerprint"` // sha256 of command, args, cwd, URL, env and header names
 }
 
 // Outcome is how a tool call ended, as the agent's post-tool hook reported
