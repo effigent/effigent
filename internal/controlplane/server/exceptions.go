@@ -173,7 +173,7 @@ func (s *Server) createException(w http.ResponseWriter, r *http.Request, p Princ
 		writeErr(w, http.StatusBadRequest, "bad body")
 		return
 	}
-	pv, src, err := s.latestSource(r.Context(), p.Tenant)
+	_, src, err := s.latestSource(r.Context(), p.Tenant)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusConflict, "publish a policy first")
 		return
@@ -196,21 +196,12 @@ func (s *Server) createException(w http.ResponseWriter, r *http.Request, p Princ
 		writeErr(w, http.StatusBadRequest, "at most 200 exceptions; remove old ones first")
 		return
 	}
-	src.Exceptions = append(src.Exceptions, x)
-	who := strings.Join(append(append(append([]string{}, x.Endpoints...), x.Owners...), x.Teams...), ", ")
-	comment := fmt.Sprintf("exception %s: %s — %s %s", x.ID, who, verbFor(x.List), x.Value)
-	v, rep, code, err := s.publishCentral(r, p, pv.Body, src, comment)
-	if err != nil {
-		if code == http.StatusInternalServerError {
-			s.fail(w, err)
-			return
-		}
-		writeErr(w, code, err.Error())
+	c := policyChange{Exception: &x, ExpiresHours: req.ExpiresHours}
+	if s.proposeIfRequired(w, r, p, "exception.create", "Add "+exceptionComment(x), c, nil) {
 		return
 	}
-	s.audit(r, p, "exception.create", x.ID, x)
-	s.emit(r.Context(), p.Tenant, "policy.published", map[string]any{"version": v, "comment": comment, "by": p.UserID})
-	writeJSON(w, http.StatusCreated, map[string]any{"exception": x, "version": v, "report": rep})
+	code, resp, err := s.applyExceptionCreate(r, p, c, "")
+	s.writeApplied(w, code, resp, err)
 }
 
 // verbFor says what an exception allows, for comments and the console.
@@ -227,7 +218,7 @@ func verbFor(list string) string {
 }
 
 func (s *Server) deleteException(w http.ResponseWriter, r *http.Request, p Principal) {
-	pv, src, err := s.latestSource(r.Context(), p.Tenant)
+	_, src, err := s.latestSource(r.Context(), p.Tenant)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.fail(w, err)
 		return
@@ -239,19 +230,12 @@ func (s *Server) deleteException(w http.ResponseWriter, r *http.Request, p Princ
 		return
 	}
 	x := src.Exceptions[i]
-	src.Exceptions = slices.Delete(src.Exceptions, i, i+1)
-	comment := fmt.Sprintf("exception %s removed (%s %s)", x.ID, x.List, x.Value)
-	v, _, code, err := s.publishCentral(r, p, pv.Body, src, comment)
-	if err != nil {
-		if code == http.StatusInternalServerError {
-			s.fail(w, err)
-			return
-		}
-		writeErr(w, code, err.Error())
+	c := policyChange{ExceptionID: id}
+	if s.proposeIfRequired(w, r, p, "exception.delete", fmt.Sprintf("Remove exception %s (%s %s)", x.ID, x.List, x.Value), c, nil) {
 		return
 	}
-	s.audit(r, p, "exception.delete", x.ID, x)
-	writeJSON(w, http.StatusOK, map[string]any{"version": v})
+	code, resp, err := s.applyExceptionDelete(r, p, c, "")
+	s.writeApplied(w, code, resp, err)
 }
 
 // expireExceptions republishes, without them, the exceptions whose time is

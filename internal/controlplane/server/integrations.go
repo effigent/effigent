@@ -30,7 +30,7 @@ import (
 // attempt) and pricing_leaks.runaway_cost is for whoever watches spend.
 var webhookEvents = []string{
 	"approval.requested", "approval.decided", "approval.voted", "action.blocked",
-	"endpoint.enrolled", "endpoint.revoked", "policy.published",
+	"endpoint.enrolled", "endpoint.revoked", "policy.published", "policy.proposed",
 	"pricing_leaks.runaway_cost",
 }
 
