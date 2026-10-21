@@ -175,10 +175,19 @@ type Client struct {
 	Logf    func(string, ...any)
 	// AgentVersion is this effigentd build, reported with each heartbeat.
 	AgentVersion string
+	// Hooks, when set, reads the agents' hook state (hookstate.Check). It
+	// runs at most every HooksEvery (default 1 min) and goes out with the
+	// next heartbeat only when it differs from what the control plane last
+	// acknowledged (every restart sends it once).
+	Hooks      func() any
+	HooksEvery time.Duration
 
-	pub     ed25519.PublicKey
-	current int64
-	http    *http.Client
+	pub       ed25519.PublicKey
+	current   int64
+	http      *http.Client
+	hooksAt   time.Time
+	hooksNow  []byte
+	hooksSent []byte
 }
 
 func (c *Client) init() error {
@@ -252,11 +261,24 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 	return c.http.Do(req)
 }
 
-// SyncOnce fetches the newest policy (if any) and heartbeats.
+// SyncOnce fetches the newest policy (if any) and heartbeats. The heartbeat
+// goes out even when the policy can't be fetched or applied (a machine
+// whose compile fails is still online, and the control plane says so).
 func (c *Client) SyncOnce(ctx context.Context) error {
 	if err := c.init(); err != nil {
 		return err
 	}
+	perr := c.syncPolicy(ctx)
+	if ctx.Err() != nil {
+		return perr
+	}
+	if err := c.heartbeat(ctx); err != nil && perr == nil {
+		return err
+	}
+	return perr
+}
+
+func (c *Client) syncPolicy(ctx context.Context) error {
 	res, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/ep/v1/policy?have=%d", c.current), nil)
 	if err != nil {
 		return err
@@ -278,11 +300,37 @@ func (c *Client) SyncOnce(ctx context.Context) error {
 		res.Body.Close()
 		return fmt.Errorf("policy: %s", res.Status)
 	}
-	hb, err := c.do(ctx, http.MethodPost, "/ep/v1/heartbeat", map[string]any{"policy_version": c.current, "version": c.AgentVersion})
+	return nil
+}
+
+func (c *Client) heartbeat(ctx context.Context) error {
+	body := map[string]any{"policy_version": c.current, "version": c.AgentVersion}
+	if c.Hooks != nil {
+		every := c.HooksEvery
+		if every <= 0 {
+			every = time.Minute
+		}
+		if c.hooksNow == nil || time.Since(c.hooksAt) >= every {
+			c.hooksAt = time.Now()
+			if b, err := json.Marshal(c.Hooks()); err == nil {
+				c.hooksNow = b
+			}
+		}
+		if c.hooksNow != nil && !bytes.Equal(c.hooksNow, c.hooksSent) {
+			body["hooks"] = json.RawMessage(c.hooksNow)
+		}
+	}
+	hb, err := c.do(ctx, http.MethodPost, "/ep/v1/heartbeat", body)
 	if err != nil {
 		return err
 	}
 	hb.Body.Close()
+	if hb.StatusCode/100 != 2 {
+		return fmt.Errorf("heartbeat: %s", hb.Status)
+	}
+	if h, ok := body["hooks"].(json.RawMessage); ok {
+		c.hooksSent = h
+	}
 	return nil
 }
 

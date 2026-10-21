@@ -36,6 +36,9 @@ type HTTPConfig struct {
 	SpoolDir      string
 	SpoolMaxBytes int64         // default 256 MB; beyond it the oldest batches are dropped
 	RetryWait     time.Duration // before the first retry (default 500ms; then 1s, 2s)
+	// CloseTimeout bounds the last send on Close (default 10s); what doesn't
+	// make it in time goes to the spool. A stopping daemon has seconds.
+	CloseTimeout time.Duration
 }
 
 // HTTP POSTs {"batch_id": …, "events": [...]} batches. It never blocks the
@@ -70,6 +73,9 @@ func NewHTTP(cfg HTTPConfig) *HTTP {
 	}
 	if cfg.RetryWait <= 0 {
 		cfg.RetryWait = 500 * time.Millisecond
+	}
+	if cfg.CloseTimeout <= 0 {
+		cfg.CloseTimeout = 10 * time.Second
 	}
 	if cfg.SpoolMaxBytes <= 0 {
 		cfg.SpoolMaxBytes = 256 << 20
@@ -153,11 +159,14 @@ func (h *HTTP) deliver(body []byte, n int, final bool) {
 		h.spool(body, n)
 		return
 	}
-	attempts := 4
+	attempts, timeout := 4, 10*time.Second
 	if final || h.down {
 		attempts = 1 // shutting down, or probing a backend that was down
 	}
-	retry, err := h.post(body, attempts)
+	if final {
+		timeout = h.cfg.CloseTimeout
+	}
+	retry, err := h.post(body, attempts, timeout)
 	switch {
 	case err == nil:
 		h.sent.Add(uint64(n))
@@ -180,14 +189,14 @@ func (h *HTTP) markDown() {
 }
 
 // post sends a body; retry says whether the failure may pass (network, 5xx, 429).
-func (h *HTTP) post(body []byte, attempts int) (retry bool, err error) {
+func (h *HTTP) post(body []byte, attempts int, timeout time.Duration) (retry bool, err error) {
 	wait := h.cfg.RetryWait
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(wait)
 			wait *= 2
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.URL, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "effigentd")
@@ -287,7 +296,7 @@ func (h *HTTP) replay() {
 		if err != nil {
 			continue
 		}
-		retry, err := h.post(body, 1)
+		retry, err := h.post(body, 1, 10*time.Second)
 		if err != nil && retry {
 			h.markDown()
 			return

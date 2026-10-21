@@ -122,3 +122,59 @@ func TestMachineName(t *testing.T) {
 		t.Fatalf("MachineName() = %q, want the OS hostname %q", MachineName(), h)
 	}
 }
+
+// The heartbeat goes out even when the policy can't be fetched, and carries
+// the hook report only until the control plane has acknowledged it.
+func TestHeartbeatCarriesHookReportOnChange(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	policyStatus, hbStatus := http.StatusUnprocessableEntity, http.StatusOK
+	var beats []map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ep/v1/policy":
+			w.WriteHeader(policyStatus)
+		case "/ep/v1/heartbeat":
+			var b map[string]json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			beats = append(beats, b)
+			w.WriteHeader(hbStatus)
+		}
+	}))
+	defer srv.Close()
+	state := "installed"
+	checks := 0
+	c := &Client{Dir: t.TempDir(), State: &State{Server: srv.URL, EndpointID: "ep-me", Tenant: "org:t", ServerPublicKey: sign.EncodePublic(pub)},
+		Apply: func(context.Context, []byte) error { return nil },
+		Hooks: func() any { checks++; return map[string]string{"claude": state} }, HooksEvery: time.Nanosecond}
+	sync := func() error { return c.SyncOnce(context.Background()) }
+	hooks := func() string { return string(beats[len(beats)-1]["hooks"]) }
+
+	if err := sync(); err == nil || !strings.Contains(err.Error(), "422") {
+		t.Fatalf("policy error not returned: %v", err)
+	}
+	if len(beats) != 1 || hooks() != `{"claude":"installed"}` {
+		t.Fatalf("first heartbeat %v", beats)
+	}
+	policyStatus = http.StatusNoContent
+	if err := sync(); err != nil || len(beats) != 2 || hooks() != "" {
+		t.Fatalf("unchanged report resent: %v %s", err, hooks())
+	}
+	state, hbStatus = "missing", http.StatusInternalServerError
+	if err := sync(); err == nil || hooks() != `{"claude":"missing"}` {
+		t.Fatalf("changed report %v %s", err, hooks())
+	}
+	hbStatus = http.StatusOK
+	if err := sync(); err != nil || hooks() != `{"claude":"missing"}` {
+		t.Fatalf("unacknowledged report not resent: %v %s", err, hooks())
+	}
+	if err := sync(); err != nil || hooks() != "" || checks != 5 {
+		t.Fatalf("acknowledged report resent: %v %s (checks %d)", err, hooks(), checks)
+	}
+	// the check itself is throttled
+	c.HooksEvery = time.Hour
+	_ = sync()
+	_ = sync()
+	if checks != 5 {
+		t.Fatalf("checked %d times", checks)
+	}
+}

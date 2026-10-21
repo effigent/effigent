@@ -23,6 +23,7 @@ import (
 	"github.com/effigent/effigent/internal/endpoint/domains"
 	"github.com/effigent/effigent/internal/endpoint/engine"
 	"github.com/effigent/effigent/internal/endpoint/event"
+	"github.com/effigent/effigent/internal/endpoint/hookstate"
 	"github.com/effigent/effigent/internal/endpoint/policy"
 	"github.com/effigent/effigent/internal/endpoint/procscan"
 	"github.com/effigent/effigent/internal/endpoint/sink"
@@ -140,8 +141,9 @@ func daemon() {
 	if cp != nil {
 		// Enrolled: ship every event to the control plane too.
 		// Batches the control plane can't take wait on disk (up to 256 MB) and are sent when it's back.
+		// On stop the last batch (with daemon_stop) gets 3s, then waits in the spool.
 		sinks = append(sinks, sink.NewHTTP(sink.HTTPConfig{URL: cp.Server + "/ep/v1/events", Token: cp.Secret, Interval: 2 * time.Second,
-			SpoolDir: filepath.Join(*stateDir, "spool")}))
+			SpoolDir: filepath.Join(*stateDir, "spool"), CloseTimeout: 3 * time.Second}))
 		logger.Printf("enrolled as %s with %s", cp.EndpointID, cp.Server)
 	}
 	defer sinks.Close()
@@ -164,9 +166,41 @@ func daemon() {
 		enf = tg
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Stopping is reported (daemon_stop, high) before anything is torn down,
+	// so the control plane can tell a deliberate stop from a machine that
+	// went silent. A second signal stops at once.
+	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	go func() { <-serviceStop; stop() }() // Windows service stop/shutdown
+	via, runUser := runContext()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		var why string
+		select {
+		case s := <-sigs:
+			why = signalName(s)
+		case <-serviceStop: // Windows service stop/shutdown
+			why = serviceStopWhy
+		}
+		signal.Stop(sigs)
+		msg := "effigentd is stopping (" + why
+		if via != "" {
+			msg += " via " + via
+		}
+		if runUser != "" {
+			msg += ", run by " + runUser
+		}
+		emit(event.Event{Time: time.Now(), Type: event.DaemonStop, Severity: "high", Target: why, Rule: via, OSUser: runUser,
+			Message: msg + ")"})
+		logger.Printf("stopping (%s)", why)
+		stop()
+	}()
+	if cp != nil {
+		if prev := startMarker(*stateDir); prev != nil {
+			emit(event.Event{Time: time.Now(), Type: event.DaemonUncleanRestart, Severity: "high", Rule: via, Message: uncleanMessage(prev)})
+		}
+		defer clearMarker(*stateDir) // runs before sinks.Close: a stop cut short by kill -9 is still reported next start
+	}
 
 	eng := engine.New(pol, raw, enf, emit, logger.Printf, *verbose)
 	var upstreams []string
@@ -183,6 +217,8 @@ func daemon() {
 	if cp != nil {
 		client = &cpclient.Client{
 			State: cp, Dir: *stateDir, Logf: logger.Printf, AgentVersion: version,
+			// each agent's hook, reported to the control plane when it changes
+			Hooks: func() any { return hookstate.Check(hookstate.Default(*sensor)) },
 			Apply: func(ctx context.Context, body []byte) error {
 				_, err := eng.SetPolicy(ctx, body)
 				return err

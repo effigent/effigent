@@ -22,6 +22,12 @@ const (
 	ApprovalPending Type = "approval_pending" // asked an approver; the call did not run (yet)
 	Approved        Type = "approved"         // an approver allowed it; the call ran
 	ApprovalDenied  Type = "approval_denied"  // an approver denied it, or the request expired
+
+	// The daemon itself: stopped on a signal / service stop (Target = the
+	// signal, Rule = how it was run, OSUser = who, when knowable), or found
+	// at start that the previous run ended without one (crash, kill -9, power).
+	DaemonStop           Type = "daemon_stop"
+	DaemonUncleanRestart Type = "daemon_unclean_restart"
 )
 
 // Proc identifies one process. ExecID is stable across pid reuse (Tetragon).
