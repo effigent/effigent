@@ -69,6 +69,10 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   The same holds for the approval lists (`*_approve`, `approvals:`; effigentd < v0.5.0).
   Deploy order for approvals: control plane (`deploy-cp.sh`, migration 004) → push `main`
   (console) → tag effigentd → reinstall endpoints → publish a policy with approval lists.
+  Likewise effigentd builds older than the action lists (2e) refuse a policy using any of
+  `actions_*`, `command_deny`, `file_write_*`, `protected_branches`, `package_*`, `mcp_allow`,
+  `model_hosts_allow`, top-level `environments:` or `redact:` (parse error → stay on the current
+  version): upgrade endpoints before publishing one.
 
 ## 2b. Approvals
 
@@ -248,6 +252,70 @@ Full write-up: `docs/pricing-leaks.md`.
   Alerts off (`alerts.runaway_cost: false`) → the leak is still claimed and recorded `alerts: off`,
   nothing is sent, and turning them back on doesn't replay it.
 
+## 2e. Actions (what a tool call does)
+
+Agent hooks only (Claude Code, Codex, Gemini CLI; the kernel sees none of it). `hooks.classify`
+(`internal/endpoint/hooks/actions.go`, `bashact.go`, `git.go`, `sql.go`, `cloud.go`,
+`packages.go`, `env.go`) reads a canonical call (Bash command, Write/Edit/Read path, WebFetch
+URL, `mcp__server__tool`) and returns `event.Action{kind, target, attrs, envs, in}`. Kinds:
+`policy.ActionKinds` (git: protected_push / force_push / branch_delete / history_rewrite /
+hook_bypass; destructive_sql / sql_write; cloud_change / cloud_destroy / access; package_install
+/ _unlisted / _registry / _scripts / _malicious / _vulnerable; guardrail_edit; credential_read;
+remote_script; fs_destroy; mcp_unlisted; model_endpoint / model_api_key). Every hook event
+carries them (`actions`), matched or not; `engine.scrub` redacts their targets.
+- Read from the command line, the scripts it runs (`bash x.sh`, `./x.sh`, `source`, package.json
+  scripts incl. pre/post, `yarn <script>`; depth 2; `in` names the script), heredocs / here-strings
+  / `< file` / piped `echo`/`cat` feeding a DB client, `.sql` files, `docker exec` inner commands.
+  Script commands also go through exec/file/command deny and approve lists.
+- Targets: AWS profile (`--profile`, `AWS_PROFILE`, `~/.aws/config` → account via `sso_account_id`
+  / `role_arn`, `source_profile` followed), kube context (`--context` / kubeconfig
+  `current-context`), gcloud project (flag, env, active configuration), Azure default
+  subscription (`azureProfile.json`), Terraform workspace (`.terraform/environment`,
+  `TF_WORKSPACE`), Pulumi stack, DB host (flags, URLs, `PGHOST`…, client default localhost),
+  pushed branch (refspec, else `.git/HEAD`). Policy top-level `environments: {prod: {aws_profiles,
+  aws_accounts, kube_contexts, gcloud_projects, azure_subscriptions, terraform_workspaces,
+  pulumi_stacks, hosts, mcp_servers, match_unknown}}`; an entry `kind@prod` matches only actions
+  whose target is in it. `access` covers every action on a target and must name an environment.
+- Lists (per rule, merged like the others, compile `overrides`/`sameRule` carry them):
+  `actions_deny` / `actions_approve` (kind or kind@env; `sql_write` ⊇ `destructive_sql`,
+  `cloud_change` ⊇ `cloud_destroy`), `command_deny` (like `command_approve`; `*` anywhere in
+  both), `file_write_deny` / `file_write_approve` (writes only: Write/Edit, redirects, tee/cp/mv/
+  sed -i/curl -o… targets), `protected_branches` (default main, master, trunk, prod, production,
+  release*), `package_deny` / `package_approve` / `package_allow` (`npm:name[@ver]`, `pypi:`,
+  `cargo:`, `go:`, `gem:`, `brew:`; `*` wildcards; PyPI names normalised), `package_registries`
+  (URL prefixes; extra PyPI indexes are always package_registry), `mcp_allow`,
+  `model_hosts_allow`. Precedence in `EvaluateClaude`: tool_deny, exec/file/domain/network
+  denies, command_deny, file_write_deny, package_deny, actions_deny; then tool/command/exec/…
+  approve, file_write_approve, package_approve, actions_approve. Monitor/learn → would_block.
+- File lists: an entry ending in `/` is a directory tree, matched by hooks; `Rule.Kernel()` drops
+  such entries (Tetragon matches suffixes). `default.yaml` alerts on more credential files.
+- OSV (`internal/endpoint/osv`): only when a list names package_malicious / package_vulnerable.
+  One `querybatch` per call (4s budget, 1h cache, ≤1000), MAL- ids for unversioned packages only
+  when the advisory covers every version (`/v1/vulns/{id}`), lockfile versions for `npm ci`;
+  vulnerabilities only for pinned versions. Fails open: the error is `osv_error` on the installs.
+- Agent environment: `effigentd hook` sends `X-Effigent-Agent-Env` (base64 JSON;
+  `hooks.AgentEnv`): cloud profile/project/subscription names, DB hosts, model base URLs,
+  registries, git-hook switches; API keys only as `set`; URLs without credentials. The daemon
+  keeps only those names (`CleanAgentEnv`), records them on the session's `agent_start`
+  (`agent_env`), and uses them for targets, model_endpoint and model_api_key.
+- Files are read as the agent's OS user (`perm_unix.go`: owner/group/other bits, groups via
+  os/user; unknown user or a claimed root = world-readable only; Windows: not checked),
+  ≤512 KB. The OS user and the environment are the hook process's claims.
+- Approvals: rules `actions_approve`, `package_approve`, `file_write_approve` route as command /
+  file (`server/routing.go`); exceptions (`compile.ExceptionLists`) don't cover the new lists
+  yet (refused with the list of allowed ones). Central `require_approval` rules don't compile to
+  them; they live in the base policy.
+- Redaction (`internal/endpoint/redact`): gitleaks, then `NAME_TOKEN=…`-style assignments,
+  `--password`-style flags, `mysql -p…`, `user:pass@` in URLs, bearer tokens, private key
+  blocks; then policy `redact: {pii: bool, patterns: [{name, pattern}]}` (RE2, ≤50, ≤300 chars;
+  pii = email, phone, card, IBAN), applied by the engine on every policy change. Approval
+  summaries and reasons are redacted before they're sent.
+- Tests: `hooks/actions_test.go` (classification + decisions, fake OSV), `osv/osv_test.go`,
+  `compile/actions_test.go` (round trip), `redact_test.go`; `test/hooks/approval.sh` (42 checks)
+  runs force_push / curl|sh / workflow writes / DROP TABLE approval / prod AWS_PROFILE via the
+  hook env through a real hook process, daemon and local control plane. OSV's response shape was
+  checked against the live API (2026-10-21); the live lookup isn't in an automated test.
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -296,8 +364,12 @@ npm run -w @effigent/site build                     # site
   `/usr/bin/curl`), named/redirected files plus directories and globs that would reach
   them against `file_deny`/`file_alert`, and hosts/IPs named in commands or WebFetch
   against `domain_deny` (name + subdomains), `network_deny`, `network_allow` (IPs only).
-  Limits: it reads the command, not what runs — scripts, interpreters (`python -c`),
-  variables, aliases and tools that connect on their own aren't followed. Agent and MCP
+  Limits: it reads the command, not what runs — interpreters (`python -c`), variables set
+  elsewhere, aliases, functions and tools that connect on their own aren't followed; shell
+  scripts and package.json scripts are read to depth 2 (2e). Actions are read the same way:
+  `psql` fed by a program, SQL built at run time, ORMs, cloud SDK calls from code, `make`
+  targets and git aliases are invisible; a protected push inferred from `.git/HEAD` can be
+  wrong if the push changes branch mid-line. Agent and MCP
   tools are matched by name: `tool_deny` refuses them (checked first), `tool_approve`
   pauses them. If the daemon is down
   the hook denies. Approvers: any console admin /
