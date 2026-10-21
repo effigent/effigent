@@ -183,7 +183,32 @@ docker run --rm effigent-scenario bash -c "EFFIGENT_RUN_QUIET=1 effigentd run --
 check "$OUT/sp-off.txt" 'OFF' "with self_protection off the agent can write the protected path"
 api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
 
-echo "== 8. backend"
+echo "== 8. gated binaries (FR Q3): the kernel refuses an agent's direct exec of a gated path"
+# Gate /usr/bin/uname (NOT in exec_deny, so a block proves the gated selector,
+# not a plain deny). The daemon injects its own paths as GateExempt, so the
+# bprm selector is matchBinaries NotIn [effigentd] AND argv0 == the gated path:
+# the agent's own exec is refused, `effigentd gate`'s is not.
+awk '1; /^  mode: denylist/{print "  gated_exec: [/usr/bin/uname]"}' internal/endpoint/policy/default.yaml > "$OUT/gated.yaml"
+api -X PUT --data-binary @"$OUT/gated.yaml" $API/policy > "$OUT/put-gated.json"
+check "$OUT/put-gated.json" '"ok": true' "policy with gated_exec accepted"
+# The host daemon binds 127.0.0.1, so a container (its own localhost) can't reach
+# it: `effigentd gate` therefore fails closed here, and `effigentd run` can't
+# fetch the gated list to build PATH shims. We prove the kernel half + fail-closed;
+# the shim happy-path is covered by unit tests (container-to-daemon is a known gap, §5).
+docker run --rm effigent-scenario curl -s --max-time 2 "http://host.docker.internal:$PORT/health" > "$OUT/gate-reach.txt" 2>&1 || true
+echo "        daemon reachable from container? [$(cat "$OUT/gate-reach.txt")]"
+docker run --rm effigent-scenario bash -c "EFFIGENT_RUN_QUIET=1 effigentd run --agent claude -- bash -c '/usr/bin/uname >/dev/null 2>&1; echo \"uname exit=\$?\"; effigentd gate -- /usr/bin/uname >/dev/null 2>gate.err; echo \"gate exit=\$?\"; cat gate.err'" > "$OUT/gated.txt" 2>&1; sleep 2
+sed 's/^/        /' "$OUT/gated.txt"
+check "$OUT/gated.txt" 'uname exit=12[67]' "agent's direct exec of a gated binary blocked by the kernel"
+check "$OUT/gated.txt" 'gate exit=1'       "effigentd gate fails closed when the daemon is unreachable"
+check "$OUT/gated.txt" 'not reachable'     "the gate says why it refused (daemon unreachable)"
+check "$OUT/events.jsonl" '"type":"blocked".*exec /usr/bin/uname' "gated exec block reported as an event"
+# A non-agent (untracked) process may still run the gated binary: the gate is scoped to agent trees.
+docker run --rm effigent-scenario /usr/bin/uname > "$OUT/gated-nonagent.txt" 2>&1
+check "$OUT/gated-nonagent.txt" 'Linux' "a non-agent process can still exec the gated binary (scoped to agent trees)"
+api -X PUT --data-binary @internal/endpoint/policy/default.yaml $API/policy >/dev/null
+
+echo "== 9. backend"
 sleep 6
 check "$OUT/backend.log" "received batch"                            "backend received batches (bearer token)"
 check "$OUT/backend.jsonl" '"type":"blocked"'                         "blocked events shipped to backend"
