@@ -27,7 +27,10 @@ const soon = (s: string) => /^\d+ min$/.test(s) && parseInt(s, 10) <= 4;
 function DetailPanel({ a }: { a: Approval }) {
   const { decide, policies } = useStore();
   const [note, setNote] = useState('');
+  const [ticket, setTicket] = useState('');
   const pol = policies.find((p) => p.id === a.policyId);
+  const required = a.approvalsRequired ?? 1;
+  const yes = (a.votes ?? []).filter((v) => v.decision === 'approve').length;
   const rule = pol?.rules.find((r) => r.id === a.ruleId);
   const ep = endpointById(a.endpoint);
   const pending = a.state === 'approval_pending';
@@ -52,7 +55,14 @@ function DetailPanel({ a }: { a: Approval }) {
         {a.action.cwd && <><dt>Working dir</dt><dd className="mono-sm">{a.action.cwd}</dd></>}
         <dt>Risk</dt><dd><RiskTag risk={a.risk} /></dd>
         <dt>Policy</dt><dd>{pol ? <Link href={`/policies/${pol.id}`} className="view-all">{pol.name}</Link> : a.policyId}{rule && <span className="muted"> · {rule.match}</span>}</dd>
-        <dt>Status</dt><dd><ApprovalPill state={a.state} />{!pending && a.decidedBy && <span className="muted"> by {a.decidedBy} · {a.decidedAgo}</span>}</dd>
+        {(required > 1 || a.requireTicket) && <><dt>Needs</dt><dd>{required > 1 ? <b>two different approvers</b> : 'one approver'}{a.requireTicket && <> · a <b>ticket</b> to approve</>}</dd></>}
+        {(a.votes ?? []).length > 0 && <><dt>Votes</dt><dd>{a.votes!.map((v, i) => (
+          <div key={i} style={{ fontSize: 13.5 }}>
+            <span className={`badge ${v.decision === 'approve' ? 'b-green' : 'b-red'}`} style={{ marginRight: 6 }}>{v.decision === 'approve' ? 'approved' : 'denied'}</span>
+            {v.by} <span className="muted">· {v.ago}</span>{v.ticket && <> · <a className="view-all mono-sm" href={`https://acme.atlassian.example/browse/${v.ticket}`} target="_blank" rel="noreferrer">{v.ticket}</a></>}
+            {v.note && <div className="muted" style={{ fontSize: 12.5 }}>“{v.note}”</div>}
+          </div>))}</dd></>}
+        <dt>Status</dt><dd><ApprovalPill state={a.state} />{pending && required > 1 && <span className="muted"> · {yes} of {required} approved</span>}{!pending && a.decidedBy && <span className="muted"> by {a.decidedBy} · {a.decidedAgo}</span>}</dd>
       </dl>
       <div className="callout" style={{ marginTop: 0 }}>
         <Ic n="lock" size={16} />
@@ -67,8 +77,14 @@ function DetailPanel({ a }: { a: Approval }) {
             <label htmlFor="appr-note">Note for the audit trail (optional)</label>
             <textarea id="appr-note" className="textarea" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why you approved or denied" />
           </div>
+          {a.requireTicket && (
+            <div className="field" style={{ padding: '10px 20px 0' }}>
+              <label htmlFor="appr-ticket">Ticket (required to approve)</label>
+              <input id="appr-ticket" className="input mono" value={ticket} onChange={(e) => setTicket(e.target.value)} placeholder="SEC-123 or https://…" />
+            </div>
+          )}
           <div className="decide-bar">
-            <button className="btn-approve" onClick={() => decide(a.id, 'approved', note)}><Ic n="check" size={15} /> Approve once</button>
+            <button className="btn-approve" disabled={!!a.requireTicket && !ticket.trim()} onClick={() => decide(a.id, 'approved', note, ticket.trim() || undefined)}><Ic n="check" size={15} /> {required > 1 && yes + 1 < required ? `Approve (${yes + 1} of ${required})` : 'Approve once'}</button>
             <button className="btn-deny" onClick={() => decide(a.id, 'approval_denied', note)}><Ic n="x" size={15} /> Deny</button>
           </div>
           <div className={`expires wrap ${soon(a.expiresIn) ? 'soon' : ''}`} style={{ padding: '0 20px 18px' }}><Ic n="clock" size={13} /> Expires in {a.expiresIn} — the agent stays paused until then, then the action is denied.</div>
@@ -120,9 +136,16 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
   const { api, canWrite, refresh } = useLive();
   const { viewer, dispatch } = useStore();
   const [note, setNote] = useState('');
+  const [ticket, setTicket] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const pending = a.state === 'pending' && Date.parse(a.expires_at) > now;
+  const required = Math.max(a.approvals_required ?? 1, 1);
+  const votes = a.votes ?? [];
+  const yes = votes.filter((v) => v.decision === 'approve');
+  // older control planes don't send can_approve: deciding is enough there
+  const mayApprove = a.can_approve ?? true;
+  const needTicket = !!a.require_ticket;
   // routed requests: the group's members decide, admins may step in (older control planes: admins)
   const mayDecide = a.can_decide ?? canWrite;
   const override = !!a.decide_is_override;
@@ -132,8 +155,9 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
   const decide = async (decision: 'approve' | 'deny') => {
     setBusy(true); setErr(null);
     try {
-      await api.send('POST', `/approvals/${encodeURIComponent(a.id)}/decision`, { decision, note: note.trim(), name: viewer.name });
-      dispatch({ t: 'toast', text: `${decision === 'approve' ? 'Approved' : 'Denied'} — ${a.summary.slice(0, 80)}` });
+      const r = await api.send<ApiApproval>('POST', `/approvals/${encodeURIComponent(a.id)}/decision`, { decision, note: note.trim(), name: viewer.name, ticket: ticket.trim() });
+      const waiting = decision === 'approve' && r?.state === 'pending';
+      dispatch({ t: 'toast', text: waiting ? `Your approval is recorded — waiting for a second approver` : `${decision === 'approve' ? 'Approved' : 'Denied'} — ${a.summary.slice(0, 80)}` });
       await refresh();
     } catch (e) {
       setErr(apiErrorText(e));
@@ -161,7 +185,21 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
         <dt>Session</dt><dd className="mono-sm">{a.session_id || '—'}</dd>
         <dt>Rule</dt><dd>{RULE_LABEL[a.rule] ?? a.rule} · <Link href="/policies" className="view-all">policy</Link></dd>
         <dt>Decided by <InfoTip label="How requests are routed">{HELP.decidedBy}</InfoTip></dt><dd>{a.group_name ? <><b>{a.group_name}</b> <span className="muted">· routed by <Link href="/team" className="view-all">Team &amp; Approvers</Link></span></> : <span className="muted">Workspace admins (no routing rule matched)</span>}</dd>
+        {a.requester?.label && <><dt>Requested by <InfoTip label="Who counts as the requester">{HELP.requester}</InfoTip></dt><dd>{a.requester.label}{a.exclude_requester !== false && <span className="muted"> · may not approve it</span>}</dd></>}
+        {(required > 1 || needTicket) && <><dt>Needs</dt><dd>{required > 1 ? <b>two different approvers</b> : 'one approver'}{needTicket && <> · a <b>ticket</b> to approve</>}</dd></>}
+        {votes.length > 0 && <><dt>Votes</dt><dd>
+          {votes.map((v, i) => (
+            <div key={i} style={{ fontSize: 13.5 }}>
+              <span className={`badge ${v.decision === 'approve' ? 'b-green' : 'b-red'}`} style={{ marginRight: 6 }}>{v.decision === 'approve' ? 'approved' : 'denied'}</span>
+              {v.name || v.voter}{v.admin_override && <span className="muted"> (admin override)</span>}
+              <span className="muted"> · {v.via} · {ago(Date.parse(v.at), now)}</span>
+              {v.ticket && <> · {v.ticket_url ? <a href={v.ticket_url} target="_blank" rel="noreferrer" className="view-all mono-sm">{v.ticket}</a> : <span className="mono-sm">{v.ticket}</span>}</>}
+              {v.note && <div className="muted" style={{ fontSize: 12.5 }}>“{v.note}”</div>}
+            </div>
+          ))}
+        </dd></>}
         <dt>Status</dt><dd><ApprovalPill state={pillState(a)} />
+          {a.state === 'pending' && required > 1 && <span className="muted"> · {yes.length} of {required} approved</span>}
           {a.state !== 'pending' && a.decided_at && <span className="muted"> by {a.decided_by_name || a.decided_by} · {ago(Date.parse(a.decided_at), now)}</span>}
           {a.state === 'used' && a.used_at && <span className="muted"> · ran {ago(Date.parse(a.used_at), now)}</span>}
           {a.state === 'approved' && <span className="muted"> · waiting for the agent to run it</span>}
@@ -182,9 +220,18 @@ function LiveDetail({ a, now }: { a: ApiApproval; now: number }) {
             <label htmlFor="appr-note">Note (shown to the agent and kept in the audit trail)</label>
             <textarea id="appr-note" className="textarea" rows={2} value={note} disabled={!mayDecide} onChange={(e) => setNote(e.target.value)} placeholder="Why you approved or denied" />
           </div>
+          {mayDecide && (needTicket || required > 1) && (
+            <div className="field" style={{ padding: '10px 20px 0' }}>
+              <label htmlFor="appr-ticket">Ticket {needTicket ? '(required to approve)' : '(optional)'}</label>
+              <input id="appr-ticket" className="input mono" value={ticket} onChange={(e) => setTicket(e.target.value)} placeholder="SEC-123 or https://…" />
+            </div>
+          )}
+          {a.quorum_warning && <div className="callout warn" style={{ margin: '12px 20px 0' }}><Ic n="alert" size={16} /><span>{a.quorum_warning}</span></div>}
+          {mayDecide && !mayApprove && <div className="callout" style={{ margin: '12px 20px 0' }}><Ic n="lock" size={16} /><span>{a.approve_refusal_message || 'You can’t approve this request.'} You can still deny it.</span></div>}
           {override && <div className="callout warn" style={{ margin: '12px 20px 0' }}><Ic n="alert" size={16} /><span>This request is for <b>{a.group_name}</b>. You can step in as a workspace admin; the decision is recorded as an admin override.</span></div>}
           <div className="decide-bar">
-            <button className="btn-approve" disabled={!mayDecide || busy} onClick={() => decide('approve')}><Ic n="check" size={15} /> {override ? 'Approve as admin' : 'Approve once'}</button>
+            <button className="btn-approve" disabled={!mayDecide || !mayApprove || busy || (needTicket && !ticket.trim())} title={needTicket && !ticket.trim() ? 'Add the ticket first' : undefined}
+              onClick={() => decide('approve')}><Ic n="check" size={15} /> {override ? 'Approve as admin' : required > 1 && yes.length === 0 ? 'Approve (1 of 2)' : 'Approve once'}</button>
             <button className="btn-deny" disabled={!mayDecide || busy} onClick={() => decide('deny')}><Ic n="x" size={15} /> {override ? 'Deny as admin' : 'Deny'}</button>
             <InfoTip align="right" label="What approving does">{HELP.approveOnce}</InfoTip>
           </div>

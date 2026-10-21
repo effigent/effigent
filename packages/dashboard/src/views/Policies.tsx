@@ -6,6 +6,7 @@ import { Exceptions } from '@/components/Exceptions.tsx';
 import { PolicyAssist } from '@/components/PolicyAssist.tsx';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PolicyDiff, lineStats } from '@/components/PolicyDiff.tsx';
+import { PolicyProposals, announcePending } from '@/components/PolicyProposals.tsx';
 import { MODES } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
@@ -84,6 +85,10 @@ export function Policies() {
     setBusy(true); setErr(null);
     try {
       const r = await api.send<{ version: number }>('PUT', '/policy', { body: text, comment: comment.trim() });
+      if (announcePending(r, (t) => dispatch({ t: 'toast', text: t }))) {
+        setDraft(null); setComment('');
+        return;
+      }
       dispatch({ t: 'toast', text: `Published policy v${r.version} — endpoints pick it up within seconds` });
       setDraft(null); setComment('');
       await refresh();
@@ -111,6 +116,8 @@ export function Policies() {
         <Card className="mini-stat"><div className="k">Rules</div><div className="v">{lists.reduce((n, [, v]) => n + v, 0)}</div><div className="s">{summary.lists.exec_deny ?? 0} exec deny · {summary.lists.file_deny ?? 0} file deny · {summary.lists.file_alert ?? 0} alert</div></Card>
         <Card className="mini-stat"><div className="k">Endpoints on latest</div><div className="v">{onLatest}/{eps.length}</div><div className="s">{latestPolicy > 0 ? `v${latestPolicy}` : 'nothing published'}</div></Card>
       </div>
+
+      <PolicyProposals />
 
       <PolicyAssist current={text} onLoad={(y) => { setDraft(y); setErr(null); setComment((c) => c || 'Changed with the policy assistant'); }} />
 

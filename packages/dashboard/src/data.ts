@@ -221,6 +221,8 @@ export const APPROVALS: Approval[] = [
     fingerprint: 'fp1:9c4e1b7a2f0d8e63', policyId: 'pol-prod', ruleId: 'r-prod-3', risk: 'high',
     reason: 'file_write outside the project workspace requires approval in Production',
     requestedAgo: '2 min ago', expiresIn: '13 min', state: 'approval_pending',
+    approvalsRequired: 2, requireTicket: true,
+    votes: [{ by: 'Maya Cohen (CISO)', decision: 'approve', ticket: 'SEC-412', ago: '1 min ago', note: 'Edge proxy cutover, change window open' }],
   },
   {
     id: 'apr-1041', title: 'Install npm package', agentType: 'cursor-agent', user: 'alex.wang', endpoint: 'ep-alex-mbp', env: 'production', sessionId: 'ses_41bd0e77',

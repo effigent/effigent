@@ -7,14 +7,42 @@ import { agentMeta } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
-import { ApiError, apiErrorText } from '@/lib/api.ts';
+import { ApiError, apiErrorText, type ApiApprovalRules } from '@/lib/api.ts';
 import { ClerkMembers, type Member } from '@/components/WorkspaceMembers.tsx';
-import { Card, CardHead, Loading, PageGuide, PageHead, ReadOnlyNote } from '@/components/ui.tsx';
+import { Card, CardHead, InfoTip, Loading, PageGuide, PageHead, ReadOnlyNote } from '@/components/ui.tsx';
 
 interface Group { id: string; name: string; description?: string; members: { user_id: string; email: string; name?: string }[] }
-interface Route { id: string; name: string; kinds: string[]; patterns: string[]; machines: string[]; agents: string[]; group_id: string }
-interface Routing { groups: Group[]; routes: Route[]; default_group: string; updated_by?: string; updated_at?: string }
-interface TestResult { route_name: string; group_name: string; default: boolean }
+interface Route extends Partial<ApiApprovalRules> { id: string; name: string; kinds: string[]; patterns: string[]; machines: string[]; agents: string[]; group_id: string }
+interface Routing { groups: Group[]; routes: Route[]; default_group: string; default_rules?: ApiApprovalRules; updated_by?: string; updated_at?: string; warnings?: string[] }
+interface TestResult {
+  route_name: string; group_name: string; default: boolean;
+  approvals_required?: number; exclude_requester?: boolean; require_ticket?: boolean;
+  requester?: { label: string }; eligible_approvers?: number; warning?: string; excluded_members?: string[] | null;
+}
+
+/** How one rule's requests are decided: approvers needed, requester excluded, ticket. */
+function DecisionRules({ v, ro, onChange }: { v: Partial<ApiApprovalRules>; ro: boolean; onChange: (r: ApiApprovalRules) => void }) {
+  const cur: ApiApprovalRules = { approvals_required: Math.max(v.approvals_required ?? 1, 1), exclude_requester: v.exclude_requester ?? true, require_ticket: !!v.require_ticket };
+  return (
+    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 13 }}>
+      <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Approvals
+        <select className="select" style={{ width: 150 }} value={cur.approvals_required} disabled={ro} aria-label="Approvals needed"
+          onChange={(e) => onChange({ ...cur, approvals_required: Number(e.target.value) })}>
+          <option value={1}>1 person</option>
+          <option value={2}>2 different people</option>
+        </select>
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input type="checkbox" checked={cur.exclude_requester} disabled={ro} onChange={(e) => onChange({ ...cur, exclude_requester: e.target.checked })} />
+        Requester can’t approve
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input type="checkbox" checked={cur.require_ticket} disabled={ro} onChange={(e) => onChange({ ...cur, require_ticket: e.target.checked })} />
+        Ticket required
+      </label>
+    </div>
+  );
+}
 
 const KINDS = [
   { id: '', label: 'Any request' },
@@ -49,6 +77,7 @@ export function Team({ dev }: { dev: boolean }) {
   const [tryText, setTryText] = useState('aws s3 rm s3://prod-backups --recursive');
   const [tryKind, setTryKind] = useState('command');
   const [tryResult, setTryResult] = useState<TestResult | null>(null);
+  const [tryHost, setTryHost] = useState('');
   const [rev, setRev] = useState(0); // remounts the free-text boxes after Save / Discard
 
   // members: Clerk in production; a fixed list under the dev bypass and in Demo Mode
@@ -65,7 +94,7 @@ export function Team({ dev }: { dev: boolean }) {
       .catch((e) => setErr(e instanceof ApiError && e.status === 404 ? 'The control plane does not support approval routing yet — it needs to be updated.' : apiErrorText(e)));
   }, [api]);
 
-  const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
+  const dirty = useMemo(() => JSON.stringify({ ...draft, warnings: undefined }) !== JSON.stringify({ ...saved, warnings: undefined }), [draft, saved]);
   const edit = (f: (d: Routing) => Routing) => setDraft((d) => (d ? f(structuredClone(d)) : d));
   const groupName = (id: string) => draft?.groups.find((g) => g.id === id)?.name ?? '—';
 
@@ -73,7 +102,8 @@ export function Team({ dev }: { dev: boolean }) {
     if (!draft) return;
     setBusy(true); setErr(null);
     try {
-      const r = await api.send<Routing>('PUT', '/approval-routing', draft);
+      const { warnings: _w, ...cfg } = draft;
+      const r = await api.send<Routing>('PUT', '/approval-routing', cfg);
       setSaved(r); setDraft(r); setRev((v) => v + 1);
       dispatch({ t: 'toast', text: 'Approvers saved — new requests are routed with these rules' });
     } catch (e) { setErr(apiErrorText(e)); } finally { setBusy(false); }
@@ -83,11 +113,12 @@ export function Team({ dev }: { dev: boolean }) {
   useEffect(() => {
     if (!draft || !tryText.trim()) { setTryResult(null); return; }
     const t = setTimeout(() => {
-      api.send<TestResult>('POST', '/approval-routing/test', { summary: `${tryKind === 'website' ? 'WebFetch' : tryKind === 'tool' ? '' : 'Bash'}${tryKind === 'tool' ? '' : ': '}${tryText}`, reason: tryText, rule: KIND_RULE[tryKind], config: draft })
+      const { warnings: _w, ...config } = draft;
+      api.send<TestResult>('POST', '/approval-routing/test', { summary: `${tryKind === 'website' ? 'WebFetch' : tryKind === 'tool' ? '' : 'Bash'}${tryKind === 'tool' ? '' : ': '}${tryText}`, reason: tryText, rule: KIND_RULE[tryKind], config, hostname: tryHost || undefined })
         .then(setTryResult).catch(() => setTryResult(null));
     }, 350);
     return () => clearTimeout(t);
-  }, [api, draft, tryText, tryKind]);
+  }, [api, draft, tryText, tryKind, tryHost]);
 
   const starter = () => edit((d) => {
     const sec = { id: tmpId('grp_'), name: 'Security', description: 'CISO and the security team', members: [] };
@@ -232,6 +263,8 @@ export function Team({ dev }: { dev: boolean }) {
                       </select>
                     </label>
                   </div>
+                  <span />
+                  <DecisionRules v={r} ro={ro} onChange={(x) => edit((d) => { Object.assign(d.routes[ri], x); return d; })} />
                 </div>
               ))}
               <datalist id="team-hosts">{hosts.map((h) => <option key={h} value={h} />)}</datalist>
@@ -244,7 +277,14 @@ export function Team({ dev }: { dev: boolean }) {
                   {draft.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                 </select>
               </label>
+              <DecisionRules v={draft.default_rules ?? { approvals_required: 1, require_ticket: false }} ro={ro} onChange={(x) => edit((d) => { d.default_rules = x; return d; })} />
+              <InfoTip label="How requests are decided">{HELP.decision}</InfoTip>
             </div>
+            {(saved?.warnings ?? []).length > 0 && !dirty && (
+              <div style={{ padding: '0 20px 16px' }}>
+                {saved!.warnings!.map((w) => <div key={w} className="callout warn" style={{ margin: '6px 0 0' }}><Ic n="alert" size={14} /><span>{w}</span></div>)}
+              </div>
+            )}
           </Card>
 
           <Card>
@@ -255,10 +295,21 @@ export function Team({ dev }: { dev: boolean }) {
               </select>
               <input className="input mono" style={{ flex: '1 1 300px' }} value={tryText} onChange={(e) => setTryText(e.target.value)} aria-label="Action to try"
                 placeholder="aws s3 rm s3://prod --recursive" />
+              <input className="input mono" style={{ flex: '0 1 180px' }} value={tryHost} onChange={(e) => setTryHost(e.target.value)} aria-label="On machine"
+                placeholder="on machine (optional)" list="team-hosts" />
               <span style={{ fontSize: 14 }}>
                 {tryResult ? <>→ <b>{tryResult.group_name || 'Workspace admins'}</b> <span className="muted">{tryResult.route_name ? `(rule “${tryResult.route_name}”)` : tryResult.default ? '(default)' : '(no rule matched)'}</span></> : <span className="muted">—</span>}
               </span>
             </div>
+            {tryResult && tryResult.approvals_required !== undefined && (
+              <div className="muted" style={{ padding: '0 20px 16px', fontSize: 13 }}>
+                Needs {tryResult.approvals_required > 1 ? <b>two different approvers</b> : 'one approver'}
+                {tryResult.require_ticket && <> and a <b>ticket</b></>}.
+                {tryResult.exclude_requester !== false && <> The requester can’t approve{tryResult.requester?.label ? <> (here: {tryResult.requester.label})</> : null}{(tryResult.excluded_members ?? []).length ? <> — that leaves out {tryResult.excluded_members!.join(', ')}</> : null}.</>}
+                {tryResult.eligible_approvers !== undefined && tryResult.eligible_approvers >= 0 && <> {tryResult.eligible_approvers} group member{tryResult.eligible_approvers === 1 ? '' : 's'} could approve it.</>}
+                {tryResult.warning && <div className="callout warn" style={{ margin: '8px 0 0' }}><Ic n="alert" size={14} /><span>{tryResult.warning}</span></div>}
+              </div>
+            )}
           </Card>
 
           {!ro && (

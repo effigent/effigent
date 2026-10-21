@@ -8,7 +8,7 @@
 import { ENDPOINTS, EVENTS } from '@/data.ts';
 import { createPricingLeaksFixture } from './pricing-leaks-fixture.ts';
 import { createPeopleFixture } from './people-fixture.ts';
-import { API_BASE, ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiNotifications, type ApiPolicyVersion } from './api.ts';
+import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiEventRetention, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
 
 const DEMO_POLICY = `# effigentd policy (Demo Mode — sample workspace, not published anywhere)
 defaults:
@@ -56,8 +56,26 @@ export function createFixtureApi(): Api {
     { id: 'wh-1', name: 'windmill approvals', url_hint: 'https://app.windmill.dev/…', events: ['approval.requested', 'approval.decided'], enabled: true, created_at: iso(60 * 24 * 3), last_status: 200, last_error: '', last_attempt_at: iso(4), dropped: 0 },
   ];
   let routing: { groups: { id: string; name: string; description?: string; members: { user_id: string; email: string; name?: string }[] }[];
-    routes: { id: string; name: string; kinds: string[]; patterns: string[]; machines: string[]; agents: string[]; group_id: string }[];
-    default_group: string; updated_by?: string; updated_at?: string } = { groups: [], routes: [], default_group: '' };
+    routes: ({ id: string; name: string; kinds: string[]; patterns: string[]; machines: string[]; agents: string[]; group_id: string } & Partial<ApiApprovalRules>)[];
+    default_group: string; default_rules?: ApiApprovalRules; updated_by?: string; updated_at?: string; warnings?: string[] } = { groups: [], routes: [], default_group: '', default_rules: { approvals_required: 1, exclude_requester: true, require_ticket: false } };
+  // routing warnings, as the control plane words them: a group too small for its quorum
+  const warn = (c: typeof routing) => {
+    const out: string[] = [];
+    const check = (name: string, gid: string, r: Partial<ApiApprovalRules> | undefined) => {
+      const g = c.groups.find((x) => x.id === gid);
+      const need = Math.max(r?.approvals_required ?? 1, 1);
+      if (!g || need < 2) return;
+      if (g.members.length < need) out.push(`${name}: ${g.name} has ${g.members.length} member${g.members.length === 1 ? '' : 's'} but needs 2 different approvers — an admin has to step in for every request`);
+      else if (g.members.length === need && (r?.exclude_requester ?? true)) out.push(`${name}: ${g.name} has exactly 2 members; when one of them is the requester, an admin has to be the second approver`);
+    };
+    c.routes.forEach((r) => check(`Rule “${r.name || 'unnamed'}”`, r.group_id, r));
+    check('Default', c.default_group, c.default_rules);
+    return out;
+  };
+  let policySettings = { policy_change_approval: false, updated_by: '', updated_at: '' };
+  let proposals: (ApiProposal & { _body?: string })[] = [];
+  let retention: ApiEventRetention = { retention_days: 365, retention_override: 0, default_days: 365, min_days: 90, archive_enabled: true,
+    legal_hold: false, hold_reason: '', hold_sync: { state: 'none', objects: 0 } };
   let notifications: ApiNotifications = { slack_webhook_set: false, emails: ['security@acme.example'], email_available: true,
     slack_app: { connected: true, team_id: 'T0DEMO', team_name: 'Acme', channel: 'C0SECURITY', approvers: 'members',
       interactions_url: 'https://api.effigent.ai/slack/interactions', available: true, directory_available: true } };
@@ -115,7 +133,15 @@ export function createFixtureApi(): Api {
         const last = page[page.length - 1];
         return delay({ events: page, next_before: match.length > limit && last ? `${Date.parse(last.time) * 1e6}_${last.id}` : '', retention_days: 90 }) as Promise<T>;
       }
-      if (p === '/approval-routing') return delay(routing) as Promise<T>;
+      if (p === '/approval-routing') return delay({ ...routing, warnings: warn(routing) }) as Promise<T>;
+      if (p === '/policy/settings') return delay(policySettings) as Promise<T>;
+      if (p === '/policy/proposals') {
+        const latest = history[0]?.version ?? 0;
+        return delay(proposals.filter((x) => x.state === 'pending').map((x) => ({ ...x, stale: x.kind === 'policy' && x.base_version !== latest,
+          can_decide: false, why: 'You proposed this change: another admin or security admin has to approve it (Demo Mode has no second admin).',
+          base: x.kind === 'policy' ? { ...history.find((h) => h.version === x.base_version)!, body: x._body } : undefined }))) as Promise<T>;
+      }
+      if (p === '/events/retention') return delay(retention) as Promise<T>;
       if (p === '/events/verify') return delay({ ok: true, batches: 42, events: events.length, archived_batches: 0, endpoints: endpoints.length, legacy_events: 0, unbatched_events: 0, problems: [] }) as Promise<T>;
       if (p === '/events/archives') return delay({ retention_days: 90, archive_enabled: true, archives: [] }) as Promise<T>;
       if (p === '/audit') {
@@ -168,6 +194,15 @@ export function createFixtureApi(): Api {
       if (method === 'PUT' && path === '/policy') {
         const b = body as { body: string; comment: string };
         if (!/^\s*defaults:/m.test(b.body)) return Promise.reject(new ApiError(400, 'policy: missing `defaults:` (Demo Mode check)'));
+        if (policySettings.policy_change_approval) {
+          proposals = proposals.map((x) => (x.state === 'pending' && x.kind === 'policy' ? { ...x, state: 'superseded' as const } : x));
+          const prop: ApiProposal & { _body?: string } = { id: `prp_demo${proposals.length + 1}`, kind: 'policy', payload: { body: b.body, comment: b.comment },
+            summary: `Publish the policy${b.comment ? `: ${b.comment}` : ''}`, base_version: version, author: me.user_id, author_name: 'You (Demo Mode)',
+            author_via: 'clerk', state: 'pending', created_at: new Date().toISOString(), _body: policy.body };
+          proposals = [prop, ...proposals];
+          log('policy.propose', prop.id, { kind: 'policy', summary: prop.summary, base_version: version });
+          return delay({ pending_approval: true, proposal: prop, message: 'Filed for approval: another admin or security admin has to approve it before it is published.' }) as Promise<T>;
+        }
         version++;
         policy = { version, body: b.body, comment: b.comment, created_by: me.user_id, created_at: new Date().toISOString() };
         history.unshift({ version, comment: b.comment, created_by: me.user_id, created_at: policy.created_at });
@@ -183,7 +218,47 @@ export function createFixtureApi(): Api {
       }
       if (method === 'PUT' && path === '/approval-routing') {
         routing = { ...(body as typeof routing), updated_by: me.user_id, updated_at: new Date().toISOString() };
-        return delay(routing) as Promise<T>;
+        return delay({ ...routing, warnings: warn(routing) }) as Promise<T>;
+      }
+      if (method === 'PUT' && path === '/policy/settings') {
+        const on = !!(body as { policy_change_approval?: boolean })?.policy_change_approval;
+        if (on === policySettings.policy_change_approval) return delay({ settings: policySettings }) as Promise<T>;
+        if (!on) {
+          const prop: ApiProposal = { id: `prp_demo${proposals.length + 1}`, kind: 'settings', payload: { policy_change_approval: false },
+            summary: 'Turn off policy change approval (changes would publish without a second admin)', base_version: version, author: me.user_id,
+            author_name: 'You (Demo Mode)', author_via: 'clerk', state: 'pending', created_at: new Date().toISOString() };
+          proposals = [prop, ...proposals];
+          log('policy.propose', prop.id, { kind: 'settings', summary: prop.summary });
+          return delay({ pending_approval: true, proposal: prop, message: 'Turning this off needs another admin’s approval (Demo Mode has none; withdraw it in Policies).' }) as Promise<T>;
+        }
+        policySettings = { policy_change_approval: true, updated_by: me.user_id, updated_at: new Date().toISOString() };
+        log('policy.settings.update', 'policy', { policy_change_approval: true });
+        return delay({ settings: policySettings }) as Promise<T>;
+      }
+      if (method === 'DELETE' && path.startsWith('/policy/proposals/')) {
+        const id = path.slice('/policy/proposals/'.length);
+        proposals = proposals.map((x) => (x.id === id && x.state === 'pending' ? { ...x, state: 'withdrawn' as const } : x));
+        log('policy.withdraw', id, null);
+        return delay({ ok: true }) as Promise<T>;
+      }
+      if (method === 'POST' && path.startsWith('/policy/proposals/') && path.endsWith('/decision')) {
+        return Promise.reject(new ApiError(403, 'you proposed this change: another admin or security admin has to approve it'));
+      }
+      if (method === 'PUT' && path === '/events/retention') {
+        const b = (body ?? {}) as { retention_days?: number; legal_hold?: boolean; hold_reason?: string };
+        if (b.retention_days !== undefined && b.retention_days !== 0 && (b.retention_days < 90 || b.retention_days > 3650)) return Promise.reject(new ApiError(400, 'retention_days is 0 (the default) or 90 to 3650'));
+        if (b.legal_hold && !retention.legal_hold && !(b.hold_reason ?? '').trim()) return Promise.reject(new ApiError(400, 'a legal hold needs a reason (the matter or ticket)'));
+        const at = new Date().toISOString();
+        if (b.retention_days !== undefined) {
+          log('events.retention.update', 'events', { before: retention.retention_override, after: b.retention_days });
+          retention = { ...retention, retention_override: b.retention_days, retention_days: b.retention_days || retention.default_days };
+        }
+        if (b.legal_hold !== undefined && b.legal_hold !== retention.legal_hold) {
+          log(b.legal_hold ? 'events.legal_hold.on' : 'events.legal_hold.off', 'events', { reason: b.hold_reason ?? retention.hold_reason });
+          retention = { ...retention, legal_hold: b.legal_hold, hold_reason: b.legal_hold ? (b.hold_reason ?? '').trim() : retention.hold_reason,
+            hold_set_by: me.user_id, hold_set_at: at, hold_sync: { state: 'done', objects: 214, synced_at: at } };
+        }
+        return delay(retention) as Promise<T>;
       }
       if (method === 'POST' && path === '/approval-routing/test') {
         // the control plane's matcher, simplified: first rule whose kind and any pattern match
@@ -194,7 +269,12 @@ export function createFixtureApi(): Api {
         const hit = c.routes.find((r) => (!r.kinds.length || r.kinds.includes(kind[b.rule])) && (!r.patterns.length || r.patterns.some((p) =>
           new RegExp(p.trim().split('*').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'), 'is').test(text))));
         const g = c.groups.find((x) => x.id === (hit ? hit.group_id : c.default_group));
-        return delay({ route_name: hit?.name ?? '', group_name: g?.name ?? '', default: !hit && !!g }) as Promise<T>;
+        const rules = hit ?? c.default_rules;
+        const need = Math.max(rules?.approvals_required ?? 1, 1);
+        return delay({ route_name: hit?.name ?? '', group_name: g?.name ?? '', default: !hit && !!g, approvals_required: need,
+          exclude_requester: rules?.exclude_requester ?? true, require_ticket: !!rules?.require_ticket, requester: { label: '' },
+          eligible_approvers: g ? g.members.length : -1, excluded_members: [],
+          warning: g && g.members.length < need ? `${g.name} has ${g.members.length} member${g.members.length === 1 ? '' : 's'} but needs ${need} different approvers: an admin has to step in` : '' }) as Promise<T>;
       }
       if (path === '/notifications/slack-app' && (method === 'PUT' || method === 'DELETE')) {
         const b = (body ?? {}) as { channel?: string; approvers?: 'members' | 'workspace' };
@@ -205,7 +285,12 @@ export function createFixtureApi(): Api {
         return delay(notifications) as Promise<T>;
       }
       if (method === 'PUT' && path === '/notifications') {
-        const b = (body ?? {}) as { slack_webhook?: string; emails?: string[] };
+        const b = (body ?? {}) as { slack_webhook?: string; emails?: string[]; ticket_url_template?: string };
+        if (b.ticket_url_template !== undefined) {
+          const t = b.ticket_url_template.trim();
+          if (t && (!t.startsWith('https://') || !t.includes('{key}'))) return Promise.reject(new ApiError(400, 'the ticket link must be an https:// URL with {key} in it, e.g. https://acme.atlassian.net/browse/{key}'));
+          notifications = { ...notifications, ticket_url_template: t };
+        }
         if (b.slack_webhook !== undefined) {
           if (b.slack_webhook && !b.slack_webhook.startsWith('https://hooks.slack.com/services/')) {
             return Promise.reject(new ApiError(400, 'use a Slack incoming webhook URL (https://hooks.slack.com/services/…)'));

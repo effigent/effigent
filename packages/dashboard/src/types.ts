@@ -139,6 +139,10 @@ export interface Approval {
   decidedBy?: string;
   decidedAgo?: string;
   note?: string;
+  /** two-person approval and tickets (Demo Mode) */
+  approvalsRequired?: number;
+  requireTicket?: boolean;
+  votes?: { by: string; decision: 'approve' | 'deny'; ticket?: string; ago: string; note?: string }[];
 }
 
 export type RuleEffect = 'allow' | 'deny' | 'require_approval' | 'alert';
