@@ -16,7 +16,7 @@ export type ActionClass = 'exec' | 'file_read' | 'file_write' | 'network' | 'mcp
 /** event.Type (+ `approval`, a control-plane event) */
 export type EventType =
   | 'agent_start' | 'agent_exit' | 'exec' | 'exit' | 'file_open' | 'connect'
-  | 'blocked' | 'would_block' | 'policy' | 'approval';
+  | 'blocked' | 'would_block' | 'policy' | 'approval' | 'tool_result';
 
 /** event.Event.Severity */
 export type Severity = 'info' | 'medium' | 'high';
@@ -117,6 +117,9 @@ export interface ConsoleEvent {
   risk?: CommandRisk;
   /** Risky commands: the list entry that matched ("curl", "git push", "sudo"). */
   riskRule?: string;
+  /** How the tool call ended (agent post-tool hooks): "error · exit 2 · 1.2s". */
+  ended?: string;
+  endedOk?: boolean;
 }
 
 export interface Approval {

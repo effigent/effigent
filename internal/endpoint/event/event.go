@@ -23,6 +23,10 @@ const (
 	Approved        Type = "approved"         // an approver allowed it; the call ran
 	ApprovalDenied  Type = "approval_denied"  // an approver denied it, or the request expired
 
+	// ToolResult is how a tool call ended, from the agent's post-tool hook
+	// (Outcome; ToolUseID or Target + SessionID tie it to the call's event).
+	ToolResult Type = "tool_result"
+
 	// The daemon itself: stopped on a signal / service stop (Target = the
 	// signal, Rule = how it was run, OSUser = who, when knowable), or found
 	// at start that the previous run ended without one (crash, kill -9, power).
@@ -84,6 +88,41 @@ type Event struct {
 	// session's first event: cloud profile names, model API hosts, which
 	// API keys are set (never their values). Reported by the hook process.
 	AgentEnv map[string]string `json:"agent_env,omitempty"`
+
+	// ToolUseID is the agent's id for the tool call (Claude Code, Codex,
+	// Cursor preToolUse), on the call's event and on its tool_result.
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// Outcome is how the call ended (tool_result events only).
+	Outcome *Outcome `json:"outcome,omitempty"`
+	// MCPServers are the MCP servers in the agent's config with their
+	// fingerprints (mcp_pins), on a hook session's agent_start.
+	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+}
+
+// MCPServer is one MCP server definition an agent would use.
+type MCPServer struct {
+	Name        string `json:"name"`
+	Source      string `json:"source"`      // which config: user, project, local, managed, system
+	Transport   string `json:"transport"`   // stdio | remote
+	Fingerprint string `json:"fingerprint"` // sha256 of command, args, cwd, URL, env and header names
+}
+
+// Outcome is how a tool call ended, as the agent's post-tool hook reported
+// it. Never the tool's output: only its status, exit code, duration and the
+// first line of an error (redacted, capped).
+type Outcome struct {
+	// Status: ok | error | interrupted | timeout | denied, or done when the
+	// call finished and the agent doesn't say whether it succeeded (Codex
+	// shell commands).
+	Status   string `json:"status"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+	// DurationMS is the agent's own measure when it sends one; otherwise the
+	// time since the call's pre-tool hook (DurationApprox: it then includes
+	// permission prompts and approval waits).
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	DurationApprox bool   `json:"duration_approx,omitempty"`
+	Error          string `json:"error,omitempty"`
+	FailureType    string `json:"failure_type,omitempty"` // the agent's failure class (Cursor: error, timeout, permission_denied)
 }
 
 // Action is one thing a command or tool call does beyond running a program:

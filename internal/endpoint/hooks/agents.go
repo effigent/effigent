@@ -187,20 +187,23 @@ func EvaluateCall(eval ClaudeEvaluator, rule policy.Rule, c Call) Decision {
 		return 0
 	}
 	var acts []event.Action
-	seen := map[string]bool{}
+	var seen Seen
+	dup := map[string]bool{}
 	for _, in := range c.Canon {
 		d := eval(rule, in)
 		for _, a := range d.Actions {
-			if k := a.Kind + "\x00" + a.Target + "\x00" + a.In; !seen[k] {
-				seen[k] = true
+			if k := a.Kind + "\x00" + a.Target + "\x00" + a.In; !dup[k] {
+				dup[k] = true
 				acts = append(acts, a)
 			}
 		}
+		seen = seen.merge(d.Seen)
 		if rank(d) > rank(best) {
 			best = d
 		}
 	}
 	best.Actions = acts
+	best.Seen = seen
 	return best
 }
 
@@ -229,6 +232,7 @@ type cursorInput struct {
 	Cwd            string   `json:"cwd"`
 	Command        string   `json:"command"` // beforeShellExecution; beforeMCPExecution: a stdio server's launch command
 	ToolName       string   `json:"tool_name"`
+	ToolUseID      string   `json:"tool_use_id"` // preToolUse, postToolUse
 	// an object for preToolUse, a JSON string for beforeMCPExecution
 	ToolInput   json.RawMessage `json:"tool_input"`
 	MCPServer   string          `json:"mcp_server_name"`
@@ -274,7 +278,7 @@ func ParseCursor(raw []byte) (Call, error) {
 	if cwd == "" && len(in.WorkspaceRoots) > 0 {
 		cwd = in.WorkspaceRoots[0]
 	}
-	orig := ClaudeInput{SessionID: in.ConversationID, Cwd: cwd, ToolName: in.ToolName, ToolInput: input}
+	orig := ClaudeInput{SessionID: in.ConversationID, Cwd: cwd, ToolName: in.ToolName, ToolInput: input, ToolUseID: in.ToolUseID}
 	c := Call{Orig: orig}
 	one := func(tool string, input map[string]any) {
 		c.Canon = append(c.Canon, ClaudeInput{SessionID: in.ConversationID, Cwd: cwd, ToolName: tool, ToolInput: input})

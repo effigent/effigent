@@ -72,7 +72,8 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   Likewise effigentd builds older than the action lists (2f) refuse a policy using any of
   `actions_*`, `command_deny`, `file_write_*`, `protected_branches`, `package_*`, `mcp_allow`,
   `model_hosts_allow`, top-level `environments:` or `redact:` (parse error → stay on the current
-  version): upgrade endpoints before publishing one.
+  version): upgrade endpoints before publishing one. The same for top-level `mcp_pins:` and the
+  kinds `mcp_changed`, `exfil_sequence`, `untrusted_then_risky` in `actions_*` (unknown kind).
 
 ## 2b. Approvals
 
@@ -370,8 +371,9 @@ URL, `mcp__server__tool`) and returns `event.Action{kind, target, attrs, envs, i
 `policy.ActionKinds` (git: protected_push / force_push / branch_delete / history_rewrite /
 hook_bypass; destructive_sql / sql_write; cloud_change / cloud_destroy / access; package_install
 / _unlisted / _registry / _scripts / _malicious / _vulnerable; guardrail_edit; credential_read;
-remote_script; fs_destroy; mcp_unlisted; model_endpoint / model_api_key). Every hook event
-carries them (`actions`), matched or not; `engine.scrub` redacts their targets.
+remote_script; fs_destroy; mcp_unlisted; mcp_changed; model_endpoint / model_api_key; session
+rules exfil_sequence / untrusted_then_risky). Every hook event carries them (`actions`), matched
+or not; `engine.scrub` redacts their targets.
 - Read from the command line, the scripts it runs (`bash x.sh`, `./x.sh`, `source`, package.json
   scripts incl. pre/post, `yarn <script>`; depth 2; `in` names the script), heredocs / here-strings
   / `< file` / piped `echo`/`cat` feeding a DB client, `.sql` files, `docker exec` inner commands.
@@ -419,11 +421,73 @@ carries them (`actions`), matched or not; `engine.scrub` redacts their targets.
   blocks; then policy `redact: {pii: bool, patterns: [{name, pattern}]}` (RE2, ≤50, ≤300 chars;
   pii = email, phone, card, IBAN), applied by the engine on every policy change. Approval
   summaries and reasons are redacted before they're sent.
-- Tests: `hooks/actions_test.go` (classification + decisions, fake OSV), `osv/osv_test.go`,
-  `compile/actions_test.go` (round trip), `redact_test.go`; `test/hooks/approval.sh` (42 checks)
-  runs force_push / curl|sh / workflow writes / DROP TABLE approval / prod AWS_PROFILE via the
-  hook env through a real hook process, daemon and local control plane. OSV's response shape was
-  checked against the live API (2026-10-21); the live lookup isn't in an automated test.
+- SQL in MCP database tools (`hooks/mcpsql.go`): a call is SQL when the tool name says so
+  (`*sql*`: execute_sql, run_sql, apply_migration…) or the server name looks like a database
+  (postgres, supabase, neon, mysql, sqlite, snowflake, clickhouse, bigquery, dbhub, `db`…) and the
+  tool is a query tool; the statement comes from the argument names the popular servers use (`sql`,
+  `query`, `statement`, `sql_statements`, `migration_sql`, also under `params`/`arguments`) and is
+  classified like psql (destructive_sql / sql_write / access with first statement), attrs
+  `mcp_server`, so `destructive_sql@prod` works through `environments.prod.mcp_servers`. Branch /
+  project deletes on DB servers (Neon `delete_branch`…) are destructive_sql; MongoDB and Redis
+  tools by name (`drop-collection`, unfiltered `delete-many`, `set`…). Server names are the
+  user's own config keys: a database server named `notes` with a `query` tool isn't read.
+- Session rules (`hooks/session.go`, daemon-side `hooks.Sessions`, per agent + session id, last
+  `SessionCalls` 50 calls / `SessionWindow` 30 min, ≤2000 sessions, idle 2h dropped; denied
+  calls add nothing): `exfil_sequence` = a network call (WebFetch, curl/wget/ssh/scp/rsync/nc/
+  git push…) to a host not seen earlier in the session after a credential read (credential_read,
+  a file_alert hit, `.env`), in an earlier call or the same command; `untrusted_then_risky` = the
+  first risky action (fs_destroy, destructive_sql, cloud_destroy, force_push, guardrail_edit,
+  remote_script, credential_read) after outside content entered the session (WebFetch,
+  WebSearch, a curl/wget fetch, an MCP server not in `mcp_allow`, every MCP server when it's
+  empty). Pattern matching on the order of calls, not prompt-injection detection: memory only
+  (a daemon restart forgets), no session id = no state, loopback isn't a destination, a host
+  reached through a variable or a program isn't seen.
+- MCP server pinning (`hooks/mcppin.go`): top-level `mcp_pins: {<server>: <sha256> | [..]}`
+  (≤500 servers, ≤20 each, `sha256:` optional, names lowercased, no wildcards). Fingerprint =
+  sha256 of the canonical JSON of transport (stdio | remote), command, args, cwd, URL and the
+  sorted names (never values) of env vars and headers. Read as the agent's user in each agent's
+  precedence order: Claude Code managed-mcp.json (exclusive) → `~/.claude.json`
+  `projects[<cwd's project>]` → `.mcp.json` (found upward) → `~/.claude.json` `mcpServers`;
+  Codex `.codex/config.toml` (upward) → `$CODEX_HOME` / `~/.codex/config.toml`; Gemini CLI system
+  settings → `.gemini/settings.json` → `~/.gemini/settings.json`; Cursor `.cursor/mcp.json` →
+  `~/.cursor/mcp.json` (≤32 MB, parsed once per mtime+size). A pinned server whose definition
+  differs, or isn't found / readable, is `mcp_changed` (attrs `fingerprint`, `source`); unpinned
+  servers aren't checked. Each hook session's `agent_start` lists `mcp_servers` [{name, source,
+  transport, fingerprint}] (≤100) to copy pins from. It detects a changed config (another
+  package version, command, URL, argument), not a remote server changing its tools or behaviour
+  behind the same URL, nor what `npx pkg` resolves to without a version.
+- Outcomes (`hooks/result.go`, event `tool_result`): post-tool hooks run the same `effigentd
+  hook <agent>`; the hook process sees `hook_event_name` (PostToolUse, PostToolUseFailure,
+  AfterTool, postToolUse, postToolUseFailure), computes `event.Outcome{status ok|error|
+  interrupted|timeout|denied|done, exit_code, duration_ms, duration_approx, error, failure_type}`
+  (`ReduceResult`), drops the tool's output and the bulky input fields, POSTs to
+  `/hook/{agent}/result` (3s), prints nothing the agent acts on (Gemini/Cursor `{}`) and exits 0
+  whatever happens. Error = first line, ≤300 chars, redacted (`engine.scrub`). The daemon ties a
+  result to its call by `tool_use_id` (now also on the call's event: Claude Code, Codex, Cursor
+  preToolUse), else by session + summary; without an agent duration it uses the time since the
+  pre-tool hook (`duration_approx`: includes prompts and approval waits). What each agent sends:
+  Claude Code no exit code on success (failure: `Exit code N` first line), Codex no exit code or
+  success flag for shell commands (`done`; apply_patch `Exit code: N`, MCP `isError`), Gemini CLI
+  `Exit Code: N` in llmContent and no call id, Cursor `exitCode` in tool_output, `failure_type`.
+  install-hooks registers Claude Code `PostToolUse` + `PostToolUseFailure` (timeout 10, no
+  `onFailure`), Codex `[[hooks.PostToolUse]]` (timeout 10, no statusMessage), Gemini CLI
+  `AfterTool` named `effigent-outcomes` (10000 ms), Cursor `postToolUse` + `postToolUseFailure`
+  (timeout 10, no failClosed); `--remove` removes them. hookstate: `Agent.Outcomes` = all of them
+  present; a missing post hook never makes the policy hook `modified`. Cursor shell/MCP results
+  can't be tied by id (their pre-tool events carry none) and Cursor's MCP results don't name the
+  server. Console: Audit → Agent events shows the outcome under the call's result
+  (`withOutcomes` in `ActivityEvents.tsx`); tool_result rows are kept off the graph and the live
+  list, and out of `cp.agent_activity_daily`.
+- Tests: `hooks/actions_test.go` (classification + decisions, fake OSV), `hooks/mcpsql_test.go`,
+  `hooks/session_test.go`, `hooks/mcppin_test.go`, `hooks/result_test.go` (each agent's
+  documented post-tool payload), `cmd/effigentd/installhooks_test.go`, `osv/osv_test.go`,
+  `compile/actions_test.go` (round trip incl. mcp_pins), `redact_test.go`; `test/hooks/approval.sh`
+  (53 checks) runs force_push / curl|sh / workflow writes / DROP TABLE approval / prod AWS_PROFILE
+  via the hook env / exfil_sequence / a changed pinned `.mcp.json` / a PostToolUseFailure outcome
+  through a real hook process, daemon and local control plane. OSV's response shape was
+  checked against the live API (2026-10-21); the live lookup isn't in an automated test. The
+  post-tool payloads are from the agents' docs and Codex's source tests, not captured from live
+  agents; the MCP database argument names are from the servers' sources.
 
 ## 3. Auth
 
@@ -502,6 +566,19 @@ npm run -w @effigent/site build                     # site
   per organization; tying a connection to an org and group→role mapping need Clerk's Enhanced
   B2B add-on. Nothing in Effigent depends on them; roles still come from org membership.
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
+- Hook-side signals (2f): session rules (`exfil_sequence`, `untrusted_then_risky`) are
+  pattern matching on the order of calls in one session, held in the daemon's memory (a restart
+  or a new session starts clean; calls without a session id have none), never prompt-injection
+  detection; hosts reached through variables, scripts or a program's own config aren't seen.
+  MCP SQL is read only from known argument names on SQL-named tools or database-named servers.
+  `mcp_pins` sees the config, not the server: a remote server changing its tools behind the same
+  URL, an unversioned `npx pkg` resolving to a new release, or a plugin's bundled server are
+  invisible; a pinned server whose config the agent's user can't read (unknown or root user:
+  world-readable files only) is `mcp_changed`. Outcomes depend on each agent's post-tool hook:
+  Codex reports no exit code or success for shell commands (`done`), Gemini CLI has no call id,
+  Claude Code gives no exit code for a successful command; durations measured by effigentd are
+  approximate; a post hook that times out or a daemon that is down loses the outcome (never the
+  call). Post-tool payloads were checked against docs and Codex's tests, not live agents.
 - Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
   `--agents claude,codex,gemini,cursor` (default), `--remove`, `--exclusive`): each agent's calls are
   translated to Claude Code's canonical tools (`internal/endpoint/hooks/agents.go`), so

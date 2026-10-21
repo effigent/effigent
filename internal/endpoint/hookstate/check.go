@@ -29,6 +29,9 @@ type Agent struct {
 	File       string   `json:"file"`
 	Detail     string   `json:"detail,omitempty"`
 	DisabledBy []string `json:"disabled_by,omitempty"` // users who turned the hook off in their own settings (Gemini CLI)
+	// Outcomes: the post-tool hooks that record how calls end are all there.
+	// Optional: their absence doesn't change State.
+	Outcomes bool `json:"outcomes,omitempty"`
 }
 
 // Report is what effigentd sends the control plane, keyed by the agent names
@@ -153,6 +156,16 @@ func findOurs(m map[string]any, event, agent string) (group, hook map[string]any
 	return nil, nil
 }
 
+// hasPost reports whether effigentd's hook is under every one of events.
+func hasPost(m map[string]any, agent string, events []string) bool {
+	for _, ev := range events {
+		if _, h := findOurs(m, ev, agent); h == nil {
+			return false
+		}
+	}
+	return true
+}
+
 // binaryGone says when a hook command points at an effigentd that isn't there.
 func binaryGone(cmd, agent string) string {
 	if bin, ok := hookBinary(cmd, agent); ok && filepath.IsAbs(bin) && !exists(bin) {
@@ -176,6 +189,7 @@ func checkClaude(file string) Agent {
 	if !ok {
 		return a
 	}
+	a.Outcomes = hasPost(m, "claude", ClaudePostEvents)
 	g, h := findOurs(m, "PreToolUse", "claude")
 	if h == nil {
 		return a.with(Missing, "no effigentd PreToolUse hook")
@@ -216,6 +230,7 @@ func checkCodex(file string) Agent {
 	if !ok {
 		return a
 	}
+	a.Outcomes = hasPost(m, "codex", CodexPostEvents)
 	_, h := findOurs(m, "PreToolUse", "codex")
 	if h == nil {
 		return a.with(Missing, "no effigentd [[hooks.PreToolUse]]")
@@ -256,6 +271,7 @@ func checkGemini(file string, homes []string) Agent {
 	if !ok {
 		return a
 	}
+	a.Outcomes = hasPost(m, "gemini", GeminiPostEvents)
 	_, h := findOurs(m, "BeforeTool", "gemini")
 	if h == nil {
 		return a.with(Missing, "no effigentd BeforeTool hook")
@@ -302,6 +318,16 @@ func checkCursor(file string) Agent {
 		return a
 	}
 	hooks, _ := m["hooks"].(map[string]any)
+	a.Outcomes = true
+	for _, ev := range CursorPostEvents {
+		if !slices.ContainsFunc(list(hooks[ev]), func(e any) bool {
+			em, _ := e.(map[string]any)
+			c, _ := em["command"].(string)
+			return IsHookCmd(c, "cursor")
+		}) {
+			a.Outcomes = false
+		}
+	}
 	var have, missing, why []string
 	for _, ev := range CursorEvents {
 		var ours map[string]any

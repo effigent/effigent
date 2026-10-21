@@ -8,14 +8,14 @@ import { RANGE_MS, useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiEvent } from '@/lib/api.ts';
 import { classify } from '@/lib/live-graph.ts';
-import { ago, dateTime, toConsoleEvent } from '@/lib/live-map.ts';
+import { ago, dateTime, outcomeText, toConsoleEvent } from '@/lib/live-map.ts';
 import type { ConsoleEvent, EventType } from '@/types.ts';
 import { AgentGlyph, Card, CardHead, Empty, InfoTip, Loading, OutcomePill, RiskyTag } from '@/components/ui.tsx';
 
 /** Result = what policy did. Each maps to the event types the server filters on. */
 const RESULTS = [
   { id: 'all', label: 'All results', types: [] as string[] },
-  { id: 'allowed', label: 'Allowed', types: ['exec', 'file_open', 'connect', 'approved'] },
+  { id: 'allowed', label: 'Allowed', types: ['exec', 'file_open', 'connect', 'approved', 'tool_result'] },
   { id: 'blocked', label: 'Blocked', types: ['blocked', 'approval_denied'] },
   { id: 'would_block', label: 'Would block', types: ['would_block'] },
   { id: 'waiting', label: 'Waiting for approval', types: ['approval_pending'] },
@@ -36,7 +36,7 @@ const SESSION_TYPES = ['agent_start', 'agent_exit', 'exit', 'policy'];
 
 const TYPE_LABEL: Record<Exclude<EventType, 'approval'>, string> = {
   agent_start: 'Agent start', agent_exit: 'Agent exit', exec: 'Exec', exit: 'Exit', file_open: 'File open', connect: 'Connect',
-  blocked: 'Blocked', would_block: 'Would block', policy: 'Policy',
+  blocked: 'Blocked', would_block: 'Would block', policy: 'Policy', tool_result: 'Result',
 };
 const typeLabel = (t: EventType) => (t === 'approval' ? 'Approval' : TYPE_LABEL[t]);
 
@@ -46,12 +46,53 @@ const routine = (e: ConsoleEvent) => e.risk === 'routine' && (e.outcome === 'all
 interface Page { events: ApiEvent[]; next_before: string; retention_days?: number }
 interface Row { raw: ApiEvent; ce: ConsoleEvent; what: WhatId }
 
+/** What a row touched; a tool_result is read like the call it reports on. */
+const whatOf = (e: ApiEvent): WhatId => {
+  if (SESSION_TYPES.includes(e.type)) return 'session';
+  const c = classify(e.type === 'tool_result' ? { ...e, type: 'exec' } : e);
+  return (c?.kind as WhatId) ?? 'command';
+};
+
+/** Shows how each tool call ended on the call's own row (agent post-tool
+ *  hooks): a tool_result is tied to its call by tool_use_id, else by agent,
+ *  session and target, and its own row is dropped. Results whose call isn't
+ *  loaded stay as rows. Rows are newest first. */
+function withOutcomes(rows: Row[]): Row[] {
+  const byId = new Map<string, Row>();
+  const bySummary = new Map<string, Row>();
+  const used = new Set<Row>();
+  const ids = (r: Row) => {
+    const b = r.raw.body ?? {};
+    const scope = `${r.raw.endpoint_id}\u0000${r.raw.agent}\u0000${b.session_id ?? ''}`;
+    return [b.tool_use_id ? `${scope}\u0000${b.tool_use_id}` : '', `${scope}\u0000${b.target ?? ''}`];
+  };
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    const b = r.raw.body ?? {};
+    const [id, sum] = ids(r);
+    if (r.raw.type !== 'tool_result') {
+      if (b.kind === 'tool' && !SESSION_TYPES.includes(r.raw.type)) {
+        if (id) byId.set(id, r);
+        bySummary.set(sum, r);
+      }
+      continue;
+    }
+    const call = (id && byId.get(id)) || bySummary.get(sum);
+    if (!call || !b.outcome) continue;
+    const [cid, csum] = ids(call);
+    byId.delete(cid); bySummary.delete(csum);
+    call.ce = { ...call.ce, ended: outcomeText(b.outcome), endedOk: b.outcome.status === 'ok' || b.outcome.status === 'done' };
+    used.add(r);
+  }
+  return used.size ? rows.filter((r) => !used.has(r)) : rows;
+}
+
 const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 function eventsCsv(rows: Row[]): string {
-  const head = ['id', 'time', 'type', 'severity', 'outcome', 'agent', 'endpoint', 'action', 'target', 'rule', 'via', 'mode', 'command_class'];
+  const head = ['id', 'time', 'type', 'severity', 'outcome', 'agent', 'endpoint', 'action', 'target', 'rule', 'via', 'mode', 'command_class', 'ended'];
   return [head.join(','), ...rows.map(({ ce: e }) => [
     e.id, e.at ? new Date(e.at).toISOString() : e.time, e.type, e.severity, e.outcome, e.agentType ?? '', e.endpointName ?? e.endpoint ?? '',
-    e.summary, e.target ?? '', e.rule ?? '', e.via ?? '', e.mode ?? '', e.risk ?? '',
+    e.summary, e.target ?? '', e.rule ?? '', e.via ?? '', e.mode ?? '', e.risk ?? '', e.ended ?? '',
   ].map(esc).join(','))].join('\n');
 }
 
@@ -119,11 +160,9 @@ export function ActivityEvents({ initialQuery, initialOutcome, initialRisky = fa
   // any server filter change starts again from the newest event
   useEffect(() => { gen.current++; autoFills.current = 0; setRaw([]); setNext(''); void fetchPage('', gen.current); }, [fetchPage]);
 
-  const rows: Row[] = useMemo(() => raw.map((e) => {
-    const c = classify(e);
-    const w: WhatId = SESSION_TYPES.includes(e.type) ? 'session' : (c?.kind as WhatId) ?? 'command';
-    return { raw: e, ce: { ...toConsoleEvent(e, hostById), ago: ago(Date.parse(e.time), now) }, what: w };
-  }), [raw, hostById, now]);
+  const rows: Row[] = useMemo(() => withOutcomes(raw.map((e) => (
+    { raw: e, ce: { ...toConsoleEvent(e, hostById), ago: ago(Date.parse(e.time), now) }, what: whatOf(e) }
+  ))), [raw, hostById, now]);
   const matched = useMemo(() => rows.filter((r) => (what === 'all' || r.what === what) && (!riskyOnly || r.ce.risk === 'risky')), [rows, what, riskyOnly]);
   const shown = useMemo(() => (showRoutine ? matched : matched.filter((r) => !routine(r.ce))), [matched, showRoutine]);
   const routineHidden = matched.length - shown.length;
@@ -153,10 +192,7 @@ export function ActivityEvents({ initialQuery, initialOutcome, initialRisky = fa
         all.push(...page.events);
         before = page.next_before;
       } while (before && all.length < 20_000);
-      const out = all.map((e) => {
-        const c = classify(e);
-        return { raw: e, ce: toConsoleEvent(e, hostById), what: (SESSION_TYPES.includes(e.type) ? 'session' : c?.kind ?? 'command') as WhatId };
-      }).filter((r) => (what === 'all' || r.what === what) && (!riskyOnly || r.ce.risk === 'risky') && (showRoutine || !routine(r.ce)));
+      const out = withOutcomes(all.map((e) => ({ raw: e, ce: toConsoleEvent(e, hostById), what: whatOf(e) }))).filter((r) => (what === 'all' || r.what === what) && (!riskyOnly || r.ce.risk === 'risky') && (showRoutine || !routine(r.ce)));
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([eventsCsv(out)], { type: 'text/csv' }));
       a.download = 'effigent-events.csv';
@@ -229,7 +265,13 @@ export function ActivityEvents({ initialQuery, initialOutcome, initialRisky = fa
                     <td><span className="mono-sm">{e.endpointName ?? '—'}</span></td>
                     <td style={{ maxWidth: 340 }}><span className="cell-main" style={{ display: 'block' }}>{e.summary}{e.risk === 'risky' && <RiskyTag />}</span><span className="cell-sub mono-sm" style={{ display: 'block', wordBreak: 'break-all' }}>{e.target}</span></td>
                     <td className="muted" style={{ maxWidth: 260, fontSize: 12.5 }}>{e.rule ?? '—'}</td>
-                    <td><OutcomePill outcome={e.outcome} /></td>
+                    <td>
+                      <OutcomePill outcome={e.outcome} />
+                      {e.ended && (
+                        <span className="cell-sub" title="How the call ended, from the agent's post-tool hook (never its output)"
+                          style={{ display: 'block', marginTop: 4, whiteSpace: 'nowrap', color: e.endedOk ? undefined : 'var(--red)' }}>{e.ended}</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

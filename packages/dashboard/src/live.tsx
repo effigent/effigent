@@ -166,7 +166,9 @@ function LiveProvider({ api, scope, ready, fixture, children }: { api: Api; scop
     return {
       ...data, api, fixture, loaded, error, updatedAt, now, refresh, refreshApprovals,
       canWrite: roleCanWrite(data.me?.role),
-      endpointRows, consoleEvents, graphEvents, consoleById,
+      endpointRows, graphEvents, consoleById,
+      // outcomes (tool_result) belong to their call: Audit shows them on its row
+      consoleEvents: consoleEvents.filter((e) => e.type !== 'tool_result'),
       latestPolicy: data.policy?.version ?? 0,
       pendingApprovals: data.approvals.filter((a) => a.state === 'pending' && Date.parse(a.expires_at) > now).length,
     };

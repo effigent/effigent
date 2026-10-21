@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/effigent/effigent/internal/endpoint/hookstate"
@@ -17,6 +18,11 @@ import (
 // hookTimeout: the daemon answers in milliseconds, except while a call waits
 // for an approver (up to 90s; `effigentd hook` gives up at 100s).
 const hookTimeout = 120
+
+// resultHookTimeout is the post-tool hooks' limit (outcomes). The hook
+// process gives up on the daemon after 3s and always exits 0 with nothing
+// to say: a slow or stopped daemon never holds up or blocks the agent.
+const resultHookTimeout = 10
 
 // installHooksCmd implements `effigentd install-hooks`: adds effigentd's
 // pre-tool hook to each agent's machine-wide settings, keeping everything
@@ -97,6 +103,16 @@ func installClaude(file, command string, exclusive, remove bool) (string, error)
 		})
 	}
 	setOrDelete(hooksMap, "PreToolUse", kept)
+	// Outcomes: after a call that ran, and after one that failed. No
+	// onFailure (the default lets the agent go on) and nothing printed.
+	for _, ev := range hookstate.ClaudePostEvents {
+		post := withoutOurs(hooksMap[ev], "claude")
+		if !remove {
+			post = append(post, map[string]any{"matcher": ".*",
+				"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": resultHookTimeout}}})
+		}
+		setOrDelete(hooksMap, ev, post)
+	}
 	setOrDelete(settings, "hooks", hooksMap)
 	if exclusive && !remove {
 		settings["allowManagedHooksOnly"] = true
@@ -152,6 +168,13 @@ func installCodex(file, command string, exclusive, remove bool) (string, error) 
 		}
 	}
 	setOrDelete(hooksMap, "PreToolUse", kept)
+	// Outcomes (no statusMessage: nothing to show while it runs).
+	post := withoutOurs(hooksMap["PostToolUse"], "codex")
+	if !remove {
+		post = append(post, map[string]any{"matcher": "*",
+			"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": resultHookTimeout}}})
+	}
+	setOrDelete(hooksMap, "PostToolUse", post)
 	setOrDelete(req, "hooks", hooksMap)
 	out, err := toml.Marshal(req)
 	if err != nil {
@@ -196,6 +219,18 @@ func installGemini(file, command string, remove bool) (string, error) {
 		settings["hooksConfig"] = hc
 	}
 	setOrDelete(hooksMap, "BeforeTool", kept)
+	// Outcomes. Its own name, so `/hooks disable effigent` isn't needed to
+	// silence it and the policy hook's state stays readable on its own.
+	post := withoutOurs(hooksMap["AfterTool"], "gemini")
+	if !remove {
+		post = append(post, map[string]any{"matcher": "*",
+			"hooks": []any{map[string]any{
+				"name": hookstate.GeminiResultHookName, "type": "command", "command": command,
+				"timeout":     resultHookTimeout * 1000,
+				"description": "Effigent: records how each tool call ended (status, exit code, duration; never the output)",
+			}}})
+	}
+	setOrDelete(hooksMap, "AfterTool", post)
 	setOrDelete(settings, "hooks", hooksMap)
 	if err := writeJSON(file, settings); err != nil {
 		return "", err
@@ -220,7 +255,8 @@ func installCursor(file, command string, remove bool) (string, error) {
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
 	}
-	for _, ev := range hookstate.CursorEvents {
+	for _, ev := range append(slices.Clone(hookstate.CursorEvents), hookstate.CursorPostEvents...) {
+		post := slices.Contains(hookstate.CursorPostEvents, ev)
 		var kept []any
 		list, _ := hooksMap[ev].([]any)
 		for _, h := range list {
@@ -231,7 +267,12 @@ func installCursor(file, command string, remove bool) (string, error) {
 			}
 			kept = append(kept, h)
 		}
-		if !remove {
+		switch {
+		case remove:
+		case post:
+			// outcomes: Cursor's default (a failure lets the agent go on)
+			kept = append(kept, map[string]any{"command": command, "timeout": resultHookTimeout})
+		default:
 			// failClosed: a crash, timeout or empty answer blocks the call
 			// (Cursor's default is to let it run).
 			kept = append(kept, map[string]any{"command": command, "timeout": hookTimeout, "failClosed": true})

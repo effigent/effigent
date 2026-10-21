@@ -80,6 +80,29 @@ func TestInstallHooksRoundTrip(t *testing.T) {
 		cur.Hooks["preToolUse"][0]["failClosed"] != true || cur.Hooks["preToolUse"][0]["timeout"] != float64(hookTimeout) {
 		t.Fatalf("cursor hooks.json %s", b)
 	}
+	// outcomes: post-tool hooks, never fail-closed, short timeout
+	for _, a := range []string{"claude", "codex", "gemini", "cursor"} {
+		if !hookstate.Check(o).Agents[a].Outcomes {
+			t.Errorf("%s: post-tool hooks not reported", a)
+		}
+	}
+	for _, ev := range hookstate.CursorPostEvents {
+		if h := cur.Hooks[ev]; len(h) != 1 || h[0]["failClosed"] != nil || h[0]["timeout"] != float64(resultHookTimeout) {
+			t.Fatalf("cursor %s: %v", ev, h)
+		}
+	}
+	if s := readTestFile(t, o.Claude); strings.Count(s, `"onFailure"`) != 1 || !strings.Contains(s, `"PostToolUseFailure"`) {
+		t.Fatalf("claude post hooks: %s", s)
+	}
+	if s := readTestFile(t, o.Gemini); !strings.Contains(s, `"AfterTool"`) || !strings.Contains(s, hookstate.GeminiResultHookName) {
+		t.Fatalf("gemini post hook: %s", s)
+	}
+	// a missing post hook is not a modified policy hook
+	edit(t, o.Claude, func(m map[string]any) { delete(m["hooks"].(map[string]any), "PostToolUseFailure") })
+	if a := hookstate.Check(o).Agents["claude"]; a.State != hookstate.Installed || a.Outcomes {
+		t.Fatalf("claude without PostToolUseFailure: %+v", a)
+	}
+	install(false)
 
 	// Cursor: failClosed switched off, one event dropped
 	edit(t, o.Cur, func(m map[string]any) {
@@ -115,6 +138,11 @@ func TestInstallHooksRoundTrip(t *testing.T) {
 	}
 	if b := readTestFile(t, o.Cur); !strings.Contains(b, "/opt/audit.sh") || strings.Contains(b, "effigentd") {
 		t.Fatalf("cursor after remove %s", b)
+	}
+	for _, f := range []string{o.Claude, o.Codex, o.Gemini} {
+		if b := readTestFile(t, f); strings.Contains(b, "effigentd") {
+			t.Fatalf("%s after remove %s", f, b)
+		}
 	}
 }
 

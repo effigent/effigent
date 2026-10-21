@@ -111,6 +111,9 @@ type Rule struct {
 	// Environments is set by effigentd from the policy's top-level
 	// environments, never by policy authors.
 	Environments map[string]Environment `yaml:"-" json:"-"`
+	// MCPPins is the policy's top-level mcp_pins (server name, lowercase →
+	// fingerprints), set by effigentd like Environments.
+	MCPPins map[string]PinList `yaml:"-" json:"-"`
 }
 
 // Environment names the targets that make an action part of an environment
@@ -157,6 +160,10 @@ var ActionKinds = map[string]string{
 	"mcp_unlisted":       "calling an MCP server outside mcp_allow",
 	"model_endpoint":     "an agent configured for a model API host outside model_hosts_allow",
 	"model_api_key":      "an agent running with a personal model API key in its environment",
+	"mcp_changed":        "an MCP server whose definition (command, args, URL, env/header names) doesn't match its mcp_pins entry",
+	"exfil_sequence":     "a network call to a host new to the session after a credential read in the session (last 50 calls / 30 min)",
+	"untrusted_then_risky": "a risky action (fs_destroy, destructive_sql, cloud_destroy, force_push, guardrail_edit, remote_script, " +
+		"credential_read) after outside content entered the session (WebFetch, WebSearch, unlisted MCP, curl/wget; last 50 calls / 30 min)",
 }
 
 // implied lets a broader kind match its narrower ones (sql_write covers
@@ -285,6 +292,62 @@ type Policy struct {
 	// Redact adds masks to the built-in secret redaction, applied on the
 	// machine before any event leaves it.
 	Redact Redaction `yaml:"redact,omitempty"`
+	// MCPPins pins MCP servers by name to the fingerprint of their
+	// definition in the agent's MCP config (sha256 of command, args, cwd, URL
+	// and env/header names; effigentd reports them on agent_start). A call
+	// to a pinned server whose definition differs, or can't be found, is the
+	// action mcp_changed.
+	MCPPins map[string]PinList `yaml:"mcp_pins,omitempty"`
+}
+
+// PinList is one or more fingerprints: a string or a list in YAML.
+type PinList []string
+
+func (l *PinList) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		*l = PinList{n.Value}
+		return nil
+	case yaml.SequenceNode:
+		var s []string
+		if err := n.Decode(&s); err != nil {
+			return err
+		}
+		*l = s
+		return nil
+	}
+	return fmt.Errorf("line %d: a fingerprint or a list of them", n.Line)
+}
+
+var pinRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// validPins normalizes mcp_pins: lowercase names, "sha256:" dropped.
+func (p *Policy) validPins() error {
+	if len(p.MCPPins) == 0 {
+		return nil
+	}
+	if len(p.MCPPins) > 500 {
+		return fmt.Errorf("mcp_pins: at most 500 servers")
+	}
+	out := make(map[string]PinList, len(p.MCPPins))
+	for name, pins := range p.MCPPins {
+		n := strings.ToLower(strings.TrimSpace(name))
+		if n == "" || strings.Contains(n, "*") {
+			return fmt.Errorf("mcp_pins: %q: name one MCP server (no wildcards)", name)
+		}
+		if len(pins) == 0 || len(pins) > 20 {
+			return fmt.Errorf("mcp_pins.%s: 1 to 20 fingerprints", name)
+		}
+		for _, f := range pins {
+			f = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(f)), "sha256:")
+			if !pinRE.MatchString(f) {
+				return fmt.Errorf("mcp_pins.%s: %q is not a sha256 fingerprint (64 hex digits; effigentd reports them on agent_start)", name, f)
+			}
+			out[n] = append(out[n], f)
+		}
+	}
+	p.MCPPins = out
+	return nil
 }
 
 // Redaction is the workspace's own masks: patterns (RE2) for internal ids,
@@ -359,6 +422,9 @@ func (p *Policy) validate() error {
 	}
 	if err := p.RuleFor("").check(); err != nil {
 		return fmt.Errorf("defaults: %w", err)
+	}
+	if err := p.validPins(); err != nil {
+		return err
 	}
 	if len(p.Redact.Patterns) > 50 {
 		return fmt.Errorf("redact.patterns: at most 50")
@@ -656,6 +722,7 @@ func (p *Policy) RuleFor(agent string) Rule {
 		}
 	}
 	r.Environments = p.Environments
+	r.MCPPins = p.MCPPins
 	return r
 }
 

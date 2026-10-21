@@ -316,6 +316,7 @@ export function buildLiveGraph(events: ApiEvent[], hostById: Map<string, string>
     if (!Number.isFinite(at) || at < o.since) continue;
     const agent = e.agent || e.body?.agent;
     if (!agent) continue; // effigentd's own events (policy loads) have no agent
+    if (e.type === 'tool_result') continue; // how a call ended: its call is already on the graph
     if (o.agent && agent !== o.agent) continue;
     n++;
     const host = hostById.get(e.endpoint_id) ?? e.endpoint_id.slice(0, 8);

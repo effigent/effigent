@@ -92,6 +92,22 @@ export interface ApiEventBody {
   rule?: string;
   container?: string;
   message?: string;
+  session_id?: string;
+  /** The agent's id for a tool call: on the call's event and on its tool_result. */
+  tool_use_id?: string;
+  /** tool_result only: how the call ended (never its output). */
+  outcome?: ApiToolOutcome;
+}
+
+/** event.Outcome — from the agent's post-tool hook. */
+export interface ApiToolOutcome {
+  status: 'ok' | 'error' | 'interrupted' | 'timeout' | 'denied' | 'done' | string;
+  exit_code?: number;
+  duration_ms?: number;
+  /** measured from the pre-tool hook (includes prompts and approval waits) */
+  duration_approx?: boolean;
+  error?: string;
+  failure_type?: string;
 }
 
 /** store.Event — GET /api/v1/events */

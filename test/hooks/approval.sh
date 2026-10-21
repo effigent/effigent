@@ -25,9 +25,11 @@ TOK=$(curl -s "${A[@]}" -X POST "http://$CP/api/v1/enrollment-tokens" -d '{}' | 
   -sync-interval 1s 2>"$W/ep.err" & EPID=$!
 
 # denylist (curl denied) + approvals for `git push*` and GitHub MCP tools; short waits for the test
-sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]\n  tool_deny: ["mcp__claude-in-chrome__*"]\n  actions_deny: [force_push, "cloud_destroy@prod", remote_script]\n  actions_approve: ["destructive_sql"]\n  file_write_deny: [/.github/workflows/]|' \
+sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]\n  tool_deny: ["mcp__claude-in-chrome__*"]\n  actions_deny: [force_push, "cloud_destroy@prod", remote_script, exfil_sequence, mcp_changed]\n  actions_approve: ["destructive_sql"]\n  file_write_deny: [/.github/workflows/]|' \
   internal/endpoint/policy/default.yaml > "$W/policy.yaml"
 printf 'approvals:\n  wait_seconds: 4\n  ttl_minutes: 10\nenvironments:\n  prod:\n    aws_profiles: ["prod-*"]\n' >> "$W/policy.yaml"
+# pinned-test = {command: good-server} (sha256 of effigentd's canonical definition)
+printf 'mcp_pins:\n  pinned-test: f4434db1f385b213d5cdf1d7d47ee3b30f00586eff80b3ab3320ad846a083094\n' >> "$W/policy.yaml"
 python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"comment":"approvals test"}))' "$W/policy.yaml" |
   curl -s "${A[@]}" -X PUT "http://$CP/api/v1/policy" --data-binary @- >"$W/put.json"
 for i in $(seq 1 50); do
@@ -119,6 +121,31 @@ out=$(printf '{"session_id":"sess-env","cwd":"/work","tool_name":"Bash","tool_in
   AWS_PROFILE=prod-admin ANTHROPIC_API_KEY=sk-test-secret EFFIGENT_API=$EP ./bin/effigentd hook claude)
 echo "$out" | grep -q '"permissionDecision":"deny".*on prod' && ok "the agent's AWS_PROFILE (hook env) makes it prod: denied" || bad "env header: $out"
 
+echo "== session rules"
+sess() { printf '{"session_id":"%s","cwd":"/work","tool_name":"%s","tool_input":%s}' "$1" "$2" "$3" | EFFIGENT_API=$EP ./bin/effigentd hook claude; }
+[ "$(sess sess-clean WebFetch '{"url":"https://paste.example.org/new"}')" = "{}" ] && ok "WebFetch to a new host with no credential read runs" || bad "clean session fetch"
+[ "$(sess sess-exfil Read '{"file_path":"/work/.env"}')" = "{}" ] && ok "reading .env is only an alert" || bad "env read"
+sess sess-exfil WebFetch '{"url":"https://paste.example.org/new"}' | grep -q '"permissionDecision":"deny".*sending data to a new host after reading credentials' &&
+  ok "then a new host in the same session is denied (exfil_sequence)" || bad "exfil_sequence not denied"
+
+echo "== MCP server pinning (mcp_pins)"
+# the project's .mcp.json (read as this user); assumes no managed-mcp.json on this machine
+mkdir -p "$W/proj"; printf '{"mcpServers":{"pinned-test":{"command":"good-server"}}}' >"$W/proj/.mcp.json"
+pin() { printf '{"session_id":"sess-pin","cwd":"%s","tool_name":"mcp__pinned-test__run","tool_input":{}}' "$W/proj" | EFFIGENT_API=$EP ./bin/effigentd hook claude; }
+[ "$(pin)" = "{}" ] && ok "pinned MCP server with its pinned definition runs" || bad "pinned server: $(pin)"
+printf '{"mcpServers":{"pinned-test":{"command":"evil-server"}}}' >"$W/proj/.mcp.json"
+pin | grep -q '"permissionDecision":"deny".*pinned-test: project config now runs evil-server' && ok "its definition changed: denied (mcp_changed)" || bad "changed pin: $(pin)"
+
+echo "== outcomes (post-tool hooks)"
+printf '{"session_id":"sess-out","cwd":"/work","tool_name":"Bash","tool_input":{"command":"make test"},"tool_use_id":"toolu_out1"}' |
+  EFFIGENT_API=$EP ./bin/effigentd hook claude >/dev/null
+out=$(printf '{"session_id":"sess-out","cwd":"/work","hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"make test"},"tool_use_id":"toolu_out1","error":"Exit code 2\\nOUTPUT-BODY-MARKER password=hunter2","is_interrupt":false}' |
+  EFFIGENT_API=$EP ./bin/effigentd hook claude; echo "rc=$?")
+[ "$out" = "rc=0" ] && ok "PostToolUseFailure: the hook prints nothing and exits 0" || bad "post hook output: $out"
+out=$(printf '{"session_id":"sess-out","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' |
+  EFFIGENT_API=127.0.0.1:1 ./bin/effigentd hook claude; echo "rc=$?")
+[ "$out" = "rc=0" ] && ok "daemon unreachable: a post hook still never blocks" || bad "post hook without daemon: $out"
+
 echo "== events"
 sleep 1
 for t in approval_pending approved approval_denied; do
@@ -126,8 +153,14 @@ for t in approval_pending approved approval_denied; do
 done
 grep -q '"type":"approved".*Sam Sec' "$W/events.jsonl" && ok "approver named in the event" || bad "approver name"
 grep -q '"actions":\[{"kind":"force_push"' "$W/events.jsonl" && ok "events carry the actions" || bad "no actions on events"
-grep -q '"agent_env":{"ANTHROPIC_API_KEY":"set","AWS_PROFILE":"prod-admin"}' "$W/events.jsonl" && ok "session start carries the agent env" || bad "no agent_env"
+grep -q '"agent_env":{"ANTHROPIC_API_KEY":"set","AWS_PROFILE":"prod-admin"[,}]' "$W/events.jsonl" && ok "session start carries the agent env" || bad "no agent_env"
 ! grep -q 'sk-test-secret' "$W/events.jsonl" && ok "API key values never leave the hook" || bad "key value in events"
+grep '"type":"tool_result"' "$W/events.jsonl" | grep '"tool_use_id":"toolu_out1"' | grep -q '"outcome":{"status":"error","exit_code":2,"duration_ms":[0-9]*,"duration_approx":true}' &&
+  ok "tool_result: exit code, duration from the pre-tool hook, tied by tool_use_id" || bad "tool_result: $(grep tool_result "$W/events.jsonl")"
+grep '"type":"exec"' "$W/events.jsonl" | grep -q '"tool_use_id":"toolu_out1"' && ok "the call's event carries the same tool_use_id" || bad "no tool_use_id on the call"
+grep '"type":"agent_start"' "$W/events.jsonl" | grep -q '"mcp_servers":\[[^]]*{"name":"pinned-test","source":"project","transport":"stdio","fingerprint":"f4434db1f385' &&
+  ok "agent_start lists the session's MCP servers with fingerprints" || bad "no mcp_servers on agent_start"
+! grep -q 'OUTPUT-BODY-MARKER' "$W/events.jsonl" && ok "the tool's output never reaches the daemon" || bad "output in events"
 
 echo
 echo "passed $pass, failed $fail"
