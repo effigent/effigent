@@ -94,9 +94,10 @@ func (s *Server) Handler() http.Handler {
 					s.syncHolds(context.Background())
 				}
 			}()
-			go s.runSpendSyncs(context.Background())     // Pricing Leaks: nightly vendor syncs
-			go s.runSpendRollups(context.Background())   // ...report history and runaway cost alerts
-			go s.runEndpointHealth(context.Background()) // machines gone silent / back
+			go s.runSpendSyncs(context.Background())      // Pricing Leaks: nightly vendor syncs
+			go s.runSpendRollups(context.Background())    // ...report history and runaway cost alerts
+			go s.runEndpointHealth(context.Background())  // machines gone silent / back
+			go s.runReportSchedules(context.Background()) // posture report emails, anomaly pruning
 		})
 		if s.Auth != nil && s.Auth.APIKeys == nil {
 			s.Auth.APIKeys = func(ctx context.Context, secret string) (string, string, []string, error) {
@@ -178,6 +179,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pricing-leaks/import", s.console(write, s.importSpendCSV))
 	mux.HandleFunc("DELETE /api/v1/pricing-leaks/import/{vendor}", s.console(write, s.clearSpendCSV))
 	mux.HandleFunc("PUT /api/v1/pricing-leaks/settings", s.console(write, s.putSpendSettings))
+	mux.HandleFunc("GET /api/v1/inventory", s.console(read, s.getInventory))
+	mux.HandleFunc("GET /api/v1/anomalies", s.console(read, s.listAnomalies))
+	mux.HandleFunc("GET /api/v1/report", s.console(read, s.getReport))
+	mux.HandleFunc("GET /api/v1/report/schedule", s.console(read, s.getReportSchedule))
+	mux.HandleFunc("PUT /api/v1/report/schedule", s.console(write, s.putReportSchedule))
+	mux.HandleFunc("POST /api/v1/report/send", s.console(write, s.sendReportNow))
 	mux.HandleFunc("GET /api/v1/people", s.console(read, s.listPeople))
 	mux.HandleFunc("PUT /api/v1/people/{email}", s.console(write, s.putPerson))
 	mux.HandleFunc("DELETE /api/v1/people/{email}", s.console(write, s.deletePerson))

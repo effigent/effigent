@@ -27,19 +27,25 @@ import (
 // Webhook event types. A new webhook gets the approval events by default;
 // the rest are opt-in: approval.voted is each vote of a two-person
 // request before the last, action.blocked can be busy (a kernel block per
-// attempt), pricing_leaks.runaway_cost is for whoever watches spend, and
-// endpoint.offline/online fire every time a laptop sleeps.
+// attempt), pricing_leaks.runaway_cost is for whoever watches spend,
+// endpoint.offline/online fire every time a laptop sleeps, and
+// anomaly.first_seen is each first-seen behaviour signal.
 var webhookEvents = []string{
 	"approval.requested", "approval.decided", "approval.voted", "action.blocked",
 	"endpoint.enrolled", "endpoint.revoked", "policy.published", "policy.proposed",
 	"pricing_leaks.runaway_cost",
 	"endpoint.hooks_missing", "endpoint.offline", "endpoint.online",
+	"anomaly.first_seen",
 }
+
+// cappedEvents get at most webhookCap deliveries per webhook per minute.
+var cappedEvents = map[string]bool{"action.blocked": true, "anomaly.first_seen": true}
 
 var defaultWebhookEvents = []string{"approval.requested", "approval.decided"}
 
-// webhookCap is how many action.blocked events per minute one webhook
-// receives; the rest are counted as dropped (shown in the console).
+// webhookCap is how many action.blocked (and, separately,
+// anomaly.first_seen) events per minute one webhook receives; the rest are
+// counted as dropped (shown in the console).
 const webhookCap = 60
 
 // ---- API keys (console, people only) ----
@@ -263,8 +269,9 @@ func (s *Server) emit(ctx context.Context, tenant, typ string, data any) {
 		if !h.Enabled || !slices.Contains(h.Events, typ) {
 			continue
 		}
-		// Only the noisy event is capped: approvals and the rest always go out.
-		if typ == "action.blocked" && !s.webhookLimiter().allow(h.ID) {
+		// Only the noisy events are capped (each its own budget): approvals
+		// and the rest always go out.
+		if cappedEvents[typ] && !s.webhookLimiter().allow(h.ID+"|"+typ) {
 			_ = s.Store.AddWebhookDropped(ctx, h.ID, 1)
 			continue
 		}
