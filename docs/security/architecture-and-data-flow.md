@@ -102,7 +102,10 @@ sees up to 800 characters of the tool's redacted arguments.
   in AWS Secrets Manager, read by the control plane's IAM role only.
 - **Least privilege on the machine:** effigentd's local API is read-only without a token (agents can
   reach localhost); hooks fail closed when the daemon is unreachable.
-- **Secret redaction on the machine** (gitleaks rule set) before anything leaves it.
+- **Secret redaction on the machine** before anything leaves it: the gitleaks rule set, plus
+  rules for secrets on command lines (`NAME_TOKEN=` assignments, `--password`/`--token` flags,
+  `mysql -p…`, `user:pass@` in URLs, bearer tokens, private-key blocks), plus optional workspace
+  patterns and PII masks (email, phone, card numbers, IBAN) from the policy's `redact:` section.
 - **Rate limits** per IP, per machine and per user; request size limits.
 - **Webhook SSRF protection:** the resolved address is checked at connect time.
 
