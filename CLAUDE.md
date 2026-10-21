@@ -587,7 +587,7 @@ Full write-up, vendor research with links: `docs/cloud-agents.md`.
   (toolArgs as a JSON string, Copilot tool names) and `PreToolUse` (Claude's shape). Its answer is the
   flat `permissionDecision` plus `hookSpecificOutput`.
 - **Hook socket for containers** (`internal/endpoint/peer`, `api/socket.go`, `cmd/effigentd/hooksocket.go`):
-  - `effigentd -hook-socket /var/run/effigent/hook.sock` serves only `POST /hook/{agent}` + `GET /health`,
+  - `effigentd -hook-socket /var/run/effigent/hook.sock` serves only `POST /hook/{agent}`, `POST /hook/{agent}/result` + `GET /health`,
     mode 0666. Helm `hookSocket.enabled` (default on, hostPath `/var/run/effigent`); compose mounts
     `${EFFIGENT_HOOK_DIR:-/var/run/effigent}`.
   - `effigentd hook` picks the transport in this order: `EFFIGENT_HOOK_SOCKET`, `EFFIGENT_DAEMON_URL`
@@ -604,7 +604,7 @@ Full write-up, vendor research with links: `docs/cloud-agents.md`.
   - `cloudtoken_test.go`, `hooks/copilot_test.go`, `cmd/effigentd/remote_test.go`
   - `peer_test.go`, `cred_linux_test.go`, `socket_linux_test.go` (Linux)
   - `test/hooks/remote.sh` (32 checks: real hook binary, local control plane)
-  - `test/hooks/cloudsetup.sh` (9 checks: setup script + wrapper in a Linux container, root setup,
+  - `test/hooks/cloudsetup.sh` (10 checks: setup script + wrapper in a Linux container, root setup,
     non-root agent)
   - `test/containers/hooksock.sh` (kind without Tetragon: socket deny / approval / kernel identity;
     passed 2026-10-22)

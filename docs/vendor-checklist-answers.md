@@ -330,18 +330,55 @@ A Windmill integration (resource type, scripts, Slack/Teams approval flow) is in
 weren't exercised. Windmill workers running an agent can be enrolled like any Linux host.
 Effigent doesn't inspect a workflow's definition.
 
-### 10. Cloud-hosted agents: **No**
-Not covered: Claude Code on the web, Codex cloud, Copilot coding agent and Cursor background
-agents run on the vendor's infrastructure. Effigent covers endpoints, CI runners and Kubernetes
-nodes you control (Helm chart, Docker image).
+### 10. Cloud-hosted agents: **Partly** (new): Claude Code on the web, Copilot coding agent, Cursor background agents
+These agents run on the vendor's machines, where effigentd can't be installed as a daemon. They
+do run the hooks committed in the repository, so Effigent goes there:
+- **Cloud environment:** made in the console (Enforcement → Cloud environments). It is a
+  workspace machine with no enrollment step. Its `efc_` token is set as a secret in the
+  vendor's environment settings.
+- **Remote hook mode:** `effigentd hook <agent> --remote` decides inside the hook process.
+  - It uses the environment's signed policy, cached for 60 seconds.
+  - It runs the same evaluator as a machine, including approvals, which long-poll the
+    control plane.
+  - Events are sent before it answers.
+  - No policy means deny.
+- **Setup:** `https://effigent.ai/cloud-setup.sh` runs in the vendor's setup step: download,
+  checksum, cache the policy. A small wrapper, `.effigent/cloud-hook.sh`, is committed with the
+  repo's hook config. It acts only in a cloud session, so a developer's laptop keeps using its
+  local daemon.
+- **Per vendor:**
+  - **Claude Code on the web:** runs the repo's `.claude/settings.json` hooks.
+  - **Copilot coding agent:** `.github/hooks/*.json` plus `copilot-setup-steps.yml`. Copilot lets
+    a call run when its hook times out, so our budget there is 20 seconds.
+  - **Cursor background agents:** `.cursor/hooks.json`.
+- **Gaps:**
+  - Codex cloud and Devin aren't covered: they have no repo hooks we can use.
+  - The token is readable by the agent in the environment. It can only fetch that
+    environment's policy and post its events. It can't approve anything.
+  - Someone who can change the repo or the vendor settings can remove the hook, as with any
+    repo-level control.
+- **Verified:**
+  - `test/hooks/remote.sh` (32 checks): a real hook binary against a local control plane,
+    covering deny, approval, offline cache, revoked token, events and spool.
+  - `test/hooks/cloudsetup.sh` (10 checks): the setup script and wrapper in a Linux container.
+  - **Not yet run inside any vendor's live environment.** Vendor behaviour comes from their docs;
+    links are in `docs/cloud-agents.md`.
 
-### 11. Containers and remote environments: **Partly**
-- **Docker hosts and Kubernetes nodes:** kernel enforcement covers agents in containers, via the
-  DaemonSet / compose. One policy per node, and paths are the container's.
-- **Hooks don't work inside containers:** they can't reach the node's daemon, so approvals and
-  command/tool rules don't apply there.
+### 11. Containers and remote environments: **Yes** for Docker / Kubernetes (new), **Partly** elsewhere
+- **Kernel layer:** covers agents in containers on Docker hosts and Kubernetes nodes, via the
+  DaemonSet / compose. One policy per node; paths are the container's.
+- **Hooks inside containers (new):** effigentd serves its hook API on a unix socket,
+  `/var/run/effigent/hook.sock`. It is on by default in the Helm chart and mounted into agent
+  pods/containers.
+  - The caller is identified by the kernel, not by what the request says: peer credentials, the
+    cgroup's container and pod, and the user from the container's own `/etc/passwd`.
+  - Files are read inside the container's file system.
+  - Approvals and command / tool / MCP rules now apply to agents in containers, and events name
+    the pod.
+  - Verified on kind (`test/containers/hooksock.sh`: deny, approval and kernel identity). That
+    run had no Tetragon, so it didn't check the pod name taken from Tetragon events.
 - **Devcontainers and remote SSH / cloud dev boxes:** covered when effigentd runs on that Linux
-  host.
+  host, or through the socket when it runs on the container host.
 - **WSL:** not verified.
 - **Claude Cowork's VM:** not enforceable; reported as "not under policy".
 
@@ -580,13 +617,31 @@ against a 30-day baseline. A new agent learns silently for 7 days first. Optiona
 **Limits:** anyone with `s3:PutObjectLegalHold` on the AWS side can lift a hold, and a hold
 doesn't reach files people already downloaded or data webhook receivers hold.
 
-### 28. SOC 2, self-hosting, redaction: **Partly**
+### 28. SOC 2, self-hosting, redaction: **Yes** for self-hosting and redaction, **No** for SOC 2 (in progress)
 - **SOC 2:** not certified. A gap list and plan is in `docs/compliance/soc2-plan.md` (Vanta or
   Drata; Type I in about 2–3 months, Type II in about 6–9). Until then we answer
   questionnaires (SIG Lite, CAIQ) directly.
-- **Self-hosted:** the control plane is one Go binary on Postgres, with a published Docker image
-  for effigentd. Running the control plane in your own infrastructure is on the roadmap, not
-  offered.
+- **Self-hosted (new):** the control plane and console run in your own infrastructure.
+  - **Packaging:** a Helm chart (`effigent-cp`) or Docker compose with Caddy.
+  - **Sign-in:** your OIDC provider (Okta, Entra ID, Keycloak, …) instead of Clerk.
+    - Roles come from your groups, or from listed admin emails.
+    - Only verified emails are used.
+  - **Private CA:** effigentd accepts one (`enroll --ca-file`).
+  - **Archive:** any S3-compatible store.
+  - **Limits:**
+    - One workspace per install.
+    - No SCIM: the member list is the people who signed in during the last 30 days.
+    - The installer doesn't pass the CA file yet, so enrollment with a private CA is a manual
+      step for now.
+  - **Verified:** on kind with Dex standing in for the IdP (19 checks). The checks cover:
+    - sign-in through the console
+    - the role read from the token
+    - an admin publishing a policy
+    - effigentd enrolling with a private CA and syncing it
+    - the signing key surviving an upgrade
+
+    Not yet tried with a real Okta, Entra or Keycloak tenant. The images and chart are not
+    published yet.
 - **Redaction (new):** gitleaks, plus rules for what gitleaks misses on command lines:
   - `NAME_TOKEN=` / `DB_PASSWORD=` assignments
   - `--password` / `--token` flags
