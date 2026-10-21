@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/effigent/effigent/internal/controlplane/inventory"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -23,30 +24,51 @@ const eventGenesis = "genesis"
 // idempotent: a batch sent again (a retry, a replay from the endpoint's disk
 // spool) is not stored twice, and the answer is the same.
 func (s *Store) IngestBatch(ctx context.Context, tenant, endpointID, clientBatchID string, evs []Event) (accepted int, duplicate bool, err error) {
+	r, err := s.Ingest(ctx, tenant, endpointID, clientBatchID, evs)
+	return r.Accepted, r.Duplicate, err
+}
+
+// IngestResult is what storing a batch did: how many events, whether it was
+// a replay, and the first-seen signals it raised (migration 017).
+type IngestResult struct {
+	Accepted  int
+	Duplicate bool
+	Anomalies []Anomaly
+}
+
+// Ingest is IngestBatch with the batch's first-seen signals.
+func (s *Store) Ingest(ctx context.Context, tenant, endpointID, clientBatchID string, evs []Event) (IngestResult, error) {
+	var res IngestResult
+	n, dup, anomalies, err := s.ingest(ctx, tenant, endpointID, clientBatchID, evs)
+	res.Accepted, res.Duplicate, res.Anomalies = n, dup, anomalies
+	return res, err
+}
+
+func (s *Store) ingest(ctx context.Context, tenant, endpointID, clientBatchID string, evs []Event) (accepted int, duplicate bool, anomalies []Anomaly, err error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return 0, false, err
+		return 0, false, nil, err
 	}
 	defer tx.Rollback(ctx)
 	// one chain per endpoint: its batches are serialized, other endpoints aren't
 	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtext('cp.events:' || $1))`, endpointID); err != nil {
-		return 0, false, err
+		return 0, false, nil, err
 	}
 	var n int
 	err = tx.QueryRow(ctx, `select count from cp.event_batches where endpoint_id = $1 and client_batch_id = $2`, endpointID, clientBatchID).Scan(&n)
 	if err == nil {
-		return n, true, nil
+		return n, true, nil, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, err
+		return 0, false, nil, err
 	}
 	prev := eventGenesis
 	err = tx.QueryRow(ctx, `select hash from cp.event_batches where endpoint_id = $1 order by id desc limit 1`, endpointID).Scan(&prev)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, err
+		return 0, false, nil, err
 	}
 	var batchID int64
 	if err := tx.QueryRow(ctx, `select nextval('cp.event_batches_id_seq')`).Scan(&batchID); err != nil {
-		return 0, false, err
+		return 0, false, nil, err
 	}
 	if len(evs) > 0 {
 		b := &pgx.Batch{}
@@ -55,7 +77,7 @@ func (s *Store) IngestBatch(ctx context.Context, tenant, endpointID, clientBatch
 				values ($1,$2,$3,$4,$5,$6,$7,$8)`, tenant, endpointID, e.Time, e.Type, e.Severity, e.Agent, e.Body, batchID)
 		}
 		if err := tx.SendBatch(ctx, b).Close(); err != nil {
-			return 0, false, err
+			return 0, false, nil, err
 		}
 		// daily activity per machine, agent and person (Pricing Leaks, People)
 		if _, err := tx.Exec(ctx, `insert into cp.agent_activity_daily as d
@@ -68,7 +90,19 @@ func (s *Store) IngestBatch(ctx context.Context, tenant, endpointID, clientBatch
 			on conflict (tenant_ref, endpoint_id, day, agent, os_user, git_email, model) do update
 			set events = d.events + excluded.events, first_at = least(d.first_at, excluded.first_at), last_at = greatest(d.last_at, excluded.last_at)`,
 			batchID); err != nil {
-			return 0, false, err
+			return 0, false, nil, err
+		}
+		// agents, MCP servers and enforcement outcomes (migration 016)
+		if err := rollupInventory(ctx, tx, batchID); err != nil {
+			return 0, false, nil, err
+		}
+		// behaviour baselines and first-seen signals (migration 017)
+		ins := make([]inventory.Event, len(evs))
+		for i, e := range evs {
+			ins[i] = inventory.Event{Time: e.Time, Type: e.Type, Agent: clipAgent(e.Agent), Body: e.Body}
+		}
+		if anomalies, err = applyBaselines(ctx, tx, tenant, endpointID, inventory.Extract(ins)); err != nil {
+			return 0, false, nil, err
 		}
 	}
 	// hashes are computed by Postgres from what it stored, the same way VerifyEvents recomputes them
@@ -77,9 +111,17 @@ func (s *Store) IngestBatch(ctx context.Context, tenant, endpointID, clientBatch
 		select $1, $2, $3, $4, s.r, s.f, s.l, s.n, s.c, $5, cp.event_batch_hash($2, $3, $4, s.r, s.f, s.l, s.n, s.c, $5) from s`,
 		batchID, tenant, endpointID, clientBatchID, prev)
 	if err != nil {
-		return 0, false, err
+		return 0, false, nil, err
 	}
-	return len(evs), false, tx.Commit(ctx)
+	return len(evs), false, anomalies, tx.Commit(ctx)
+}
+
+// clipAgent is the agent name as the rollups store it (left(agent, 120)).
+func clipAgent(a string) string {
+	if r := []rune(a); len(r) > 120 {
+		return string(r[:120])
+	}
+	return a
 }
 
 // EventQuery filters and pages GET /api/v1/events. Zero values mean no filter.
