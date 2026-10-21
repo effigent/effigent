@@ -150,3 +150,28 @@ func TestHTTPSpool(t *testing.T) {
 	waitFor(t, "replay after restart", func() bool { return be4.events() == 7 })
 	h5.Close()
 }
+
+// A backend that hangs can't hold a stopping daemon past CloseTimeout: the
+// last batch goes to the spool instead.
+func TestHTTPCloseTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	dir := t.TempDir()
+	h := NewHTTP(HTTPConfig{URL: srv.URL, Interval: time.Hour, SpoolDir: dir, CloseTimeout: 200 * time.Millisecond})
+	h.Write(event.Event{Time: time.Now(), Type: event.DaemonStop, Severity: "high"})
+	start := time.Now()
+	h.Close()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("close took %v", d)
+	}
+	if h.Spooled() != 1 {
+		t.Fatalf("spooled %d", h.Spooled())
+	}
+}

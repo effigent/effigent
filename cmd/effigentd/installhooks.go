@@ -10,51 +10,9 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/effigent/effigent/internal/endpoint/hookstate"
 	"github.com/pelletier/go-toml/v2"
 )
-
-// managedSettingsPath is where Claude Code reads machine-wide settings that
-// users can't override (IT/MDM-managed).
-func managedSettingsPath() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "/Library/Application Support/ClaudeCode/managed-settings.json"
-	case "windows":
-		return `C:\Program Files\ClaudeCode\managed-settings.json`
-	default:
-		return "/etc/claude-code/managed-settings.json"
-	}
-}
-
-// codexRequirementsPath is Codex CLI's admin-managed requirements file
-// (0.124+): hooks there are trusted, can't be disabled by the user, and a
-// managed hook that fails to load stops Codex from starting.
-func codexRequirementsPath() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(programData(), "OpenAI", "Codex", "requirements.toml")
-	}
-	return "/etc/codex/requirements.toml"
-}
-
-// geminiSystemSettingsPath is Gemini CLI's system settings file, applied
-// after user and workspace settings.
-func geminiSystemSettingsPath() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "/Library/Application Support/GeminiCli/settings.json"
-	case "windows":
-		return filepath.Join(programData(), "gemini-cli", "settings.json")
-	default:
-		return "/etc/gemini-cli/settings.json"
-	}
-}
-
-func programData() string {
-	if pd := os.Getenv("ProgramData"); pd != "" {
-		return pd
-	}
-	return `C:\ProgramData`
-}
 
 // hookTimeout: the daemon answers in milliseconds, except while a call waits
 // for an approver (up to 90s; `effigentd hook` gives up at 100s).
@@ -65,10 +23,11 @@ const hookTimeout = 120
 // else in the files. Re-running replaces our entry instead of adding another.
 func installHooksCmd(args []string) {
 	fs := flag.NewFlagSet("install-hooks", flag.ExitOnError)
-	agents := fs.String("agents", "claude,codex,gemini", "agents to hook (comma-separated: claude, codex, gemini)")
-	claudeFile := fs.String("file", managedSettingsPath(), "Claude Code managed settings file")
-	codexFile := fs.String("codex-file", codexRequirementsPath(), "Codex requirements file")
-	geminiFile := fs.String("gemini-file", geminiSystemSettingsPath(), "Gemini CLI system settings file")
+	agents := fs.String("agents", "claude,codex,gemini,cursor", "agents to hook (comma-separated: claude, codex, gemini, cursor)")
+	claudeFile := fs.String("file", hookstate.ClaudeFile(), "Claude Code managed settings file")
+	codexFile := fs.String("codex-file", hookstate.CodexFile(), "Codex requirements file")
+	geminiFile := fs.String("gemini-file", hookstate.GeminiFile(), "Gemini CLI system settings file")
+	cursorFile := fs.String("cursor-file", hookstate.CursorFile(), "Cursor enterprise hooks.json")
 	exclusive := fs.Bool("exclusive", false, "also make the agents ignore users' own hooks (Claude Code, Codex)")
 	remove := fs.Bool("remove", false, "remove effigentd's hooks instead of adding them")
 	_ = fs.Parse(args)
@@ -88,10 +47,12 @@ func installHooksCmd(args []string) {
 			msg, err = installCodex(*codexFile, hookCommand(self, a), *exclusive, *remove)
 		case "gemini":
 			msg, err = installGemini(*geminiFile, hookCommand(self, a), *remove)
+		case "cursor":
+			msg, err = installCursor(*cursorFile, hookCommand(self, a), *remove)
 		case "":
 			continue
 		default:
-			err = fmt.Errorf("unknown agent %q (claude, codex, gemini)", a)
+			err = fmt.Errorf("unknown agent %q (claude, codex, gemini, cursor)", a)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "effigentd: %s: %v\n", a, err)
@@ -245,6 +206,48 @@ func installGemini(file, command string, remove bool) (string, error) {
 	return "Gemini CLI (0.27+) will check every tool call with effigentd (" + file + ")", nil
 }
 
+// ---- Cursor: enterprise hooks.json (IDE and CLI) ----
+
+func installCursor(file, command string, remove bool) (string, error) {
+	cfg, err := readJSON(file)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := cfg["version"]; !ok {
+		cfg["version"] = 1
+	}
+	hooksMap, _ := cfg["hooks"].(map[string]any)
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+	for _, ev := range hookstate.CursorEvents {
+		var kept []any
+		list, _ := hooksMap[ev].([]any)
+		for _, h := range list {
+			if hm, _ := h.(map[string]any); hm != nil {
+				if c, _ := hm["command"].(string); hookstate.IsHookCmd(c, "cursor") {
+					continue
+				}
+			}
+			kept = append(kept, h)
+		}
+		if !remove {
+			// failClosed: a crash, timeout or empty answer blocks the call
+			// (Cursor's default is to let it run).
+			kept = append(kept, map[string]any{"command": command, "timeout": hookTimeout, "failClosed": true})
+		}
+		setOrDelete(hooksMap, ev, kept)
+	}
+	setOrDelete(cfg, "hooks", hooksMap)
+	if err := writeJSON(file, cfg); err != nil {
+		return "", err
+	}
+	if remove {
+		return "removed effigentd's Cursor hooks from " + file, nil
+	}
+	return "Cursor will check shell commands, MCP calls, file reads and other tool calls with effigentd (" + file + ")", nil
+}
+
 // ---- helpers ----
 
 // withoutOurs returns an event's hook groups minus the ones running
@@ -260,48 +263,11 @@ func withoutOurs(groups any, agent string) []any {
 		}
 	}
 	for _, g := range list {
-		if !isOurs(g, agent) {
+		if !hookstate.IsOurs(g, agent) {
 			kept = append(kept, g)
 		}
 	}
 	return kept
-}
-
-// isOurs reports whether a hook group runs `effigentd hook <agent>`.
-func isOurs(g any, agent string) bool {
-	m, _ := g.(map[string]any)
-	var hs []any
-	switch v := m["hooks"].(type) {
-	case []any:
-		hs = v
-	case []map[string]any:
-		for _, h := range v {
-			hs = append(hs, h)
-		}
-	}
-	for _, h := range hs {
-		hm, _ := h.(map[string]any)
-		if c, _ := hm["command"].(string); c != "" && isHookCmd(c, agent) {
-			return true
-		}
-	}
-	return false
-}
-
-func isHookCmd(c, agent string) bool {
-	bin, ok := strings.CutSuffix(c, " hook "+agent)
-	if !ok {
-		return false
-	}
-	base := filepath.Base(strings.ReplaceAll(trimQuotes(bin), `\`, "/"))
-	return base == "effigentd" || base == "effigentd.exe"
-}
-
-func trimQuotes(s string) string {
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		return s[1 : len(s)-1]
-	}
-	return s
 }
 
 func setOrDelete(m map[string]any, k string, v any) {

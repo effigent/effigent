@@ -11,6 +11,14 @@ import (
 // serviceStop is closed when Windows asks the service to stop.
 var serviceStop = make(chan struct{})
 
+// serviceMode: started by the Service Control Manager; serviceStopWhy is
+// what it asked for ("service stop" or "system shutdown"), set before
+// serviceStop is closed.
+var (
+	serviceMode    bool
+	serviceStopWhy string
+)
+
 // runAsServiceIfNeeded runs daemon under the Service Control Manager when
 // Windows started us as a service, and reports whether it did.
 func runAsServiceIfNeeded(daemon func()) bool {
@@ -18,6 +26,7 @@ func runAsServiceIfNeeded(daemon func()) bool {
 	if err != nil || !is {
 		return false
 	}
+	serviceMode = true
 	_ = svc.Run("effigentd", &winService{daemon: daemon})
 	return true
 }
@@ -37,6 +46,10 @@ func (w *winService) Execute(_ []string, req <-chan svc.ChangeRequest, st chan<-
 				st <- c.CurrentStatus
 			case svc.Stop, svc.Shutdown:
 				st <- svc.Status{State: svc.StopPending}
+				serviceStopWhy = "service stop"
+				if c.Cmd == svc.Shutdown {
+					serviceStopWhy = "system shutdown"
+				}
 				close(serviceStop)
 				select {
 				case <-done:

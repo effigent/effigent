@@ -16,16 +16,25 @@ type SessionMeta struct {
 	Model          string
 }
 
-// Meta reads the session fields of any of the three agents' hook payloads.
+// Meta reads the session fields of any of the agents' hook payloads (Cursor
+// says conversation_id and workspace_roots instead).
 func Meta(raw []byte) SessionMeta {
 	var in struct {
 		SessionID      string          `json:"session_id"`
+		Conversation   string          `json:"conversation_id"`
 		Cwd            string          `json:"cwd"`
+		WorkspaceRoots []string        `json:"workspace_roots"`
 		TranscriptPath string          `json:"transcript_path"`
 		Model          json.RawMessage `json:"model"`
 	}
-	if json.Unmarshal(raw, &in) != nil {
+	if json.Unmarshal(cursorBOM(raw), &in) != nil {
 		return SessionMeta{}
+	}
+	if in.SessionID == "" {
+		in.SessionID = in.Conversation
+	}
+	if in.Cwd == "" && len(in.WorkspaceRoots) > 0 {
+		in.Cwd = in.WorkspaceRoots[0]
 	}
 	return SessionMeta{SessionID: cut(in.SessionID, 200), Cwd: in.Cwd, TranscriptPath: cut(in.TranscriptPath, 1024), Model: cut(model(in.Model), 120)}
 }

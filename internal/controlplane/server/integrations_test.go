@@ -33,7 +33,10 @@ func TestDefaultWebhookEvents(t *testing.T) {
 	if !slices.Contains(webhookEvents, spendAlertEvent) {
 		t.Fatalf("%s must be a webhook event one can subscribe to", spendAlertEvent)
 	}
-	for _, e := range []string{spendAlertEvent, "action.blocked"} {
+	for _, e := range []string{spendAlertEvent, "action.blocked", "endpoint.hooks_missing", "endpoint.offline", "endpoint.online"} {
+		if !slices.Contains(webhookEvents, e) {
+			t.Errorf("%s must be a webhook event one can subscribe to", e)
+		}
 		if slices.Contains(defaultWebhookEvents, e) {
 			t.Errorf("%s must be opt-in, not a default webhook event", e)
 		}

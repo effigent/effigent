@@ -104,11 +104,19 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endp
 	var req struct {
 		PolicyVersion int64  `json:"policy_version"`
 		Version       string `json:"version"`
+		// effigentd's hook state, sent when it changed (older builds never send it)
+		Hooks json.RawMessage `json:"hooks"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req)
 	if err := s.Store.Heartbeat(r.Context(), ep.ID, req.PolicyVersion, clip(req.Version, 64)); err != nil {
 		s.fail(w, err)
 		return
+	}
+	if len(req.Hooks) > 0 {
+		if err := s.reportHooks(r.Context(), ep, req.Hooks); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -158,6 +166,19 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 			if e.Type == "blocked" || e.Type == "approval_denied" {
 				s.emit(r.Context(), ep.Tenant, "action.blocked", map[string]any{"endpoint_id": ep.ID, "hostname": ep.Hostname,
 					"event": json.RawMessage(e.Body)})
+			}
+			if e.Type == "daemon_stop" {
+				// the offline detector tells "stopped" from "went silent" by it
+				var body struct {
+					Target string `json:"target"` // the signal
+					Rule   string `json:"rule"`   // how it was run: systemd, launchd, windows-service, terminal
+					OSUser string `json:"os_user"`
+				}
+				_ = json.Unmarshal(e.Body, &body)
+				b, _ := json.Marshal(stopInfo{Signal: clip(body.Target, 40), Via: clip(body.Rule, 40), OSUser: clip(body.OSUser, 120)})
+				if err := s.Store.RecordEndpointStop(r.Context(), ep.ID, e.Time, b); err != nil {
+					s.Logf("endpoint %s: record stop: %v", ep.ID, err)
+				}
 			}
 		}
 	}

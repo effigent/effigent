@@ -31,6 +31,7 @@ type hookAgent struct {
 	parse      func([]byte) (hooks.Call, error)
 	output     func(hooks.Decision) []byte
 	failClosed func(string) []byte
+	slim       func([]byte) []byte // drops bulky fields the daemon never reads (nil: send as is)
 }
 
 // hookAgents is keyed by the name in `effigentd hook <name>` and POST /hook/{name}.
@@ -44,6 +45,9 @@ var hookAgents = map[string]hookAgent{
 	// Codex answers like Claude Code: its PreToolUse accepts the same deny JSON.
 	"codex":  {name: "codex", label: "Codex", parse: hooks.ParseCodex, output: hooks.ClaudeOutput, failClosed: hooks.FailClosed},
 	"gemini": {name: "gemini-cli", label: "Gemini CLI", parse: hooks.ParseGemini, output: hooks.GeminiOutput, failClosed: hooks.GeminiFailClosed},
+	// Cursor's IDE and CLI share hooks.json and send no field that tells them apart: one policy agent.
+	"cursor": {name: "cursor-agent", label: "Cursor", parse: hooks.ParseCursor, output: hooks.CursorOutput, failClosed: hooks.CursorFailClosed,
+		slim: hooks.CursorSlim},
 }
 
 // hookHandler answers POST /hook/{agent} on the local API. cp is nil when
@@ -59,6 +63,9 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		call, err := ag.parse(c.Payload)
 		if err != nil {
 			return ag.failClosed("the hook input could not be read"), nil
+		}
+		if call.Skip {
+			return ag.output(hooks.Decision{}), nil
 		}
 		who := hookIdentity(c)
 		env := hooks.CleanAgentEnv(c.Env)
@@ -322,14 +329,21 @@ func severity(t event.Type) string {
 // get a free pass because effigentd was stopped.
 func hookCmd(args []string) {
 	if len(args) < 1 || hookAgents[args[0]].parse == nil {
-		fmt.Fprintln(os.Stderr, "usage: effigentd hook claude|codex|gemini   (reads the agent's pre-tool hook JSON on stdin)")
+		fmt.Fprintln(os.Stderr, "usage: effigentd hook claude|codex|gemini|cursor   (reads the agent's pre-tool hook JSON on stdin)")
 		os.Exit(2)
 	}
 	ag := hookAgents[args[0]]
-	payload, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	limit := int64(1 << 20)
+	if ag.slim != nil {
+		limit = 64 << 20 // Cursor sends the whole file it is about to read; slim drops it
+	}
+	payload, err := io.ReadAll(io.LimitReader(os.Stdin, limit))
 	if err != nil {
 		os.Stdout.Write(ag.failClosed("the hook input could not be read"))
 		return
+	}
+	if ag.slim != nil {
+		payload = ag.slim(payload)
 	}
 	addr := os.Getenv("EFFIGENT_API")
 	if addr == "" {

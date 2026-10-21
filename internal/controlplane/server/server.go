@@ -48,6 +48,11 @@ type Server struct {
 	// SpendRollupEvery: how often each tenant's report is rolled up (and its
 	// runaway cost alerts checked) when its data hasn't changed (default 1h).
 	SpendRollupEvery time.Duration
+	// OfflineAfter: how long a machine may be silent before it is reported
+	// offline where the tenant set nothing (EFFIGENT_ENDPOINT_OFFLINE_AFTER,
+	// default 5m, at least 2m). HealthTick: how often that is checked (1m).
+	OfflineAfter time.Duration
+	HealthTick   time.Duration
 
 	limits         *limits
 	whOnce         sync.Once
@@ -83,8 +88,9 @@ func (s *Server) Handler() http.Handler {
 					s.runRetention(context.Background())
 				}
 			}()
-			go s.runSpendSyncs(context.Background())   // Pricing Leaks: nightly vendor syncs
-			go s.runSpendRollups(context.Background()) // ...report history and runaway cost alerts
+			go s.runSpendSyncs(context.Background())     // Pricing Leaks: nightly vendor syncs
+			go s.runSpendRollups(context.Background())   // ...report history and runaway cost alerts
+			go s.runEndpointHealth(context.Background()) // machines gone silent / back
 		})
 		if s.Auth != nil && s.Auth.APIKeys == nil {
 			s.Auth.APIKeys = func(ctx context.Context, secret string) (string, string, []string, error) {
@@ -117,6 +123,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/endpoints/{id}", s.scoped("endpoints", write, s.revokeEndpoint))
 	mux.HandleFunc("PATCH /api/v1/endpoints/{id}", s.scoped("endpoints", write, s.setEndpointOwner))
 	mux.HandleFunc("GET /api/v1/endpoints/{id}/policy", s.console(read, s.endpointCompiledPolicy))
+	mux.HandleFunc("GET /api/v1/endpoint-health", s.console(read, s.getEndpointHealth))
+	mux.HandleFunc("PUT /api/v1/endpoint-health", s.console(write, s.putEndpointHealth))
 	mux.HandleFunc("GET /api/v1/policy", s.console(read, s.getPolicy))
 	mux.HandleFunc("PUT /api/v1/policy", s.scoped("policy", write, s.putPolicy))
 	mux.HandleFunc("GET /api/v1/policy/history", s.console(read, s.policyHistory))

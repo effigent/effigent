@@ -170,13 +170,24 @@ type Endpoint struct {
 	Revoked       bool       `json:"revoked"`
 	Owner         string     `json:"owner"` // console user id or email; central rules scoped to users match it
 	Teams         []string   `json:"teams"`
+	// Health (migration 014): effigentd's last hook report (nil = never
+	// reported), when the offline detector marked it silent, and its last
+	// daemon_stop.
+	Hooks           json.RawMessage `json:"hooks"`
+	HooksReportedAt *time.Time      `json:"hooks_reported_at"`
+	HooksChangedAt  *time.Time      `json:"hooks_changed_at"`
+	OfflineAt       *time.Time      `json:"offline_at"`
+	StoppedAt       *time.Time      `json:"stopped_at"`
+	Stop            json.RawMessage `json:"stop"`
 }
 
-const endpointCols = `id, tenant_ref, hostname, os, arch, version, enrolled_at, last_seen, policy_version, revoked_at is not null, owner, teams`
+const endpointCols = `id, tenant_ref, hostname, os, arch, version, enrolled_at, last_seen, policy_version, revoked_at is not null, owner, teams,
+	hooks, hooks_reported_at, hooks_changed_at, offline_at, stopped_at, stop`
 
 func scanEndpoint(r pgx.Row) (Endpoint, error) {
 	var e Endpoint
-	err := r.Scan(&e.ID, &e.Tenant, &e.Hostname, &e.OS, &e.Arch, &e.Version, &e.EnrolledAt, &e.LastSeen, &e.PolicyVersion, &e.Revoked, &e.Owner, &e.Teams)
+	err := r.Scan(&e.ID, &e.Tenant, &e.Hostname, &e.OS, &e.Arch, &e.Version, &e.EnrolledAt, &e.LastSeen, &e.PolicyVersion, &e.Revoked, &e.Owner, &e.Teams,
+		&e.Hooks, &e.HooksReportedAt, &e.HooksChangedAt, &e.OfflineAt, &e.StoppedAt, &e.Stop)
 	return e, err
 }
 
