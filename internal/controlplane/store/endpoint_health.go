@@ -66,6 +66,7 @@ func (s *Store) MarkEndpointsOffline(ctx context.Context, defaultAfter time.Dura
 	return s.queryEndpoints(ctx, `update cp.endpoints set offline_at = now() where id in (
 			select e.id from cp.endpoints e left join cp.endpoint_health_settings h on h.tenant_ref = e.tenant_ref
 			where e.revoked_at is null and e.offline_at is null and e.last_seen is not null
+				and e.kind = 'machine' -- cloud environments are only heard while a session runs
 				and e.last_seen < now() - make_interval(secs => coalesce(h.offline_after_seconds, $1))
 			order by e.last_seen limit $2 for update of e skip locked)
 		returning `+endpointCols, int(defaultAfter.Seconds()), limit)
