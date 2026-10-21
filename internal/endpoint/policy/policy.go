@@ -111,6 +111,13 @@ type Rule struct {
 	// Environments is set by effigentd from the policy's top-level
 	// environments, never by policy authors.
 	Environments map[string]Environment `yaml:"-" json:"-"`
+
+	// Model gateway, set by effigentd (RuleFor, the daemon), never by
+	// policy authors: this agent's part of the top-level models section,
+	// and the gateway address agents must be pointed at.
+	Models         ModelRule `yaml:"-" json:"-"`
+	RequireGateway bool      `yaml:"-" json:"-"`
+	GatewayAddr    string    `yaml:"-" json:"-"`
 }
 
 // Environment names the targets that make an action part of an environment
@@ -285,6 +292,8 @@ type Policy struct {
 	// Redact adds masks to the built-in secret redaction, applied on the
 	// machine before any event leaves it.
 	Redact Redaction `yaml:"redact,omitempty"`
+	// Models is enforced by effigentd's local model gateway.
+	Models Models `yaml:"models,omitempty"`
 }
 
 // Redaction is the workspace's own masks: patterns (RE2) for internal ids,
@@ -403,6 +412,9 @@ func (p *Policy) validate() error {
 				}
 			}
 		}
+	}
+	if err := p.Models.check(); err != nil {
+		return err
 	}
 	for i := range p.MCPServers {
 		re, err := regexp.Compile(p.MCPServers[i].Pattern)
@@ -656,6 +668,7 @@ func (p *Policy) RuleFor(agent string) Rule {
 		}
 	}
 	r.Environments = p.Environments
+	r.Models, r.RequireGateway = p.Models.For(agent), p.Models.RequireGateway
 	return r
 }
 
