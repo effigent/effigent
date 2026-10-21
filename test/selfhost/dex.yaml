@@ -1,0 +1,88 @@
+# OIDC stand-in for test/selfhost/kind.sh: Dex with its mock connector, which
+# signs in "Kilgore Trout" <kilgore@kilgore.trout> (groups: authors) without a
+# password prompt. Issuer and redirect URI use the in-cluster service names, so
+# the browser pod, the console and the control plane all see the same URLs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex
+data:
+  config.yaml: |
+    issuer: http://dex.effigent.svc:5556/dex
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    oauth2:
+      skipApprovalScreen: true
+    expiry:
+      idTokens: "10m"
+    staticClients:
+      - id: effigent-console
+        name: Effigent
+        secret: console-secret
+        redirectURIs: ["http://effigent-cp-console.effigent.svc:3000/auth/callback"]
+    connectors:
+      - type: mockCallback
+        id: mock
+        name: Mock
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: dex}
+  template:
+    metadata:
+      labels: {app: dex}
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.41.1
+          imagePullPolicy: IfNotPresent
+          command: ["dex", "serve", "/etc/dex/config.yaml"]
+          ports:
+            - containerPort: 5556
+          readinessProbe:
+            httpGet: {path: /dex/.well-known/openid-configuration, port: 5556}
+            periodSeconds: 2
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex
+      volumes:
+        - name: config
+          configMap:
+            name: dex
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+spec:
+  selector: {app: dex}
+  ports:
+    - port: 5556
+      targetPort: 5556
+---
+# The "browser": signs in through the console with a cookie jar and calls the
+# control plane over TLS with the test CA.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: browser
+spec:
+  containers:
+    - name: curl
+      image: curlimages/curl:8.11.1
+      imagePullPolicy: IfNotPresent
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - name: ca
+          mountPath: /ca
+  volumes:
+    - name: ca
+      configMap:
+        name: selfhost-ca

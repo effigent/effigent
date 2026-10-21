@@ -137,6 +137,7 @@ database:
 postgres:
   enabled: false
   image: postgres:16-alpine
+  pullPolicy: IfNotPresent
   storage: 8Gi
   storageClass: ""
   resources: {}
