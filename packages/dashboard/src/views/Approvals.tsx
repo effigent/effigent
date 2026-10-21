@@ -94,6 +94,9 @@ const RULE_LABEL: Record<string, string> = {
   file_approve: 'File needs approval (file_approve)',
   domain_approve: 'Site needs approval (domain_approve)',
   network_approve: 'Address needs approval (network_approve)',
+  actions_approve: 'Action needs approval (actions_approve)',
+  package_approve: 'Package needs approval (package_approve)',
+  file_write_approve: 'File change needs approval (file_write_approve)',
 };
 
 /** cp approval state -> the console's pill. "used" = approved and run. */

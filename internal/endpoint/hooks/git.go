@@ -103,7 +103,7 @@ func (x *actx) push(rest []string, dir string) {
 		delete   bool
 	}
 	var dests []dest
-	current := func() dest { return dest{branch: currentBranch(dir), inferred: true} }
+	current := func() dest { return dest{branch: currentBranch(x.in, dir), inferred: true} }
 	switch {
 	case hasFlag(rest, "--all", "--branches", "--mirror"):
 		dests = append(dests, dest{branch: "all branches"})
@@ -161,17 +161,14 @@ func withAttr(m map[string]string, k, v string) map[string]string {
 }
 
 // currentBranch reads the checked-out branch from .git/HEAD ("" if
-// detached or not a repository). Worktrees' .git files are followed.
-func currentBranch(dir string) string {
+// detached, not a repository, or not readable by the agent's user).
+// Worktrees' .git files are followed.
+func currentBranch(in ClaudeInput, dir string) string {
 	for range maxWalk {
 		g := path.Join(dir, ".git")
 		if st, err := os.Stat(g); err == nil {
 			if !st.IsDir() {
-				b, err := os.ReadFile(g)
-				if err != nil {
-					return ""
-				}
-				gd, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+				gd, ok := strings.CutPrefix(strings.TrimSpace(readUserText(in, g)), "gitdir:")
 				if !ok {
 					return ""
 				}
@@ -180,11 +177,7 @@ func currentBranch(dir string) string {
 					g = path.Join(dir, g)
 				}
 			}
-			head, err := os.ReadFile(path.Join(g, "HEAD"))
-			if err != nil {
-				return ""
-			}
-			ref, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: refs/heads/")
+			ref, ok := strings.CutPrefix(strings.TrimSpace(readUserText(in, path.Join(g, "HEAD"))), "ref: refs/heads/")
 			if !ok {
 				return ""
 			}

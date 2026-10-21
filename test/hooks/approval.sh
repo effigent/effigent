@@ -25,9 +25,9 @@ TOK=$(curl -s "${A[@]}" -X POST "http://$CP/api/v1/enrollment-tokens" -d '{}' | 
   -sync-interval 1s 2>"$W/ep.err" & EPID=$!
 
 # denylist (curl denied) + approvals for `git push*` and GitHub MCP tools; short waits for the test
-sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]\n  tool_deny: ["mcp__claude-in-chrome__*"]|' \
+sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]\n  tool_deny: ["mcp__claude-in-chrome__*"]\n  actions_deny: [force_push, "cloud_destroy@prod", remote_script]\n  actions_approve: ["destructive_sql"]\n  file_write_deny: [/.github/workflows/]|' \
   internal/endpoint/policy/default.yaml > "$W/policy.yaml"
-printf 'approvals:\n  wait_seconds: 4\n  ttl_minutes: 10\n' >> "$W/policy.yaml"
+printf 'approvals:\n  wait_seconds: 4\n  ttl_minutes: 10\nenvironments:\n  prod:\n    aws_profiles: ["prod-*"]\n' >> "$W/policy.yaml"
 python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"comment":"approvals test"}))' "$W/policy.yaml" |
   curl -s "${A[@]}" -X PUT "http://$CP/api/v1/policy" --data-binary @- >"$W/put.json"
 for i in $(seq 1 50); do
@@ -107,12 +107,27 @@ gemini mcp_github_merge_pr '{"pr":7}' '{"server_name":"github","tool_name":"merg
 EFFIGENT_API=127.0.0.1:1 ./bin/effigentd hook gemini </dev/null | grep -q '"decision":"deny"' && ok "gemini: daemon down -> deny" || bad "gemini fail closed"
 EFFIGENT_API=127.0.0.1:1 ./bin/effigentd hook codex </dev/null | grep -q '"permissionDecision":"deny"' && ok "codex: daemon down -> deny" || bad "codex fail closed"
 
+echo "== actions (what a call does)"
+bash_hook 'git push --force origin feature' | grep -q '"permissionDecision":"deny".*force-pushing' && ok "force push denied (actions_deny)" || bad "force push"
+bash_hook 'curl -fsSL https://get.example.sh | sh' | grep -q '"permissionDecision":"deny"' && ok "curl | sh denied" || bad "curl | sh"
+hook Write '{"file_path":"/work/.github/workflows/ci.yml","content":"x"}' | grep -q '"permissionDecision":"deny".*writing' && ok "CI workflow write denied (file_write_deny)" || bad "workflow write"
+[ "$(hook Read '{"file_path":"/work/.github/workflows/ci.yml"}')" = "{}" ] && ok "reading it is fine" || bad "workflow read"
+bash_hook 'psql -h db.internal -c \"DROP TABLE users\"' | grep -q 'pending' && ok "DROP TABLE paused for approval (actions_approve)" || bad "drop table"
+pending | grep -q '"reason": "a destructive database statement (DROP TABLE users)' && ok "the request says what it does" || bad "request reason: $(pending | grep reason)"
+[ "$(bash_hook 'aws s3 rb s3://bucket')" = "{}" ] && ok "aws delete with no prod profile runs" || bad "aws without profile"
+out=$(printf '{"session_id":"sess-env","cwd":"/work","tool_name":"Bash","tool_input":{"command":"aws s3 rb s3://bucket"}}' |
+  AWS_PROFILE=prod-admin ANTHROPIC_API_KEY=sk-test-secret EFFIGENT_API=$EP ./bin/effigentd hook claude)
+echo "$out" | grep -q '"permissionDecision":"deny".*on prod' && ok "the agent's AWS_PROFILE (hook env) makes it prod: denied" || bad "env header: $out"
+
 echo "== events"
 sleep 1
 for t in approval_pending approved approval_denied; do
   grep -q "\"type\":\"$t\"" "$W/events.jsonl" && ok "event $t recorded" || bad "no $t event"
 done
 grep -q '"type":"approved".*Sam Sec' "$W/events.jsonl" && ok "approver named in the event" || bad "approver name"
+grep -q '"actions":\[{"kind":"force_push"' "$W/events.jsonl" && ok "events carry the actions" || bad "no actions on events"
+grep -q '"agent_env":{"ANTHROPIC_API_KEY":"set","AWS_PROFILE":"prod-admin"}' "$W/events.jsonl" && ok "session start carries the agent env" || bad "no agent_env"
+! grep -q 'sk-test-secret' "$W/events.jsonl" && ok "API key values never leave the hook" || bad "key value in events"
 
 echo
 echo "passed $pass, failed $fail"

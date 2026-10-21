@@ -172,7 +172,7 @@ func askApproval(ctx context.Context, eng *engine.Engine, cp *cpclient.Client, c
 		AgentType: p.agent, OSUser: c.OSUser}
 	res, err := cp.RequestApproval(ctx, cpclient.ApprovalRequest{
 		Fingerprint: action.Fingerprint(actx, p.action), Agent: p.agent, SessionID: p.session, Tool: p.tool,
-		Summary: redact.String(p.summary), Cwd: p.cwd, Rule: d.Rule, Reason: d.Reason, OSUser: c.OSUser,
+		Summary: redact.String(p.summary), Cwd: p.cwd, Rule: d.Rule, Reason: redact.String(d.Reason), OSUser: c.OSUser,
 		TTLMinutes: ap.TTL(), WaitSeconds: int(wait / time.Second),
 	})
 	if err != nil {

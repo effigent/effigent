@@ -112,7 +112,7 @@ export interface ApiApproval {
   tool: string;
   summary: string; // redacted on the endpoint
   cwd: string;
-  rule: string; // exec_approve | command_approve | tool_approve | file_approve | domain_approve | network_approve
+  rule: string; // exec_approve | command_approve | tool_approve | file_approve | domain_approve | network_approve | actions_approve | package_approve | file_write_approve
   reason: string;
   hostname: string;
   os_user: string;

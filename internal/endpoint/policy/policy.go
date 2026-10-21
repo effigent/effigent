@@ -395,6 +395,9 @@ func (p *Policy) validate() error {
 				if _, ok := ActionKinds[kind]; !ok {
 					return fmt.Errorf("actions entry %q: unknown kind %q (one of: %s)", a, kind, strings.Join(kindNames(), ", "))
 				}
+				if kind == "access" && env == "" {
+					return fmt.Errorf("actions entry %q: access matches every cloud, database and named host; name an environment, e.g. access@prod", a)
+				}
 				if _, ok := p.Environments[env]; env != "" && !ok {
 					return fmt.Errorf("actions entry %q: no environment %q under environments", a, env)
 				}
