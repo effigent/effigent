@@ -142,6 +142,47 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   (`/team`). `GET|PUT /api/v1/approval-routing` (audited before/after),
   `POST /api/v1/approval-routing/test` (also takes an unsaved `config`).
 
+- **Requester, second approver, tickets** (migration 012, `server/votes.go`): each route and
+  the routing `default_rules` carry `approvals_required` (1 | 2), `exclude_requester` (missing =
+  true) and `require_ticket`; copied onto the request when it is filed, with its `requester`
+  (`requesterOf`: the machine owner, the people its OS user, hostname or git emails map to in
+  People, and the git emails that OS user used on that machine in 30 days, lower-cased). Every vote (console, email link,
+  Slack) goes through `castVote` → `cp.approval_votes`: decided requests answer
+  `already_decided` first; the requester is refused (`self_approval_refused`, audited
+  `approval.self_approval_refused`, admins included); API keys and the admin token aren't
+  people (`not_a_person`) when 2 are needed; one vote per person
+  (`SamePerson`: voter, user id or a shared email; `already_voted`); approving with
+  `require_ticket` needs `ticket` (a Jira key `ABC-123` or an https link; `ticket_required`).
+  Any deny denies; the request is `approved` only at quorum (an admin override is one vote,
+  never a bypass), so the endpoint keeps waiting until then (`/ep/v1/approvals` returns
+  `approvals`, `approvals_required`, `approved_by`). Console list: `votes`, `can_approve`,
+  `approve_refusal(_message)`, `quorum_warning`; `GET|PUT /approval-routing` return `warnings`
+  (group smaller than its quorum, or exactly 2 with the requester excluded); `/test` takes
+  `hostname`/`endpoint_id`/`os_user` and returns `requester`, `eligible_approvers`,
+  `excluded_members`, `warning`. Tickets link through the tenant's `ticket_url_template`
+  (`PUT /notifications`, https with `{key}`). With `require_ticket`, email and Slack buttons
+  send the approver to the console (a link can't carry a ticket). Webhook `approval.voted` for
+  a vote short of the quorum; the Slack message is updated with "1 of 2" (`chat.update`).
+  The requester check needs `CLERK_SECRET_KEY` to know a console user's emails
+  (`UserEmails`, 2 min cache); without it only user ids and the Slack/email address match.
+
+- **Policy change approval** (migration 013, `server/proposals.go`): per tenant
+  `cp.policy_settings.policy_change_approval`. On, every change that publishes a version —
+  `PUT /policy`, `POST|DELETE /exceptions`, `PATCH /endpoints/{id}` (owner/teams) — is
+  validated as usual (policies dry-run compiled) and filed in `cp.policy_proposals` (202
+  `{pending_approval, proposal, message}`; audit `policy.propose`, webhook `policy.proposed`,
+  email to the notification emails). `GET /api/v1/policy/proposals` (with `stale`,
+  `can_decide`/`why`, `base` for the diff), `POST /policy/proposals/{id}/decision`
+  (`approve` | `reject`; people only: an admin/security_admin who isn't the author nor, for
+  a key-made proposal, the key's creator; refusals audited `policy.self_approval_refused`),
+  `DELETE /policy/proposals/{id}` (author withdraws). Approving claims the proposal first, then
+  applies it exactly as the direct call (re-opened if applying fails on a 5xx, superseded on a
+  4xx). A policy proposal written on an older version is superseded on approval (re-propose);
+  exceptions and owner changes apply on the latest. `GET|PUT /policy/settings`: on applies at
+  once, off is itself a proposal. No break-glass. Expiring exceptions are removed without a
+  proposal (only tightens). Audit `policy.approve|reject|withdraw|supersede`,
+  `policy.settings.update`.
+
 ## 2c. Integrations (API keys, webhooks)
 
 - **API keys** (`efk_…`, sha256 in `cp.api_keys`): scopes `read` (every GET; always
@@ -178,7 +219,29 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   tenant-day in `EFFIGENT_ARCHIVE_BUCKET` (`events/<tenant>/<yyyy>/<mm>/<dd>.jsonl.gz`, size
   checked) → delete in one tx; batch rows stay (`archived_at`), `cp.event_archives` lists days,
   console audit `events.archive`; no bucket or failed upload = nothing deleted. Archived days
-  download via `POST /api/v1/events/archives/{day}/link` (10-min presigned URL, audited).
+  download via `POST /api/v1/events/archives/{day}/link` (10-min presigned URL of the stored
+  `version_id`, audited).
+- **Per-workspace retention and legal hold** (migration 015, `server/retention.go`,
+  `store/retention.go`): `cp.event_retention` — `retention_days` (0 = the control plane's
+  default, else 90…3650) and `legal_hold` + `hold_reason` (required to turn it on).
+  `GET|PUT /api/v1/events/retention` (people, admins write; audit `events.retention.update`,
+  `events.legal_hold.on|off|reason`). On hold: retention skips the tenant (`DueArchiveDays`),
+  `CompleteArchiveDay` refuses under a per-tenant xact lock (`ErrLegalHold`; an object
+  uploaded as the hold landed is put on hold at once), and the `cp.events_guard` trigger refuses
+  any delete of a held tenant's rows. `syncHolds` (after each change, at start and every
+  5 min; session advisory lock, generation counter, `hold_error` kept until it succeeds) puts
+  or lifts an S3 Object Lock legal hold on every version under `events/<tenant>/`
+  (`archive.S3.SetLegalHold`: ListObjectVersions + PutObjectLegalHold; audit
+  `events.legal_hold.sync`). A held object version is never removed by lifecycle rules; a
+  lifecycle expiration still adds a delete marker on top, which is why downloads are pinned
+  to the version. Without an archive bucket the hold only needs the database (nothing is
+  deleted then anyway). IAM: `deploy/aws/set-event-archive.sh` (rerunnable) adds
+  `s3:PutObjectLegalHold`, `s3:GetObjectLegalHold`, `s3:GetObjectVersion`,
+  `s3:ListBucketVersions`. Console: Settings → Event retention & legal hold
+  (`components/EventRetention.tsx`; the older `components/Storage.tsx` is the v1 run storage).
+- **Deploy order for 012/013/015**: control plane (`deploy-cp.sh`; migrations 012, 013, 015)
+  → rerun `deploy/aws/set-event-archive.sh` in CloudShell (legal-hold permissions) → push `main`
+  (console). effigentd needs no upgrade (it already waits while a request is `pending`).
 - Audit trail: `GET /api/v1/audit?paged=1` → `{entries, total, next_before}`; filters
   `action` (comma-separated prefixes), `via` (actor kinds), `actor`, `q` (words, ILIKE over
   action/target/actor/details/ip), `since`/`until` (RFC 3339), cursor `before=<seq>`,
@@ -300,10 +363,26 @@ npm run -w @effigent/site build                     # site
   variables, aliases and tools that connect on their own aren't followed. Agent and MCP
   tools are matched by name: `tool_deny` refuses them (checked first), `tool_approve`
   pauses them. If the daemon is down
-  the hook denies. Approvers: any console admin /
+  the hook denies. Approvers: the routed group's members or any console admin /
   security_admin (central `approval.users/teams` are not enforced yet), from the console
   in Slack via the workspace's Slack app (identity checked, see 2b), or from the signed
-  email buttons.
+  email buttons; a rule can need two different people, keep the requester out and need a
+  ticket. Limits: the requester comes from the machine owner, the hook's OS user (mapped in
+  People) and git emails — the last two are what the machine reports, not verified; API keys
+  and the admin token can't count toward two-person approval and aren't checked as the
+  requester when one approver suffices; the agent's message says only "pending" until the
+  quorum (the "1 of 2" wording would be in effigentd).
+- Policy change approval: there is no break-glass (an emergency change needs a second admin);
+  expiring exceptions are removed without a proposal; a proposal made with an API key can't
+  be approved by the key's creator, but any other admin can. Legal hold: anyone with
+  `s3:PutObjectLegalHold` on the bucket (AWS side) can lift an S3 hold; the hold covers the
+  database and the archive, not copies people downloaded or webhook receivers. Re-archiving a
+  day (rare: events backdated across a day) writes a new version of that day's object; the
+  download links the newest, older versions stay in the bucket.
+- Clerk SSO / SCIM (not built): enterprise SSO (SAML/OIDC) and Directory Sync (SCIM, GA
+  2026-04-16; deprovisioning deactivates the user and revokes sessions) are Clerk features
+  per organization; tying a connection to an org and group→role mapping need Clerk's Enhanced
+  B2B add-on. Nothing in Effigent depends on them; roles still come from org membership.
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
 - Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
   `--agents claude,codex,gemini`, `--remove`, `--exclusive`): each agent's calls are
