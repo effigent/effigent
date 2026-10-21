@@ -246,14 +246,19 @@ type ArchiveDay struct {
 }
 
 // DueArchiveDays lists the tenant-days whose events were all received before
-// cutoff and are still in the database, oldest first.
-func (s *Store) DueArchiveDays(ctx context.Context, cutoff time.Time, limit int) ([]ArchiveDay, error) {
+// the tenant's retention cutoff (its retention_days override, else
+// defaultDays; never under 90 days before now) and are still in the
+// database, oldest first. Tenants under a legal hold are skipped.
+func (s *Store) DueArchiveDays(ctx context.Context, now time.Time, defaultDays, limit int) ([]ArchiveDay, error) {
 	day := func(col string) string { return `date_trunc('day', ` + col + ` at time zone 'UTC')` }
-	rows, err := s.db.Query(ctx, `select tenant_ref, d from (
-			select tenant_ref, `+day("received_at")+` d from cp.event_batches where archived_at is null and received_at < $1
+	rows, err := s.db.Query(ctx, `select x.tenant_ref, d from (
+			select tenant_ref, `+day("received_at")+` d from cp.event_batches where archived_at is null and received_at < $1::timestamptz - interval '90 days'
 			union
-			select tenant_ref, `+day("ingested_at")+` d from cp.events where batch_id is null and ingested_at < $1
-		) x where d + interval '1 day' <= $1 at time zone 'UTC' order by d, tenant_ref limit $2`, cutoff, limit)
+			select tenant_ref, `+day("ingested_at")+` d from cp.events where batch_id is null and ingested_at < $1::timestamptz - interval '90 days'
+		) x left join cp.event_retention r on r.tenant_ref = x.tenant_ref
+		where not coalesce(r.legal_hold, false)
+		  and d + interval '1 day' <= ($1::timestamptz - make_interval(days => greatest(coalesce(nullif(r.retention_days, 0), $2::int), 90))) at time zone 'UTC'
+		order by d, x.tenant_ref limit $3`, now, defaultDays, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -369,14 +374,26 @@ func (s *Store) WriteArchiveDay(ctx context.Context, a ArchiveDay, w io.Writer) 
 }
 
 // CompleteArchiveDay removes an archived tenant-day from the database (the
-// events; the batch records stay, marked archived with the object's key and
-// sha256).
-func (s *Store) CompleteArchiveDay(ctx context.Context, a ArchiveDay, c ArchiveContents, key, sha string, size int64) error {
+// events; the batch records stay, marked archived with the object's key,
+// version and sha256). Under a legal hold it deletes nothing (ErrLegalHold):
+// the check holds the tenant's hold lock, so a hold set while the day was
+// uploading wins.
+func (s *Store) CompleteArchiveDay(ctx context.Context, a ArchiveDay, c ArchiveContents, key, versionID, sha string, size int64) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, holdLock, a.Tenant); err != nil {
+		return err
+	}
+	var hold bool
+	if err := tx.QueryRow(ctx, `select coalesce((select legal_hold from cp.event_retention where tenant_ref = $1), false)`, a.Tenant).Scan(&hold); err != nil {
+		return err
+	}
+	if hold {
+		return ErrLegalHold
+	}
 	if _, err := tx.Exec(ctx, `set local effigent.retention = 'on'`); err != nil {
 		return err
 	}
@@ -403,11 +420,11 @@ func (s *Store) CompleteArchiveDay(ctx context.Context, a ArchiveDay, c ArchiveC
 			return errors.New("legacy events changed while archiving")
 		}
 	}
-	if _, err := tx.Exec(ctx, `insert into cp.event_archives (tenant_ref, day, key, sha256, size, batches, events, legacy)
-		values ($1, $2::date, $3, $4, $5, $6, $7, $8)
+	if _, err := tx.Exec(ctx, `insert into cp.event_archives (tenant_ref, day, key, sha256, size, batches, events, legacy, version_id)
+		values ($1, $2::date, $3, $4, $5, $6, $7, $8, $9)
 		on conflict (tenant_ref, day) do update set key = $3, sha256 = $4, size = $5, batches = cp.event_archives.batches + $6,
-			events = cp.event_archives.events + $7, legacy = cp.event_archives.legacy + $8, archived_at = now()`,
-		a.Tenant, a.Day, key, sha, size, len(c.BatchIDs), c.Events, c.Legacy); err != nil {
+			events = cp.event_archives.events + $7, legacy = cp.event_archives.legacy + $8, version_id = $9, archived_at = now()`,
+		a.Tenant, a.Day, key, sha, size, len(c.BatchIDs), c.Events, c.Legacy, versionID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -444,14 +461,14 @@ func (s *Store) ListArchives(ctx context.Context, tenant string) ([]EventArchive
 	return out, rows.Err()
 }
 
-// ArchiveKeyOf returns the S3 key of one of the tenant's archived days.
-func (s *Store) ArchiveKeyOf(ctx context.Context, tenant, day string) (string, error) {
-	var key string
-	err := s.db.QueryRow(ctx, `select key from cp.event_archives where tenant_ref = $1 and day = $2::date`, tenant, day).Scan(&key)
+// ArchiveKeyOf returns the S3 key and version ("" = written before versions
+// were recorded) of one of the tenant's archived days.
+func (s *Store) ArchiveKeyOf(ctx context.Context, tenant, day string) (key, versionID string, err error) {
+	err = s.db.QueryRow(ctx, `select key, version_id from cp.event_archives where tenant_ref = $1 and day = $2::date`, tenant, day).Scan(&key, &versionID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNotFound
+		return "", "", ErrNotFound
 	}
-	return key, err
+	return key, versionID, err
 }
 
 // RetentionLock holds the cluster-wide retention lock until release is

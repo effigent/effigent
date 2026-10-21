@@ -78,9 +78,15 @@ func (s *Server) Handler() http.Handler {
 			}()
 			go func() { // events past retention move to the archive
 				s.checkArchive(context.Background())
+				s.syncHolds(context.Background())
 				s.runRetention(context.Background())
 				for range time.Tick(time.Hour) {
 					s.runRetention(context.Background())
+				}
+			}()
+			go func() { // archive objects follow their tenant's legal hold (retried until done)
+				for range time.Tick(5 * time.Minute) {
+					s.syncHolds(context.Background())
 				}
 			}()
 			go s.runSpendSyncs(context.Background())   // Pricing Leaks: nightly vendor syncs
@@ -130,6 +136,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/events", s.console(read, s.listEvents))
 	mux.HandleFunc("GET /api/v1/events/verify", s.console(read, s.verifyEvents))
 	mux.HandleFunc("GET /api/v1/events/archives", s.console(read, s.listEventArchives))
+	mux.HandleFunc("GET /api/v1/events/retention", s.console(read, s.getEventRetention))
+	mux.HandleFunc("PUT /api/v1/events/retention", s.console(write, s.putEventRetention))
 	mux.HandleFunc("POST /api/v1/events/archives/{day}/link", s.console(read, s.eventArchiveLink))
 	mux.HandleFunc("GET /api/v1/audit", s.console(read, s.listAudit))
 	mux.HandleFunc("GET /api/v1/audit/verify", s.console(read, s.verifyAudit))
