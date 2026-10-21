@@ -114,6 +114,15 @@ func proc(p *tg.Process) event.Proc {
 	}
 }
 
+// pod is a process's Kubernetes pod (empty outside Kubernetes).
+func pod(p *tg.Pod) event.PodRef {
+	if p == nil {
+		return event.PodRef{}
+	}
+	return event.PodRef{Namespace: p.GetNamespace(), Name: p.GetName(), UID: p.GetUid(),
+		Container: p.GetContainer().GetName(), ContainerID: p.GetContainer().GetId()}
+}
+
 func procs(ps []*tg.Process) []event.Proc {
 	out := make([]event.Proc, 0, len(ps))
 	for _, p := range ps {
@@ -128,6 +137,7 @@ func translate(res *tg.GetEventsResponse) (event.Raw, bool) {
 	case res.GetProcessExec() != nil:
 		e := res.GetProcessExec()
 		r.Kind, r.Process, r.Parent, r.Ancestors = event.Exec, proc(e.GetProcess()), proc(e.GetParent()), procs(e.GetAncestors())
+		r.Pod = pod(e.GetProcess().GetPod())
 		r.Container = e.GetProcess().GetDocker()
 	case res.GetProcessExit() != nil:
 		e := res.GetProcessExit()

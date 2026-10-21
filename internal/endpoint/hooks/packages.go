@@ -246,7 +246,7 @@ func truthy(s string) bool { s = strings.ToLower(s); return s == "true" || s == 
 // npmManifest adds package.json's dependencies, with the versions the
 // lockfile pins.
 func (x *actx) npmManifest() {
-	pj := findUp(x.cwd, "package.json")
+	pj := findUp(x.in, x.cwd, "package.json")
 	if pj == "" {
 		return
 	}

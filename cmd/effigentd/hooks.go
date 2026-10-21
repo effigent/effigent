@@ -60,6 +60,9 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		if !ok {
 			return nil, fmt.Errorf("unknown agent hook %q", c.Agent)
 		}
+		if c.Peer != nil && c.Peer.Agent != "" {
+			ag.name = c.Peer.Agent // the kernel tracks this caller under that agent: its rule applies
+		}
 		call, err := ag.parse(c.Payload)
 		if err != nil {
 			return ag.failClosed("the hook input could not be read"), nil
@@ -69,8 +72,12 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		}
 		who := hookIdentity(c)
 		env := hooks.CleanAgentEnv(c.Env)
-		home, uid, uidKnown := "", 0, false
-		if c.OSUser != "" {
+		home, uid, uidKnown, root := "", 0, false, ""
+		if p := c.Peer; p != nil {
+			// The hook socket: who called is the kernel's word, not the hook's.
+			// Root (uid 0, common in containers) reads world-readable files only.
+			home, uid, uidKnown, root = p.Home, p.UID, p.UID != 0, p.Root
+		} else if c.OSUser != "" {
 			home, uid, uidKnown = ident.Default.Account(c.OSUser)
 			// The user name is the hook process's claim: claiming root must
 			// not let the daemon read root-only files on the agent's behalf.
@@ -78,7 +85,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		}
 		for i := range call.Canon {
 			call.Canon[i].Agent, call.Canon[i].Env, call.Canon[i].Home = ag.name, env, home
-			call.Canon[i].UID, call.Canon[i].UIDKnown = uid, uidKnown
+			call.Canon[i].UID, call.Canon[i].UIDKnown, call.Canon[i].Root = uid, uidKnown, root
 		}
 		in := call.Orig
 		// There is no kernel to report agents starting, so a session's first
@@ -136,16 +143,46 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 }
 
 // identity is who is behind a hook call, copied onto its events.
-type identity struct{ osUser, session, gitEmail, model, transcript string }
+type identity struct {
+	osUser, session, gitEmail, model, transcript, container, pod string
+	agentPID                                                     uint32
+}
 
 func hookIdentity(c api.HookCall) identity {
 	m := hooks.Meta(c.Payload)
+	if p := c.Peer; p != nil {
+		// From the hook socket: the kernel's uid (named in the caller's own
+		// /etc/passwd), its container and pod. Git config would be read from
+		// the daemon's file system, not the container's: left out there.
+		w := identity{osUser: p.User, session: m.SessionID, model: m.Model, transcript: m.TranscriptPath,
+			container: p.ContainerID, pod: p.Pod, agentPID: uint32(p.AgentPID)}
+		if w.pod == "" && p.PodUID != "" {
+			w.pod = "uid:" + p.PodUID // no pod info from Tetragon (yet)
+		}
+		if p.Root == "" {
+			w.gitEmail = ident.Default.GitEmail(p.User, m.Cwd)
+		}
+		return w
+	}
 	return identity{osUser: c.OSUser, session: m.SessionID, gitEmail: ident.Default.GitEmail(c.OSUser, m.Cwd),
 		model: m.Model, transcript: m.TranscriptPath}
 }
 
+// callUser is the OS user behind a hook call: the kernel's (hook socket)
+// over the hook process's claim.
+func callUser(c api.HookCall) string {
+	if c.Peer != nil {
+		return c.Peer.User
+	}
+	return c.OSUser
+}
+
 func (w identity) on(ev event.Event) event.Event {
 	ev.OSUser, ev.SessionID, ev.GitEmail, ev.Model, ev.TranscriptPath = w.osUser, w.session, w.gitEmail, w.model, w.transcript
+	ev.Container, ev.Pod = w.container, w.pod
+	if w.agentPID != 0 {
+		ev.AgentPID = w.agentPID
+	}
 	return ev
 }
 
@@ -176,10 +213,10 @@ func askApproval(ctx context.Context, eng *engine.Engine, cp *cpclient.Client, c
 	wait := min(time.Duration(ap.Wait())*time.Second, c.Budget-10*time.Second)
 	wait = max(wait, 0)
 	actx := action.Context{OrgID: cp.State.Tenant, EndpointID: cp.State.EndpointID, SessionID: p.session,
-		AgentType: p.agent, OSUser: c.OSUser}
+		AgentType: p.agent, OSUser: callUser(c)}
 	res, err := cp.RequestApproval(ctx, cpclient.ApprovalRequest{
 		Fingerprint: action.Fingerprint(actx, p.action), Agent: p.agent, SessionID: p.session, Tool: p.tool,
-		Summary: redact.String(p.summary), Cwd: p.cwd, Rule: d.Rule, Reason: redact.String(d.Reason), OSUser: c.OSUser,
+		Summary: redact.String(p.summary), Cwd: p.cwd, Rule: d.Rule, Reason: redact.String(d.Reason), OSUser: callUser(c),
 		TTLMinutes: ap.TTL(), WaitSeconds: int(wait / time.Second),
 	})
 	if err != nil {
@@ -345,18 +382,14 @@ func hookCmd(args []string) {
 	if ag.slim != nil {
 		payload = ag.slim(payload)
 	}
-	addr := os.Getenv("EFFIGENT_API")
-	if addr == "" {
-		addr = "127.0.0.1:7777"
-	}
 	// How long the agent lets this hook run is the agent's setting, not ours:
 	// Claude Code reads it when a session starts (older installs set 30s) and
 	// treats a timeout as a block. Stay well inside the smallest common limit;
 	// the daemon waits at most budget-10s for an approver, and a later
 	// retry of the same call picks up an approval given after that.
 	const budget = 28 * time.Second
-	c := &http.Client{Timeout: budget}
-	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/hook/"+args[0], bytes.NewReader(payload))
+	base, c := daemonTransport(budget) // TCP 127.0.0.1:7777, or the hook socket in a container
+	req, _ := http.NewRequest(http.MethodPost, base+"/hook/"+args[0], bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Effigent-Hook-Budget", fmt.Sprint(int(budget/time.Second)))
 	if u, err := user.Current(); err == nil {

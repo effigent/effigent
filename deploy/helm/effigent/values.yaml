@@ -39,6 +39,36 @@ tetragon:
 # "" turns it off.
 listen: 127.0.0.1:7777
 
+# The agent hook API on a unix socket in a hostPath directory, for agents that
+# run in pods (their hooks can't reach the node's 127.0.0.1:7777). effigentd
+# identifies each caller from the kernel (SO_PEERCRED → cgroup → container →
+# pod), never from what the caller says. An agent pod mounts the directory and
+# its image runs `effigentd hook claude|codex|gemini|cursor` as the agent's hook:
+#
+#   spec:
+#     containers:
+#       - name: agent
+#         env:
+#           - name: EFFIGENT_HOOK_SOCKET
+#             value: /var/run/effigent/hook.sock
+#         volumeMounts:
+#           - name: effigent-hooks
+#             mountPath: /var/run/effigent
+#     volumes:
+#       - name: effigent-hooks
+#         hostPath:
+#           path: /var/run/effigent
+#           type: Directory
+#
+# hostPath volumes need a namespace whose Pod Security admission level is
+# privileged (baseline and restricted refuse them), or an admission policy
+# that allows this one path. The socket only answers
+# hook calls; any pod that mounts it can ask, as itself.
+# Needs effigentd with -hook-socket (this chart's appVersion has it).
+hookSocket:
+  enabled: true
+  hostPath: /var/run/effigent
+
 # Events in the pod log as well: none | json | pretty. They go to the control
 # plane either way; json logs every exec of every agent on the node.
 output: none

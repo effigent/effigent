@@ -51,6 +51,14 @@ type Raw struct {
 	Policy    string // policy that produced this event (kprobe/lsm events)
 	Target    string // exec'd binary, opened file, or "ip:port"
 	Container string
+	Pod       PodRef // Kubernetes pod (Tetragon's pod info), when known
+}
+
+// PodRef is the Kubernetes pod a process runs in.
+type PodRef struct {
+	Namespace, Name, UID string
+	Container            string // container name
+	ContainerID          string // e.g. "containerd://<id>"
 }
 
 // Event is what goes to sinks.
@@ -68,6 +76,7 @@ type Event struct {
 	Target    string    `json:"target,omitempty"`
 	Rule      string    `json:"rule,omitempty"`
 	Container string    `json:"container,omitempty"`
+	Pod       string    `json:"pod,omitempty"` // "namespace/name" (hook calls from a pod, via the hook socket)
 	Message   string    `json:"message,omitempty"`
 
 	// Who is behind the action (best effort, all optional; older effigentd

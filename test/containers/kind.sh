@@ -64,6 +64,29 @@ sleep 4 # events ship every 2s
 check "curl block from the worker" "$(blocked_count 'exec /usr/bin/curl' effigent-test-worker)" 2
 check ".env block from the worker" "$(blocked_count /work/.env effigent-test-worker)" 2
 
+echo "== hooks in a pod reach the node's daemon (hook socket), events name the pod"
+"${K[@]}" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: agent-hook, namespace: default}
+spec:
+  nodeName: effigent-test-worker
+  containers:
+    - name: agent
+      image: effigent-agent:test
+      imagePullPolicy: Never
+      command: [/opt/ag/claude, -c, "sleep 3600"]
+      env: [{name: EFFIGENT_HOOK_SOCKET, value: /var/run/effigent/hook.sock}]
+      volumeMounts: [{name: effigent-hooks, mountPath: /var/run/effigent}]
+  volumes: [{name: effigent-hooks, hostPath: {path: /var/run/effigent, type: Directory}}]
+EOF
+"${K[@]}" wait --for=condition=Ready pod/agent-hook --timeout 90s >/dev/null
+out=$("${K[@]}" exec agent-hook -- sh -c 'printf "{\"session_id\":\"k1\",\"cwd\":\"/work\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"curl -s https://example.com\"}}" | effigentd hook claude')
+check "curl denied through the hook socket" "$(grep -c '"permissionDecision":"deny"' <<<"$out")" 1
+sleep 4
+check "the hook's block names the pod (Tetragon pod info)" "$(curl -sf "${A[@]}" "$CP/events?type=blocked&limit=200" |
+  python3 -c 'import json,sys;print(sum(1 for e in json.load(sys.stdin) if e["body"].get("rule")=="exec_deny" and e["body"].get("pod")=="default/agent-hook"))')" 1
+
 echo "== a restarted pod stays the same machine"
 "${K[@]}" -n effigent delete pod -l app.kubernetes.io/instance=effigent --wait >/dev/null
 "${K[@]}" -n effigent rollout status ds/effigent --timeout 120s >/dev/null; sleep 3
