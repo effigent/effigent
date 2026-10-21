@@ -116,6 +116,11 @@ func (s *Sender) SlackPost(ctx context.Context, token, channel string, m Message
 	return out.TS, err
 }
 
+// SlackUpdate replaces a message the app posted (chat.update).
+func (s *Sender) SlackUpdate(ctx context.Context, token, channel, ts, text string, blocks []map[string]any) error {
+	return s.slackCall(ctx, token, "chat.update", nil, map[string]any{"channel": channel, "ts": ts, "text": text, "blocks": blocks}, nil)
+}
+
 // SlackUser is a Slack account, from users.info.
 type SlackUser struct {
 	ID           string

@@ -47,10 +47,16 @@ func (s *Server) slackActions(a store.Approval, teamID string) []notify.Action {
 		return nil
 	}
 	tok := s.signLink(linkClaims{Approval: a.ID, Tenant: a.Tenant, Recipient: teamID, Channel: slackChannelApp, Expires: a.ExpiresAt.Unix()})
-	return []notify.Action{
-		{Label: "Approve", Style: "primary", ActionID: "approve", Value: tok},
-		{Label: "Deny", Style: "danger", ActionID: "deny", Value: tok},
+	deny := notify.Action{Label: "Deny", Style: "danger", ActionID: "deny", Value: tok}
+	if a.RequireTicket { // Slack can't ask for the ticket: approving is in the console
+		return []notify.Action{deny}
 	}
+	return []notify.Action{{Label: "Approve", Style: "primary", ActionID: "approve", Value: tok}, deny}
+}
+
+// slackBlocksWith is a message's blocks with a status line at the end.
+func (s *Server) slackBlocksWith(m notify.Message, status string) []map[string]any {
+	return append(notify.SlackBlocks(m), map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": status}}})
 }
 
 // postSlack sends a request message through the tenant's app (when
@@ -66,7 +72,10 @@ func (s *Server) postSlack(ctx context.Context, tenant string, set store.Notific
 			m.Actions = s.slackActions(*a, set.SlackApp.TeamID)
 			m.Footer = strings.Replace(m.Footer, "Approve or Deny opens a confirmation page;", "Approve / Deny records who clicked;", 1)
 		}
-		_, err = s.Notify.SlackPost(ctx, tok, set.SlackApp.Channel, m)
+		ts, err := s.Notify.SlackPost(ctx, tok, set.SlackApp.Channel, m)
+		if a != nil && err == nil && ts != "" {
+			a.SlackRef = set.SlackApp.Channel + ":" + ts // to show a first of two approvals on it
+		}
 		return err
 	}
 	if a != nil {
@@ -357,41 +366,73 @@ func (s *Server) handleSlackDecision(r *http.Request, app store.SlackApp, c link
 		say(fmt.Sprintf("This was a sample — nothing is waiting. A real click would be recorded as %s <%s> (%s).", u.Name(), u.Email, role))
 		return
 	}
-	// routed to a group: its members decide (admins may step in)
-	if cur, err := s.Store.GetApproval(ctx, c.Tenant, c.Approval); err == nil && cur.GroupID != "" {
-		if cfg, err := s.Store.GetRouting(ctx, c.Tenant); err == nil {
-			if g := cfg.Group(cur.GroupID); g != nil && memberOf(g, "", u.Email) == nil && role != "admin" && role != "security_admin" {
-				say("This request is decided by " + g.Name + ", and " + u.Email + " isn't in that group. Nothing was decided.")
-				return
-			}
-		}
-	}
-	verb := map[bool]string{true: "approve", false: "deny"}[approve]
-	by := "slack:" + app.TeamID + ":" + u.ID
-	name := clip(fmt.Sprintf("%s <%s> (via Slack)", u.Name(), u.Email), 200)
-	a, err := s.Store.DecideApproval(ctx, c.Tenant, c.Approval, approve, by, name, "", approvalUseWindow)
-	if errors.Is(err, store.ErrAlreadyDecided) {
-		cur, _ := s.Store.GetApproval(ctx, c.Tenant, c.Approval)
-		state, line := cur.State, byLineText(cur)
-		if state == store.ApprovalPending {
-			state = "expired"
-		}
-		s.slackReplace(ctx, in.ResponseURL, cur, slackStatus(state, line, cur.DecidedAt))
-		say("This request is already " + map[string]string{store.ApprovalUsed: "approved (and used)"}[state] + map[bool]string{true: state}[state != store.ApprovalUsed] + line + ".")
-		return
-	} else if errors.Is(err, store.ErrNotFound) {
+	cur, err := s.Store.GetApproval(ctx, c.Tenant, c.Approval)
+	if errors.Is(err, store.ErrNotFound) {
 		say("This approval request no longer exists.")
 		return
-	} else if err != nil {
-		s.Logf("slack interaction %s: %v", c.Approval, err)
+	}
+	cfg, cerr := s.Store.GetRouting(ctx, c.Tenant)
+	if err != nil || cerr != nil {
+		s.Logf("slack interaction %s: %v %v", c.Approval, err, cerr)
 		say("Effigent couldn't record the decision. Try again, or decide in the console.")
 		return
 	}
+	// routed to a group: its members decide (admins may step in)
+	override, groupName := false, ""
+	if g := cfg.Group(cur.GroupID); g != nil {
+		groupName = g.Name
+		if memberOf(g, "", u.Email) == nil {
+			if role != "admin" && role != "security_admin" {
+				say("This request is decided by " + g.Name + ", and " + u.Email + " isn't in that group. Nothing was decided.")
+				return
+			}
+			override = true
+		}
+	}
+	if approve && cur.RequireTicket && cur.State == store.ApprovalPending {
+		console := ""
+		if s.ConsoleOrigin != "" {
+			console = " " + s.ConsoleOrigin + "/approvals?id=" + cur.ID
+		}
+		say("Approving this request needs a ticket reference, and Slack can't ask for one: approve it in the Effigent console." + console + " Nothing was decided.")
+		return
+	}
+	by := "slack:" + app.TeamID + ":" + u.ID
+	name := clip(fmt.Sprintf("%s <%s> (via Slack)", u.Name(), u.Email), 200)
+	if override {
+		name = clip(fmt.Sprintf("%s <%s> (admin, for %s, via Slack)", u.Name(), u.Email, groupName), 200)
+	}
+	who := approver{Voter: by, UserID: userIDOf(cfg, u.Email), Emails: []string{strings.ToLower(u.Email)}, Name: name, Via: "slack", Person: true}
 	p := Principal{UserID: by, Tenant: c.Tenant, Role: role, Via: "slack"}
-	s.audit(r, p, "approval."+verb, a.ID, map[string]any{"summary": a.Summary, "hostname": a.Hostname, "rule": a.Rule, "note": "",
-		"via": "slack", "slack_user_id": u.ID, "slack_team_id": app.TeamID, "slack_username": u.Username, "name": u.Name(), "email": u.Email})
-	s.emit(ctx, c.Tenant, "approval.decided", s.approvalEvent(a))
-	s.slackReplace(ctx, in.ResponseURL, a, slackStatus(a.State, fmt.Sprintf(" by %s (%s)", u.Name(), u.Email), a.DecidedAt))
+	res := s.castVote(ctx, r, p, cur, who, approve, "", "", override, groupName, map[string]any{"via": "slack", "slack_user_id": u.ID,
+		"slack_team_id": app.TeamID, "slack_username": u.Username, "name": u.Name(), "email": u.Email})
+	a := res.A
+	switch {
+	case res.Refusal == "already_decided":
+		state, line := a.State, byLineText(a)
+		if state == store.ApprovalPending {
+			state = "expired"
+		}
+		s.slackReplace(ctx, in.ResponseURL, a, slackStatus(state, line, a.DecidedAt))
+		say("This request is already " + map[string]string{store.ApprovalUsed: "approved (and used)"}[state] + map[bool]string{true: state}[state != store.ApprovalUsed] + line + ".")
+	case res.Refusal == "not_found":
+		say("This approval request no longer exists.")
+	case res.Refusal == "error":
+		say("Effigent couldn't record the decision. Try again, or decide in the console.")
+	case res.Refusal != "":
+		say(upperFirst(res.Msg) + ". Nothing was decided.")
+	case !res.Final:
+		say("Your approval is recorded: " + progressLine(a) + ". The request waits for another approver.")
+	default:
+		s.slackReplace(ctx, in.ResponseURL, a, slackStatus(a.State, fmt.Sprintf(" by %s (%s)", u.Name(), u.Email), a.DecidedAt))
+	}
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // slackApproverRole applies the workspace's rule for who may decide from

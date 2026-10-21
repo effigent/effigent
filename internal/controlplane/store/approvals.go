@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -51,20 +53,163 @@ type Approval struct {
 	Notified      json.RawMessage `json:"notified,omitempty"`
 	GroupID       string          `json:"group_id"` // the approver group it was routed to ("" = workspace admins)
 	RouteID       string          `json:"route_id"` // the routing rule that matched
+	// How it is decided, fixed when it is filed (migration 012).
+	ApprovalsRequired int       `json:"approvals_required"` // different people who must approve
+	ExcludeRequester  bool      `json:"exclude_requester"`  // the requester may not approve it
+	RequireTicket     bool      `json:"require_ticket"`     // approving needs a ticket reference
+	Requester         Requester `json:"requester"`
+	SlackRef          string    `json:"-"`     // "channel:ts" of the Slack app's message
+	Votes             []Vote    `json:"votes"` // in the order they were cast
 }
 
+// Requester is who asked, as resolved when the request was filed: the
+// machine's owner and the people its OS user, hostname or git email are
+// mapped to (cp.people), with the other emails those people go by.
+type Requester struct {
+	UserIDs []string `json:"user_ids"` // console user ids (an owner set as a user id)
+	Emails  []string `json:"emails"`   // lower case
+	Label   string   `json:"label"`    // how the console names them
+}
+
+// Matches reports whether a person (console user id and/or emails) is the requester.
+func (q Requester) Matches(userID string, emails []string) bool {
+	if userID != "" && slices.Contains(q.UserIDs, userID) {
+		return true
+	}
+	for _, e := range emails {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" && slices.Contains(q.Emails, e) {
+			return true
+		}
+	}
+	return false
+}
+
+// Merge adds another resolution of the requester (the one made at decision time).
+func (q Requester) Merge(o Requester) Requester {
+	out := Requester{UserIDs: slices.Clone(q.UserIDs), Emails: slices.Clone(q.Emails), Label: cmpStr(q.Label, o.Label)}
+	for _, u := range o.UserIDs {
+		if !slices.Contains(out.UserIDs, u) {
+			out.UserIDs = append(out.UserIDs, u)
+		}
+	}
+	for _, e := range o.Emails {
+		if !slices.Contains(out.Emails, e) {
+			out.Emails = append(out.Emails, e)
+		}
+	}
+	return out
+}
+
+// Vote is one person's decision on a request.
+type Vote struct {
+	Voter         string    `json:"voter"`   // console user id, link:email:<addr>, slack:<team>:<user>, apikey:<id>
+	UserID        string    `json:"user_id"` // the console user, when known
+	Emails        []string  `json:"emails"`
+	Name          string    `json:"name"`
+	Via           string    `json:"via"`      // console | api-key | email | slack
+	Decision      string    `json:"decision"` // approve | deny
+	Note          string    `json:"note"`
+	Ticket        string    `json:"ticket"`
+	TicketURL     string    `json:"ticket_url,omitempty"` // filled in by the server from the tenant's template
+	AdminOverride bool      `json:"admin_override"`
+	At            time.Time `json:"at"`
+}
+
+// SamePerson reports whether two votes come from one person: the same voter,
+// console user or an email in common (one person may decide from the
+// console, an email link and Slack).
+func (v Vote) SamePerson(o Vote) bool {
+	if v.Voter == o.Voter || (v.UserID != "" && v.UserID == o.UserID) {
+		return true
+	}
+	for _, e := range v.Emails {
+		if slices.ContainsFunc(o.Emails, func(x string) bool { return strings.EqualFold(x, e) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// Approvals counts the approve votes.
+func (a Approval) Approvals() int {
+	n := 0
+	for _, v := range a.Votes {
+		if v.Decision == "approve" {
+			n++
+		}
+	}
+	return n
+}
+
+// ErrAlreadyVoted: this person already decided the request.
+var ErrAlreadyVoted = errors.New("you already approved this request; it needs another approver")
+
 const approvalCols = `id, tenant_ref, endpoint_id, fingerprint, agent, session_id, tool, summary, cwd, rule, reason,
-  hostname, os_user, state, requested_at, expires_at, decided_at, decided_by, decided_by_name, note, used_at, notified, group_id, route_id`
+  hostname, os_user, state, requested_at, expires_at, decided_at, decided_by, decided_by_name, note, used_at, notified, group_id, route_id,
+  approvals_required, exclude_requester, require_ticket, requester, slack_ref`
 
 func scanApproval(r pgx.Row) (Approval, error) {
 	var a Approval
 	err := r.Scan(&a.ID, &a.Tenant, &a.EndpointID, &a.Fingerprint, &a.Agent, &a.SessionID, &a.Tool, &a.Summary, &a.Cwd,
 		&a.Rule, &a.Reason, &a.Hostname, &a.OSUser, &a.State, &a.RequestedAt, &a.ExpiresAt, &a.DecidedAt, &a.DecidedBy,
-		&a.DecidedByName, &a.Note, &a.UsedAt, &a.Notified, &a.GroupID, &a.RouteID)
+		&a.DecidedByName, &a.Note, &a.UsedAt, &a.Notified, &a.GroupID, &a.RouteID,
+		&a.ApprovalsRequired, &a.ExcludeRequester, &a.RequireTicket, &a.Requester, &a.SlackRef)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
+	if a.Requester.UserIDs == nil {
+		a.Requester.UserIDs = []string{}
+	}
+	if a.Requester.Emails == nil {
+		a.Requester.Emails = []string{}
+	}
+	a.Votes = []Vote{}
 	return a, err
+}
+
+const voteCols = `approval_id, voter, voter_user_id, voter_emails, voter_name, via, decision, note, ticket, admin_override, at`
+
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// withVotes fills in the votes of the given requests.
+func withVotes(ctx context.Context, q querier, as []Approval) error {
+	if len(as) == 0 {
+		return nil
+	}
+	idx := map[string]int{}
+	ids := make([]string, 0, len(as))
+	for i := range as {
+		idx[as[i].ID] = i
+		ids = append(ids, as[i].ID)
+	}
+	rows, err := q.Query(ctx, `select `+voteCols+` from cp.approval_votes where approval_id = any($1) order by at, voter`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var v Vote
+		if err := rows.Scan(&id, &v.Voter, &v.UserID, &v.Emails, &v.Name, &v.Via, &v.Decision, &v.Note, &v.Ticket, &v.AdminOverride, &v.At); err != nil {
+			return err
+		}
+		if i, ok := idx[id]; ok {
+			as[i].Votes = append(as[i].Votes, v)
+		}
+	}
+	return rows.Err()
+}
+
+// withVotesOne is withVotes for one request read with err.
+func withVotesOne(ctx context.Context, q querier, a Approval, err error) (Approval, error) {
+	if err != nil {
+		return a, err
+	}
+	as := []Approval{a}
+	err = withVotes(ctx, q, as)
+	return as[0], err
 }
 
 func newApprovalID() string {
@@ -87,7 +232,10 @@ func (s *Store) RequestApproval(ctx context.Context, a Approval, ttl time.Durati
 	if errors.As(err, &pe) && pe.Code == "23505" {
 		// The same call arrived twice at once and the other one filed the
 		// request first: use that one.
-		return s.requestApproval(ctx, a, ttl)
+		out, created, err = s.requestApproval(ctx, a, ttl)
+	}
+	if err == nil && !created {
+		out, err = withVotesOne(ctx, s.db, out, nil) // a pending request may carry a first approval
 	}
 	return out, created, err
 }
@@ -156,13 +304,59 @@ func (s *Store) endpointApproval(ctx context.Context, endpointID, id string) (Ap
 		where id = $1 and state in ('pending', 'approved') and expires_at <= now()`, id); err != nil {
 		return Approval{}, err
 	}
-	return scanApproval(s.db.QueryRow(ctx, `select `+approvalCols+` from cp.approvals where id = $1 and endpoint_id = $2`, id, endpointID))
+	a, err := scanApproval(s.db.QueryRow(ctx, `select `+approvalCols+` from cp.approvals where id = $1 and endpoint_id = $2`, id, endpointID))
+	return withVotesOne(ctx, s.db, a, err)
 }
 
-// SetApprovalRoute records who a new request was routed to.
-func (s *Store) SetApprovalRoute(ctx context.Context, id, groupID, routeID string) error {
-	_, err := s.db.Exec(ctx, `update cp.approvals set group_id = $2, route_id = $3 where id = $1`, id, groupID, routeID)
+// ApprovalFiling is how a new request is decided: who it was routed to and
+// the rules of that route, and who asked.
+type ApprovalFiling struct {
+	GroupID, RouteID  string
+	ApprovalsRequired int
+	ExcludeRequester  bool
+	RequireTicket     bool
+	Requester         Requester
+}
+
+// SetApprovalFiling records how a new request is decided.
+func (s *Store) SetApprovalFiling(ctx context.Context, id string, f ApprovalFiling) error {
+	if f.Requester.UserIDs == nil {
+		f.Requester.UserIDs = []string{}
+	}
+	if f.Requester.Emails == nil {
+		f.Requester.Emails = []string{}
+	}
+	_, err := s.db.Exec(ctx, `update cp.approvals set group_id = $2, route_id = $3, approvals_required = $4, exclude_requester = $5,
+		require_ticket = $6, requester = $7 where id = $1`,
+		id, f.GroupID, f.RouteID, max(f.ApprovalsRequired, 1), f.ExcludeRequester, f.RequireTicket, f.Requester)
 	return err
+}
+
+// SetApprovalSlackRef records the Slack app's message for a request ("channel:ts").
+func (s *Store) SetApprovalSlackRef(ctx context.Context, id, ref string) error {
+	_, err := s.db.Exec(ctx, `update cp.approvals set slack_ref = $2 where id = $1`, id, ref)
+	return err
+}
+
+// GitEmailsSeen lists the git emails effigentd reported for an OS user on a
+// machine since a day (cp.agent_activity_daily).
+func (s *Store) GitEmailsSeen(ctx context.Context, tenant, endpointID, osUser string, since time.Time) ([]string, error) {
+	rows, err := s.db.Query(ctx, `select distinct lower(git_email) from cp.agent_activity_daily
+		where tenant_ref = $1 and endpoint_id::text = $2 and ($3 = '' or os_user = lower($3)) and git_email <> '' and day >= $4::date`,
+		tenant, endpointID, osUser, since.UTC().Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // ---- routing ----
@@ -172,6 +366,7 @@ type RoutingConfig struct {
 	Groups       []ApproverGroup `json:"groups"`
 	Routes       []ApprovalRoute `json:"routes"`
 	DefaultGroup string          `json:"default_group"` // requests no rule matches ("" = workspace admins)
+	DefaultRules ApprovalRules   `json:"default_rules"` // how those requests are decided
 	UpdatedBy    string          `json:"updated_by,omitempty"`
 	UpdatedAt    *time.Time      `json:"updated_at,omitempty"`
 }
@@ -199,7 +394,23 @@ type ApprovalRoute struct {
 	Machines []string `json:"machines"` // hostnames
 	Agents   []string `json:"agents"`
 	GroupID  string   `json:"group_id"`
+	ApprovalRules
 }
+
+// ApprovalRules say how a routed request is decided.
+type ApprovalRules struct {
+	ApprovalsRequired int `json:"approvals_required"` // 1 (default) or 2 different people
+	// ExcludeRequester: the people behind the request may not approve it,
+	// admins included. Missing (configs from before it existed) = true.
+	ExcludeRequester *bool `json:"exclude_requester,omitempty"`
+	RequireTicket    bool  `json:"require_ticket"` // approving needs a ticket reference
+}
+
+// Required is the number of different people who must approve.
+func (r ApprovalRules) Required() int { return min(max(r.ApprovalsRequired, 1), 2) }
+
+// Excludes reports whether the requester is kept from approving.
+func (r ApprovalRules) Excludes() bool { return r.ExcludeRequester == nil || *r.ExcludeRequester }
 
 func (c RoutingConfig) Group(id string) *ApproverGroup {
 	for i := range c.Groups {
@@ -272,42 +483,100 @@ func (s *Store) ListApprovals(ctx context.Context, tenant, state string, limit i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []Approval{}
 	for rows.Next() {
 		a, err := scanApproval(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, withVotes(ctx, s.db, out)
 }
 
-// DecideApproval approves or denies a pending request. An approval stays
-// usable for at least useWindow, so a late approval isn't lost to the
-// request's own expiry.
-func (s *Store) DecideApproval(ctx context.Context, tenant, id string, approve bool, by, byName, note string, useWindow time.Duration) (Approval, error) {
-	state := ApprovalDenied
-	if approve {
+// VoteApproval records one person's decision on a pending request, in one
+// transaction with the request locked: a deny decides it (denied); an
+// approve decides it once approvals_required different people approved
+// (approved), else it stays pending. An approval stays usable for at least
+// useWindow, so a late approval isn't lost to the request's own expiry.
+// final reports whether this vote decided the request.
+func (s *Store) VoteApproval(ctx context.Context, tenant, id string, v Vote, useWindow time.Duration) (a Approval, final bool, err error) {
+	if v.Decision != "approve" && v.Decision != "deny" {
+		return a, false, errors.New("decision must be approve or deny")
+	}
+	if v.Emails == nil {
+		v.Emails = []string{}
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return a, false, err
+	}
+	defer tx.Rollback(ctx)
+	a, err = scanApproval(tx.QueryRow(ctx, `select `+approvalCols+` from cp.approvals
+		where tenant_ref = $1 and id = $2 for update`, tenant, id))
+	if a, err = withVotesOne(ctx, tx, a, err); err != nil {
+		return a, false, err
+	}
+	if a.State != ApprovalPending || !a.ExpiresAt.After(time.Now()) {
+		return a, false, ErrAlreadyDecided
+	}
+	for _, o := range a.Votes {
+		if o.SamePerson(v) {
+			return a, false, ErrAlreadyVoted
+		}
+	}
+	if err := tx.QueryRow(ctx, `insert into cp.approval_votes (approval_id, tenant_ref, voter, voter_user_id, voter_emails, voter_name, via,
+			decision, note, ticket, admin_override) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning at`,
+		a.ID, tenant, v.Voter, v.UserID, v.Emails, v.Name, v.Via, v.Decision, v.Note, v.Ticket, v.AdminOverride).Scan(&v.At); err != nil {
+		return a, false, err
+	}
+	a.Votes = append(a.Votes, v)
+	state := ApprovalPending
+	switch {
+	case v.Decision == "deny":
+		state = ApprovalDenied
+	case a.Approvals() >= max(a.ApprovalsRequired, 1):
 		state = ApprovalApproved
 	}
-	a, err := scanApproval(s.db.QueryRow(ctx, `update cp.approvals
-		set state = $3, decided_at = now(), decided_by = $4, decided_by_name = $5, note = $6,
-		    expires_at = case when $3 = 'approved' then greatest(expires_at, now() + $7 * interval '1 second') else expires_at end
-		where tenant_ref = $1 and id = $2 and state = 'pending' and expires_at > now() returning `+approvalCols,
-		tenant, id, state, by, byName, note, int64(useWindow.Seconds())))
-	if errors.Is(err, ErrNotFound) {
-		if _, gerr := s.GetApproval(ctx, tenant, id); gerr != nil {
-			return a, gerr
+	if state != ApprovalPending {
+		// the request names everyone who approved; a deny names the one who denied
+		var names, notes []string
+		for _, x := range a.Votes {
+			if x.Decision == v.Decision {
+				names = append(names, x.Name)
+				if x.Note != "" {
+					notes = append(notes, x.Note)
+				}
+			}
 		}
-		return a, ErrAlreadyDecided
+		if v.Decision == "deny" {
+			names, notes = []string{v.Name}, nil
+			if v.Note != "" {
+				notes = []string{v.Note}
+			}
+		}
+		votes := a.Votes
+		a, err = scanApproval(tx.QueryRow(ctx, `update cp.approvals
+			set state = $2, decided_at = now(), decided_by = $3, decided_by_name = $4, note = $5,
+			    expires_at = case when $2 = 'approved' then greatest(expires_at, now() + $6 * interval '1 second') else expires_at end
+			where id = $1 returning `+approvalCols,
+			a.ID, state, v.Voter, strings.Join(names, " and "), strings.Join(notes, "; "), int64(useWindow.Seconds())))
+		if err != nil {
+			return a, false, err
+		}
+		a.Votes = votes
 	}
-	return a, err
+	return a, state != ApprovalPending, tx.Commit(ctx)
 }
 
 func (s *Store) GetApproval(ctx context.Context, tenant, id string) (Approval, error) {
-	return scanApproval(s.db.QueryRow(ctx, `select `+approvalCols+` from cp.approvals where tenant_ref = $1 and id = $2`, tenant, id))
+	a, err := scanApproval(s.db.QueryRow(ctx, `select `+approvalCols+` from cp.approvals where tenant_ref = $1 and id = $2`, tenant, id))
+	return withVotesOne(ctx, s.db, a, err)
 }
 
 // ---- notification settings ----
@@ -318,6 +587,8 @@ type NotificationSettings struct {
 	UpdatedBy    string    `json:"updated_by"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	SlackApp     SlackApp  `json:"-"`
+	// TicketURLTemplate turns ticket keys on votes into links: https://acme.atlassian.net/browse/{key}
+	TicketURLTemplate string `json:"ticket_url_template"`
 }
 
 // SlackApp is a tenant's connected Slack app. The token and secret are sealed
@@ -341,10 +612,10 @@ func (s *Store) GetNotificationSettings(ctx context.Context, tenant string) (Not
 	var n NotificationSettings
 	a := &n.SlackApp
 	err := s.db.QueryRow(ctx, `select slack_webhook, emails, updated_by, updated_at,
-		slack_bot_token_enc, slack_signing_secret_enc, slack_channel, slack_team_id, slack_team_name, slack_approvers
+		slack_bot_token_enc, slack_signing_secret_enc, slack_channel, slack_team_id, slack_team_name, slack_approvers, ticket_url_template
 		from cp.notification_settings where tenant_ref = $1`,
 		tenant).Scan(&n.SlackWebhook, &n.Emails, &n.UpdatedBy, &n.UpdatedAt,
-		&a.BotTokenEnc, &a.SigningSecretEnc, &a.Channel, &a.TeamID, &a.TeamName, &a.Approvers)
+		&a.BotTokenEnc, &a.SigningSecretEnc, &a.Channel, &a.TeamID, &a.TeamName, &a.Approvers, &n.TicketURLTemplate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return NotificationSettings{Emails: []string{}, SlackApp: SlackApp{Approvers: "members"}}, nil
 	}
@@ -360,11 +631,11 @@ func (s *Store) PutNotificationSettings(ctx context.Context, tenant string, n No
 	}
 	a := n.SlackApp
 	_, err := s.db.Exec(ctx, `insert into cp.notification_settings (tenant_ref, slack_webhook, emails, updated_by, updated_at,
-			slack_bot_token_enc, slack_signing_secret_enc, slack_channel, slack_team_id, slack_team_name, slack_approvers)
-		values ($1, $2, $3, $4, now(), $5, $6, $7, $8, $9, $10)
+			slack_bot_token_enc, slack_signing_secret_enc, slack_channel, slack_team_id, slack_team_name, slack_approvers, ticket_url_template)
+		values ($1, $2, $3, $4, now(), $5, $6, $7, $8, $9, $10, $11)
 		on conflict (tenant_ref) do update set slack_webhook = $2, emails = $3, updated_by = $4, updated_at = now(),
 			slack_bot_token_enc = $5, slack_signing_secret_enc = $6, slack_channel = $7, slack_team_id = $8,
-			slack_team_name = $9, slack_approvers = $10`,
-		tenant, n.SlackWebhook, n.Emails, n.UpdatedBy, a.BotTokenEnc, a.SigningSecretEnc, a.Channel, a.TeamID, a.TeamName, a.Approvers)
+			slack_team_name = $9, slack_approvers = $10, ticket_url_template = $11`,
+		tenant, n.SlackWebhook, n.Emails, n.UpdatedBy, a.BotTokenEnc, a.SigningSecretEnc, a.Channel, a.TeamID, a.TeamName, a.Approvers, n.TicketURLTemplate)
 	return err
 }

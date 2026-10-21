@@ -25,10 +25,11 @@ import (
 )
 
 // Webhook event types. A new webhook gets the approval events by default;
-// the rest are opt-in: action.blocked can be busy (a kernel block per
+// the rest are opt-in: approval.voted is each vote of a two-person
+// request before the last, action.blocked can be busy (a kernel block per
 // attempt) and pricing_leaks.runaway_cost is for whoever watches spend.
 var webhookEvents = []string{
-	"approval.requested", "approval.decided", "action.blocked",
+	"approval.requested", "approval.decided", "approval.voted", "action.blocked",
 	"endpoint.enrolled", "endpoint.revoked", "policy.published",
 	"pricing_leaks.runaway_cost",
 }

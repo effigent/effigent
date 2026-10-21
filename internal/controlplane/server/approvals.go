@@ -49,6 +49,11 @@ type endpointApprovalResp struct {
 	ExpiresAt     time.Time `json:"expires_at"`
 	Created       bool      `json:"created"`
 	Notified      []string  `json:"notified,omitempty"` // channels the request went to (when created)
+	// A request that needs two approvers stays pending after the first:
+	// "1 of 2 approvals (Dana)".
+	Approvals         int      `json:"approvals"`
+	ApprovalsRequired int      `json:"approvals_required"`
+	ApprovedBy        []string `json:"approved_by,omitempty"`
 }
 
 func clip(s string, n int) string {
@@ -85,20 +90,16 @@ func (s *Server) requestApproval(w http.ResponseWriter, r *http.Request, ep stor
 	}
 	resp := endpointApprovalResp{Created: created}
 	if created {
-		// who decides: fixed now, when the request is filed
-		if cfg, err := s.Store.GetRouting(r.Context(), ep.Tenant); err != nil {
-			s.Logf("approval %s: routing: %v", a.ID, err)
-		} else if route, group := routeFor(cfg, a); group != nil {
-			a.GroupID = group.ID
-			if route != nil {
-				a.RouteID = route.ID
-			}
-			if err := s.Store.SetApprovalRoute(r.Context(), a.ID, a.GroupID, a.RouteID); err != nil {
-				s.Logf("approval %s: %v", a.ID, err)
-			}
+		// who decides, and how: fixed now, when the request is filed
+		f := s.fileApproval(r.Context(), a)
+		a.GroupID, a.RouteID, a.ApprovalsRequired, a.ExcludeRequester, a.RequireTicket, a.Requester =
+			f.GroupID, f.RouteID, f.ApprovalsRequired, f.ExcludeRequester, f.RequireTicket, f.Requester
+		if err := s.Store.SetApprovalFiling(r.Context(), a.ID, f); err != nil {
+			s.Logf("approval %s: %v", a.ID, err)
 		}
 		s.audit(r, Principal{UserID: "endpoint:" + ep.ID, Tenant: ep.Tenant, Via: "endpoint"}, "approval.request", a.ID,
-			map[string]any{"agent": a.Agent, "rule": a.Rule, "summary": a.Summary, "hostname": a.Hostname, "group_id": a.GroupID, "route_id": a.RouteID})
+			map[string]any{"agent": a.Agent, "rule": a.Rule, "summary": a.Summary, "hostname": a.Hostname, "group_id": a.GroupID, "route_id": a.RouteID,
+				"approvals_required": a.ApprovalsRequired, "exclude_requester": a.ExcludeRequester, "require_ticket": a.RequireTicket, "requester": a.Requester.Label})
 		resp.Notified = s.announce(context.WithoutCancel(r.Context()), a)
 		s.emit(context.WithoutCancel(r.Context()), ep.Tenant, "approval.requested", s.approvalEvent(a))
 	}
@@ -117,10 +118,42 @@ func (s *Server) requestApproval(w http.ResponseWriter, r *http.Request, ep stor
 		}
 	}
 	resp.ID, resp.State, resp.DecidedByName, resp.Note, resp.ExpiresAt = a.ID, a.State, a.DecidedByName, a.Note, a.ExpiresAt
+	resp.Approvals, resp.ApprovalsRequired = a.Approvals(), max(a.ApprovalsRequired, 1)
+	for _, v := range a.Votes {
+		if v.Decision == "approve" && a.State == store.ApprovalPending {
+			resp.ApprovedBy = append(resp.ApprovedBy, v.Name)
+		}
+	}
 	if a.State == store.ApprovalUsed {
 		resp.State = store.ApprovalApproved
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// fileApproval routes a new request and resolves who asked. Routing or
+// lookup errors are logged and leave the defaults (workspace admins, one
+// approval, requester excluded): a request is never left undecidable.
+func (s *Server) fileApproval(ctx context.Context, a store.Approval) store.ApprovalFiling {
+	f := store.ApprovalFiling{ApprovalsRequired: 1, ExcludeRequester: true}
+	if cfg, err := s.Store.GetRouting(ctx, a.Tenant); err != nil {
+		s.Logf("approval %s: routing: %v", a.ID, err)
+	} else {
+		route, group := routeFor(cfg, a)
+		if group != nil {
+			f.GroupID = group.ID
+		}
+		if route != nil {
+			f.RouteID = route.ID
+		}
+		rules := rulesFor(cfg, route)
+		f.ApprovalsRequired, f.ExcludeRequester, f.RequireTicket = rules.Required(), rules.Excludes(), rules.RequireTicket
+	}
+	q, err := s.resolveRequester(ctx, a)
+	if err != nil {
+		s.Logf("approval %s: requester: %v", a.ID, err)
+	}
+	f.Requester = q
+	return f
 }
 
 // announce sends a new request to the tenant's channels and records the
@@ -142,6 +175,11 @@ func (s *Server) announce(ctx context.Context, a store.Approval) []string {
 		} else {
 			results["slack"] = "sent"
 			ok = append(ok, "slack")
+			if a.SlackRef != "" {
+				if err := s.Store.SetApprovalSlackRef(ctx, a.ID, a.SlackRef); err != nil {
+					s.Logf("approval %s: %v", a.ID, err)
+				}
+			}
 		}
 	}
 	recipients := set.Emails
@@ -212,6 +250,19 @@ func (s *Server) approvalMessage(a store.Approval) notify.Message {
 		},
 		Footer: "The agent is paused. Approve or Deny opens a confirmation page; approving lets this one action run once.",
 	}
+	if a.Requester.Label != "" {
+		m.Fields = append(m.Fields[:3], append([][2]string{{"Requested by", a.Requester.Label}}, m.Fields[3:]...)...)
+	}
+	if a.ApprovalsRequired > 1 {
+		txt := fmt.Sprintf("%d different people must approve", a.ApprovalsRequired)
+		if a.ExcludeRequester {
+			txt += "; the requester can't be one of them"
+		}
+		m.Fields = append(m.Fields, [2]string{"Approvals", txt})
+	}
+	if a.RequireTicket {
+		m.Fields = append(m.Fields, [2]string{"Ticket", "approving needs a ticket reference: approve in the Effigent console"})
+	}
 	if s.ConsoleOrigin != "" {
 		m.Link = s.ConsoleOrigin + "/approvals?id=" + a.ID
 	}
@@ -244,14 +295,32 @@ func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request, p Princip
 		GroupName        string `json:"group_name"`
 		CanDecide        bool   `json:"can_decide"`         // this caller may decide it
 		DecideIsOverride bool   `json:"decide_is_override"` // ...as an admin stepping in for the group
+		// CanApprove: this caller may approve it (a ticket may still be
+		// needed); else ApproveRefusal / ApproveRefusalMessage say why.
+		CanApprove            bool   `json:"can_approve"`
+		ApproveRefusal        string `json:"approve_refusal,omitempty"`
+		ApproveRefusalMessage string `json:"approve_refusal_message,omitempty"`
+		QuorumWarning         string `json:"quorum_warning,omitempty"`
 	}
+	s.ticketLinks(r.Context(), p.Tenant, as)
+	var who *approver
 	out := make([]view, 0, len(as))
 	for _, a := range as {
 		v := view{Approval: a}
-		if g := cfg.Group(a.GroupID); g != nil {
+		g := cfg.Group(a.GroupID)
+		if g != nil {
 			v.GroupName = g.Name
 		}
 		v.CanDecide, v.DecideIsOverride, _ = canDecide(p, a, cfg)
+		if a.State == store.ApprovalPending && v.CanDecide {
+			if who == nil {
+				x := s.consoleApprover(r.Context(), p, cfg, "")
+				who = &x
+			}
+			v.ApproveRefusal, v.ApproveRefusalMessage = voteRefusal(a, a.Requester, *who, true, "-")
+			v.CanApprove = v.ApproveRefusal == ""
+			v.QuorumWarning = quorumWarning(g, a.Requester, store.ApprovalRules{ApprovalsRequired: a.ApprovalsRequired, ExcludeRequester: &a.ExcludeRequester})
+		}
 		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -261,7 +330,8 @@ func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, p Princi
 	var req struct {
 		Decision string `json:"decision"` // approve | deny
 		Note     string `json:"note"`
-		Name     string `json:"name"` // the approver's display name, for the agent's message
+		Name     string `json:"name"`   // the approver's display name, for the agent's message
+		Ticket   string `json:"ticket"` // SEC-123 or a link (required to approve when the route says so)
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil || (req.Decision != "approve" && req.Decision != "deny") {
 		writeErr(w, http.StatusBadRequest, `body must be {"decision": "approve" | "deny", "note": "…"}`)
@@ -306,23 +376,16 @@ func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, p Princi
 	if override {
 		name += " (admin, for " + groupName + ")"
 	}
-	a, err := s.Store.DecideApproval(r.Context(), p.Tenant, cur.ID, req.Decision == "approve", p.UserID, name,
-		clip(strings.TrimSpace(req.Note), 500), approvalUseWindow)
+	who := s.consoleApprover(r.Context(), p, cfg, name)
+	res := s.castVote(r.Context(), r, p, cur, who, req.Decision == "approve", clip(strings.TrimSpace(req.Note), 500), req.Ticket, override, groupName, nil)
 	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeErr(w, http.StatusNotFound, "no such approval request")
-		return
-	case errors.Is(err, store.ErrAlreadyDecided):
-		writeErr(w, http.StatusConflict, err.Error())
-		return
-	case err != nil:
-		s.fail(w, err)
-		return
+	case res.Refusal == "error":
+		s.fail(w, errors.New(res.Msg))
+	case res.Refusal != "":
+		writeJSON(w, res.Code, map[string]string{"error": res.Msg, "code": res.Refusal})
+	default:
+		writeJSON(w, http.StatusOK, res.A)
 	}
-	s.emit(r.Context(), p.Tenant, "approval.decided", s.approvalEvent(a))
-	s.audit(r, p, "approval."+req.Decision, a.ID, map[string]any{"summary": a.Summary, "hostname": a.Hostname, "rule": a.Rule, "note": a.Note,
-		"group": groupName, "admin_override": override})
-	writeJSON(w, http.StatusOK, a)
 }
 
 // approvalEvent is a webhook's data for an approval: the request and where to review it.
@@ -347,7 +410,9 @@ func (s *Server) getApproval(w http.ResponseWriter, r *http.Request, p Principal
 	if a.State == store.ApprovalPending && !a.ExpiresAt.After(time.Now()) {
 		a.State = store.ApprovalExpired
 	}
-	writeJSON(w, http.StatusOK, a)
+	one := []store.Approval{a}
+	s.ticketLinks(r.Context(), p.Tenant, one)
+	writeJSON(w, http.StatusOK, one[0])
 }
 
 type notificationView struct {
@@ -359,11 +424,15 @@ type notificationView struct {
 	UpdatedAt        time.Time    `json:"updated_at,omitempty"`
 	SlackApp         slackAppView `json:"slack_app"`
 	SlackEnabled     bool         `json:"slack_enabled"` // this control plane posts to Slack
+	// TicketURLTemplate turns a ticket key on a vote into a link:
+	// https://acme.atlassian.net/browse/{key}.
+	TicketURLTemplate string `json:"ticket_url_template"`
 }
 
 func (s *Server) notificationView(n store.NotificationSettings) notificationView {
 	v := notificationView{SlackWebhookSet: n.SlackWebhook != "", Emails: n.Emails, EmailAvailable: s.Notify.EmailEnabled(),
-		UpdatedBy: n.UpdatedBy, UpdatedAt: n.UpdatedAt, SlackApp: s.slackAppView(n.SlackApp), SlackEnabled: s.SlackEnabled}
+		UpdatedBy: n.UpdatedBy, UpdatedAt: n.UpdatedAt, SlackApp: s.slackAppView(n.SlackApp), SlackEnabled: s.SlackEnabled,
+		TicketURLTemplate: n.TicketURLTemplate}
 	if v.SlackWebhookSet {
 		v.SlackWebhookHint = "…" + n.SlackWebhook[max(0, len(n.SlackWebhook)-4):]
 	}
@@ -386,6 +455,7 @@ func (s *Server) putNotifications(w http.ResponseWriter, r *http.Request, p Prin
 	var req struct {
 		SlackWebhook *string  `json:"slack_webhook"` // omitted: keep; "": remove
 		Emails       []string `json:"emails"`
+		TicketURL    *string  `json:"ticket_url_template"` // omitted: keep; "": remove
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad body")
@@ -430,12 +500,21 @@ func (s *Server) putNotifications(w http.ResponseWriter, r *http.Request, p Prin
 			return
 		}
 	}
+	if req.TicketURL != nil {
+		t, err := cleanTicketTemplate(*req.TicketURL)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		n.TicketURLTemplate = t
+	}
 	n.UpdatedBy = p.UserID
 	if err := s.Store.PutNotificationSettings(r.Context(), p.Tenant, n); err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.audit(r, p, "notifications.update", "approvals", map[string]any{"slack_webhook_set": n.SlackWebhook != "", "emails": n.Emails})
+	s.audit(r, p, "notifications.update", "approvals", map[string]any{"slack_webhook_set": n.SlackWebhook != "", "emails": n.Emails,
+		"ticket_url_template": n.TicketURLTemplate})
 	n, _ = s.Store.GetNotificationSettings(r.Context(), p.Tenant)
 	writeJSON(w, http.StatusOK, s.notificationView(n))
 }

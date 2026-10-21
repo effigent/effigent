@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/effigent/effigent/internal/controlplane/notify"
@@ -171,13 +172,75 @@ func cleanRouting(c store.RoutingConfig) (store.RoutingConfig, error) {
 				return out, fmt.Errorf("rule %q: pattern %q is not valid", r.Name, p)
 			}
 		}
+		rules, err := cleanRules(r.ApprovalRules, "rule "+strconv.Quote(r.Name))
+		if err != nil {
+			return out, err
+		}
+		r.ApprovalRules = rules
 		out.Routes = append(out.Routes, r)
 	}
 	if c.DefaultGroup != "" && !ids[c.DefaultGroup] {
 		return out, fmt.Errorf("the default group doesn't exist")
 	}
 	out.DefaultGroup = c.DefaultGroup
+	rules, err := cleanRules(c.DefaultRules, "default")
+	if err != nil {
+		return out, err
+	}
+	out.DefaultRules = rules
 	return out, nil
+}
+
+// cleanRules checks one rule's decision settings and writes the defaults
+// out, so the saved document says what applies.
+func cleanRules(r store.ApprovalRules, what string) (store.ApprovalRules, error) {
+	if r.ApprovalsRequired < 0 || r.ApprovalsRequired > 2 {
+		return r, fmt.Errorf("%s: approvals_required is 1 or 2", what)
+	}
+	ex := r.Excludes()
+	return store.ApprovalRules{ApprovalsRequired: r.Required(), ExcludeRequester: &ex, RequireTicket: r.RequireTicket}, nil
+}
+
+// routingWarnings lists the rules whose group is too small for their
+// quorum. The requester isn't known yet, so a group exactly the size of a
+// two-person quorum is flagged too when the requester is excluded: if one
+// of its members files the request, an admin has to give the second vote.
+// Without a group (workspace admins decide) nothing is checked.
+func routingWarnings(c store.RoutingConfig) []string {
+	out := []string{}
+	check := func(what string, g *store.ApproverGroup, rules store.ApprovalRules) {
+		if g == nil {
+			return
+		}
+		n, q := len(g.Members), rules.Required()
+		switch {
+		case n < q:
+			out = append(out, fmt.Sprintf("%s: %s has %d member(s) and %d approvals are needed; a workspace admin will have to step in", what, g.Name, n, q))
+		case n == q && q > 1 && rules.Excludes():
+			out = append(out, fmt.Sprintf("%s: %s has exactly %d members; when one of them makes the request, a workspace admin will have to give the second approval", what, g.Name, n))
+		}
+	}
+	for _, r := range c.Routes {
+		check("rule "+strconv.Quote(cmpOr(r.Name, r.ID)), c.Group(r.GroupID), r.ApprovalRules)
+	}
+	check("default", c.Group(c.DefaultGroup), c.DefaultRules)
+	return out
+}
+
+// routingView is the document as the console reads it: every rule's
+// decision settings spelled out (saved configs from before they existed
+// read as 1 approval, requester excluded) plus the quorum warnings.
+type routingView struct {
+	store.RoutingConfig
+	Warnings []string `json:"warnings"`
+}
+
+func viewRouting(c store.RoutingConfig) routingView {
+	for i := range c.Routes {
+		c.Routes[i].ApprovalRules, _ = cleanRules(c.Routes[i].ApprovalRules, "")
+	}
+	c.DefaultRules, _ = cleanRules(c.DefaultRules, "")
+	return routingView{RoutingConfig: c, Warnings: routingWarnings(c)}
 }
 
 func (s *Server) getRouting(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -186,7 +249,7 @@ func (s *Server) getRouting(w http.ResponseWriter, r *http.Request, p Principal)
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, viewRouting(c))
 }
 
 func (s *Server) putRouting(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -207,7 +270,7 @@ func (s *Server) putRouting(w http.ResponseWriter, r *http.Request, p Principal)
 	}
 	s.audit(r, p, "approval_routing.update", "approvals", map[string]any{"before": routingSummary(before), "after": routingSummary(c)})
 	c, _ = s.Store.GetRouting(r.Context(), p.Tenant)
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, viewRouting(c))
 }
 
 // routingSummary is the audit view: groups with their members' emails, rules in order.
@@ -224,9 +287,22 @@ func routingSummary(c store.RoutingConfig) map[string]any {
 	}
 	var rules []string
 	for _, r := range c.Routes {
-		rules = append(rules, fmt.Sprintf("%s → %s (kinds %v, patterns %v, machines %v, agents %v)", cmpOr(r.Name, "rule"), name[r.GroupID], r.Kinds, r.Patterns, r.Machines, r.Agents))
+		rules = append(rules, fmt.Sprintf("%s → %s (kinds %v, patterns %v, machines %v, agents %v; %s)", cmpOr(r.Name, "rule"), name[r.GroupID], r.Kinds, r.Patterns, r.Machines, r.Agents, rulesSummary(r.ApprovalRules)))
 	}
-	return map[string]any{"groups": groups, "rules": rules, "default": name[c.DefaultGroup]}
+	return map[string]any{"groups": groups, "rules": rules, "default": name[c.DefaultGroup], "default_rules": rulesSummary(c.DefaultRules)}
+}
+
+func rulesSummary(r store.ApprovalRules) string {
+	s := fmt.Sprintf("%d approval(s)", r.Required())
+	if r.Excludes() {
+		s += ", requester excluded"
+	} else {
+		s += ", requester may approve"
+	}
+	if r.RequireTicket {
+		s += ", ticket required"
+	}
+	return s
 }
 
 func cmpOr(a, b string) string {
@@ -244,7 +320,9 @@ func (s *Server) testRouting(w http.ResponseWriter, r *http.Request, p Principal
 		Rule     string               `json:"rule"`
 		Hostname string               `json:"hostname"`
 		Agent    string               `json:"agent"`
-		Config   *store.RoutingConfig `json:"config"` // unsaved edits; omitted = the saved rules
+		Endpoint string               `json:"endpoint_id"` // optional; else the newest machine with that hostname
+		OSUser   string               `json:"os_user"`     // optional, to resolve the requester like a real request
+		Config   *store.RoutingConfig `json:"config"`      // unsaved edits; omitted = the saved rules
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad body")
@@ -264,13 +342,40 @@ func (s *Server) testRouting(w http.ResponseWriter, r *http.Request, p Principal
 	if req.Rule == "" {
 		req.Rule = "command_approve"
 	}
-	route, group := routeFor(c, store.Approval{Summary: req.Summary, Reason: req.Reason, Rule: req.Rule, Hostname: req.Hostname, Agent: req.Agent})
-	out := map[string]any{"route_id": "", "route_name": "", "group_id": "", "group_name": "", "default": route == nil && group != nil}
+	a := store.Approval{Tenant: p.Tenant, EndpointID: req.Endpoint, Summary: req.Summary, Reason: req.Reason, Rule: req.Rule,
+		Hostname: req.Hostname, Agent: req.Agent, OSUser: req.OSUser}
+	if a.EndpointID == "" && a.Hostname != "" {
+		if eps, err := s.Store.ListEndpoints(r.Context(), p.Tenant); err == nil {
+			for _, e := range eps {
+				if strings.EqualFold(e.Hostname, a.Hostname) && !e.Revoked {
+					a.EndpointID = e.ID
+					break
+				}
+			}
+		}
+	}
+	route, group := routeFor(c, a)
+	rules := rulesFor(c, route)
+	q, err := s.resolveRequester(r.Context(), a)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := map[string]any{"route_id": "", "route_name": "", "group_id": "", "group_name": "", "default": route == nil && group != nil,
+		"approvals_required": rules.Required(), "exclude_requester": rules.Excludes(), "require_ticket": rules.RequireTicket,
+		"requester": q, "eligible_approvers": eligible(group, q, rules.Excludes()), "warning": quorumWarning(group, q, rules)}
 	if route != nil {
 		out["route_id"], out["route_name"] = route.ID, route.Name
 	}
 	if group != nil {
 		out["group_id"], out["group_name"] = group.ID, group.Name
+		var excluded []string
+		for _, m := range group.Members {
+			if rules.Excludes() && q.Matches(m.UserID, []string{m.Email}) {
+				excluded = append(excluded, cmpOr(m.Email, m.UserID))
+			}
+		}
+		out["excluded_members"] = excluded
 	}
 	writeJSON(w, http.StatusOK, out)
 }
