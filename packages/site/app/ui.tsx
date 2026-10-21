@@ -92,10 +92,15 @@ export function StepBadge({ n }: { n: number }) {
 export const DOCS: Array<[string, string, string]> = [
   ['Quickstart', '/docs/quickstart', 'Install effigentd, enroll a machine, and watch your first agent session in monitor mode.'],
   ['Policies', '/docs/policies', 'Scope, rules, decisions and precedence — and how one policy becomes kernel rules and hook checks.'],
-  ['Approvals', '/docs/approvals', 'How a paused action reaches a reviewer, what an approval is bound to, and when it expires.'],
+  ['Actions & environments', '/docs/actions', 'What a tool call does — git pushes, SQL, cloud changes, package installs, credential reads — and rules for prod vs everything else.'],
+  ['Approvals', '/docs/approvals', 'How a paused action reaches a reviewer, what an approval is bound to, two-person rules, tickets, and approval for policy changes.'],
   ['Enforcement & coverage', '/docs/enforcement', 'Kernel and hook enforcement, what each covers per agent, enforcement from the first instruction, offline behaviour and emergency suspend.'],
   ['Kubernetes & containers', '/docs/kubernetes', 'effigentd on every Kubernetes node with Helm, or on a plain Docker host: requirements, install, upgrade, uninstall and operations.'],
+  ['Cloud agents', '/docs/cloud-agents', 'Claude Code on the web, the GitHub Copilot coding agent and Cursor background agents under the same policy, and hooks for agents in containers.'],
+  ['Model gateway', '/docs/model-gateway', 'Which models agents may use, output caps, and the tokens of every model call, through a local gateway for Claude Code and Codex.'],
+  ['Inventory, reports & alerts', '/docs/inventory', 'Every agent and MCP server in use, new behaviour per machine, the posture report, machine health alerts, retention and legal hold.'],
   ['Pricing Leaks', '/docs/pricing-leaks', 'Connect your AI vendors, match their seats and costs to the people running agents, and get the monthly saving and runaway-cost alerts.'],
+  ['Self-hosting', '/docs/self-hosting', 'Run the control plane and console in your own cluster or on one host, with your OIDC provider for sign-in.'],
   ['API', '/docs/api', 'effigentd’s local API, the event stream it sends to the control plane, and what the console exposes.'],
 ];
 

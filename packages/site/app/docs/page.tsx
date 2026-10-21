@@ -5,7 +5,7 @@ import { Nav, Footer, PageHero, DocSection, DOCS } from '../ui';
 export const metadata: Metadata = {
   title: 'Documentation — Effigent',
   description:
-    'Run Effigent: install effigentd and enroll a machine, write policies, route approvals, see how kernel and hook enforcement cover every agent action, and use the API.',
+    'Run Effigent: install effigentd and enroll a machine, write policies for what agents do in prod, route approvals, cover cloud agents and containers, control models, self-host, and use the API.',
 };
 
 export default function DocsIndex() {
@@ -15,7 +15,7 @@ export default function DocsIndex() {
       <PageHero
         eyebrow="Documentation"
         title="How Effigent sees, decides and enforces."
-        sub="Short pages: how to put effigentd on a machine, how a policy turns into a decision, what an approval covers, and how the kernel and agent hooks enforce it."
+        sub="Short pages: how to put effigentd on a machine, how a policy turns into a decision, what an approval covers, how the kernel and agent hooks enforce it, and where cloud agents, models and your own infrastructure fit in."
       />
       <DocSection>
         <div className="grid-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -27,7 +27,7 @@ export default function DocsIndex() {
           ))}
           <Link href="/developers" className="tier-mini" style={{ display: 'block', border: '1px dashed var(--line-2)', borderRadius: 12, padding: '20px 22px' }}>
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Agent setup guide</div>
-            <div style={{ fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.55 }}>Per agent: how effigentd recognises Claude Code, Codex, Cursor, Gemini CLI and the rest, which hooks it uses, and how to add your own.</div>
+            <div style={{ fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.55 }}>Per agent: how effigentd recognises Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot and the rest, which hooks it uses, and how to add your own.</div>
           </Link>
         </div>
       </DocSection>

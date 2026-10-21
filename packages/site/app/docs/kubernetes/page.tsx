@@ -4,7 +4,7 @@ import { Nav, Footer, PageHero, DocSection, CodeBlock, DocsPager, H2 } from '../
 
 export const metadata: Metadata = {
   title: 'Kubernetes & containers — Effigent docs',
-  description: 'Run effigentd on Kubernetes nodes with Helm or on plain Docker hosts next to Tetragon: requirements, install, upgrade, uninstall and operations.',
+  description: 'Run effigentd on Kubernetes nodes with Helm or on plain Docker hosts next to Tetragon: requirements, install, agent hooks and approvals inside pods, upgrade, uninstall and operations.',
 };
 
 const VALUES: Array<[string, string, string]> = [
@@ -14,6 +14,8 @@ const VALUES: Array<[string, string, string]> = [
   ['stateHostPath', '/var/lib/effigent', 'Credentials and the cached signed policy on each node. Keep it: a restarted pod stays the same machine.'],
   ['tetragon.address', '127.0.0.1:54321', 'Tetragon’s gRPC address on the node.'],
   ['listen', '127.0.0.1:7777', 'effigentd’s local API on the node’s loopback; "" turns it off.'],
+  ['hookSocket.enabled', 'true', 'Serves the agent hook API on a unix socket, so agents in pods get hook checks and approvals.'],
+  ['hookSocket.hostPath', '/var/run/effigent', 'Node directory holding hook.sock; agent pods mount it.'],
   ['resources', '50m / 64Mi, limit 256Mi', 'Requests and limits for the effigentd container.'],
   ['nodeSelector', 'kubernetes.io/os: linux', 'Which nodes run effigentd.'],
   ['tolerations', 'operator: Exists', 'Runs on every node, tainted ones included.'],
@@ -33,7 +35,7 @@ export default function Kubernetes() {
       <DocSection>
         <H2>Whatever model drives the agent</H2>
         <p className="doc-p">
-          effigentd governs what an agent does on the machine: the programs it runs, the files it opens, the addresses it connects to. It doesn&apos;t matter which model drives the agent (Claude, GPT, Gemini, Grok, or anything else called over an API), or whether the agent is a known CLI or your own code. What matters is that it runs on a machine you control: a laptop, a server, a container host or a Kubernetes node. Agents that run in a provider&apos;s own cloud sandbox are covered only if the provider runs effigentd there.
+          effigentd governs what an agent does on the machine: the programs it runs, the files it opens, the addresses it connects to. It doesn&apos;t matter which model drives the agent (Claude, GPT, Gemini, Grok, or anything else called over an API), or whether the agent is a known CLI or your own code. What matters is that it runs on a machine you control: a laptop, a server, a container host or a Kubernetes node. Agents that run in a provider&apos;s cloud, such as Claude Code on the web or the GitHub Copilot coding agent, are covered through a <Link href="/docs/cloud-agents">cloud environment</Link>.
         </p>
       </DocSection>
 
@@ -114,6 +116,36 @@ ENTRYPOINT ["effigentd", "run", "--agent", "claude-code", "--strict", "--"]
 CMD ["claude", "-p", "fix the failing test"]`}</CodeBlock>
       </DocSection>
 
+      <DocSection id="hooks">
+        <H2>Hooks and approvals inside pods</H2>
+        <p className="doc-p">
+          The kernel layer covers every pod on its own. To also get command-level rules, MCP and tool rules, and approvals for agents in pods, point their hooks at the node&apos;s effigentd. The chart serves the hook API on a unix socket, <code>/var/run/effigent/hook.sock</code>, on every node. It is on by default (<code>hookSocket.enabled</code>). An agent pod mounts the directory, and its image runs <code>effigentd hook claude|codex|gemini|cursor</code> as the agent&apos;s hook:
+        </p>
+        <CodeBlock title="agent pod spec">{`spec:
+  containers:
+    - name: agent
+      env:
+        - name: EFFIGENT_HOOK_SOCKET
+          value: /var/run/effigent/hook.sock
+      volumeMounts:
+        - name: effigent-hooks
+          mountPath: /var/run/effigent
+  volumes:
+    - name: effigent-hooks
+      hostPath:
+        path: /var/run/effigent
+        type: Directory`}</CodeBlock>
+        <ul className="doc-list" style={{ marginTop: 14 }}>
+          <li><b>Identified by the kernel.</b> effigentd works out who is calling from the socket itself: process, user, container and pod. It never relies on what the request says. Events and approval requests name the pod and container.</li>
+          <li><b>Read inside the container.</b> Files a rule needs to read, like a script the agent runs or its MCP config, are read from the container&apos;s own file system.</li>
+          <li><b>The same policy.</b> Deny lists, approval lists, actions and MCP rules work as on a laptop, and the agent waits in its pod while the approver decides.</li>
+          <li><b>Pod Security.</b> A hostPath volume needs a namespace at the <code>privileged</code> Pod Security level, or an admission policy that allows this one path.</li>
+        </ul>
+        <p className="doc-p">
+          On a Docker host, add <code>-v /var/run/effigent:/var/run/effigent</code> and <code>-hook-socket /var/run/effigent/hook.sock</code> to effigentd. Then run agent containers with the same volume and <code>-e EFFIGENT_HOOK_SOCKET=/var/run/effigent/hook.sock</code>.
+        </p>
+      </DocSection>
+
       <DocSection id="docker">
         <H2>Docker hosts without Kubernetes</H2>
         <p className="doc-p">
@@ -127,7 +159,9 @@ CMD ["claude", "-p", "fix the failing test"]`}</CodeBlock>
 docker run -d --name effigentd --restart unless-stopped --privileged --pid host --network host \\
   -e EFFIGENT_ENROLL_TOKEN=eft_… \\
   -v /var/lib/effigent:/var/lib/effigent -v /proc:/host/proc:ro -v /sys/kernel/security:/sys/kernel/security:ro \\
-  ghcr.io/effigent/effigentd:latest`}</CodeBlock>
+  -v /var/run/effigent:/var/run/effigent \\
+  ghcr.io/effigent/effigentd:latest \\
+  -state-dir /var/lib/effigent -procfs /host/proc -output json -hook-socket /var/run/effigent/hook.sock`}</CodeBlock>
         <p className="doc-p" style={{ marginTop: 14 }}>The same as a Compose file:</p>
         <CodeBlock title="compose.yaml">{`services:
   tetragon:
@@ -152,12 +186,14 @@ docker run -d --name effigentd --restart unless-stopped --privileged --pid host 
     pid: host
     network_mode: host
     depends_on: [tetragon]
+    command: [-state-dir, /var/lib/effigent, -procfs, /host/proc, -output, json, -hook-socket, /var/run/effigent/hook.sock]
     environment:
       EFFIGENT_ENROLL_TOKEN: \${EFFIGENT_ENROLL_TOKEN:-}   # put it in .env next to this file
     volumes:
       - /var/lib/effigent:/var/lib/effigent
       - /proc:/host/proc:ro
-      - /sys/kernel/security:/sys/kernel/security:ro`}</CodeBlock>
+      - /sys/kernel/security:/sys/kernel/security:ro
+      - /var/run/effigent:/var/run/effigent          # hook socket for agent containers`}</CodeBlock>
         <ul className="doc-list" style={{ marginTop: 14 }}>
           <li><b>The event cache flags matter here.</b> Outside Kubernetes nothing fills in pod details, and Tetragon by default holds every event from a container about 30 seconds (15 retries × 2 s) waiting for them. With <code>--event-cache-retries=2 --event-cache-retry-delay=1</code> events arrive in about two seconds, and <code>effigentd run</code> confirms enforcement in about one.</li>
           <li><b>The token is used once.</b> The credentials stay in <code>/var/lib/effigent</code> on the host; later starts reuse them and ignore the token.</li>
@@ -197,7 +233,7 @@ docker rm -f effigentd tetragon`}</CodeBlock>
       <DocSection>
         <H2>Operating notes</H2>
         <ul className="doc-list">
-          <li><b>Kernel enforcement for every pod.</b> Agents in containers are governed by the node&apos;s kernel layer: programs, files and network, for the agent and every process it starts. See <Link href="/docs/enforcement">Enforcement &amp; coverage</Link>.</li>
+          <li><b>Kernel enforcement for every pod.</b> Agents in containers are governed by the node&apos;s kernel layer: programs, files and network, for the agent and every process it starts. Pods that mount the hook socket also get hook checks and approvals (<a href="#hooks">above</a>). See <Link href="/docs/enforcement">Enforcement &amp; coverage</Link>.</li>
           <li><b>One machine per node, one policy per machine.</b> Every agent on a node follows that node&apos;s policy, whichever pod or namespace it runs in. Agent detection and per-agent rules work as on any Linux machine.</li>
           <li><b>Paths are the container&apos;s.</b> <code>exec_deny</code> and <code>file_deny</code> match the path inside the agent&apos;s container (<code>/usr/bin/curl</code> in its image), not on the node.</li>
           <li><b>New nodes need a valid token.</b> An autoscaled node enrolls with the token in the Secret. When it expires (30 days at most) or runs out of machines, new nodes can&apos;t enroll: put a fresh token in the Secret. Replaced nodes stay in the console as stale machines until you revoke them.</li>

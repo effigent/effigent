@@ -197,16 +197,26 @@ const EXAMPLE_LEAKS: Array<[string, string, string, string]> = [
 const ROLES: Array<{ who: string; hue: string; title: string; points: string[] }> = [
   {
     who: 'Security & CISO', hue: '25', title: 'Control without banning agents.',
-    points: ['Every command, file, connection and MCP call tied to the agent, user and machine', 'Secrets, exfiltration hosts and risky binaries blocked in the kernel', 'Tamper-evident audit trail for every decision and approval'],
+    points: ['Every command, file, connection and MCP call tied to the agent, user and machine', 'Secrets, exfiltration hosts and risky binaries blocked in the kernel', 'Rules for prod: DROP TABLE, terraform destroy or a push to main can need two people', 'Tamper-evident audit trail, and an alert when a hook is removed or a daemon stops'],
   },
   {
     who: 'Platform & DevEx', hue: '250', title: 'One daemon. No agent changes.',
-    points: ['Laptops, servers, CI runners and Kubernetes nodes from one console', 'Monitor first, then enforce per team, agent or machine', 'API keys and signed webhooks for your own automation'],
+    points: ['Laptops, servers, CI runners, Kubernetes pods and cloud agents from one console', 'Monitor first, then enforce per team, agent or machine', 'Hosted, or self-hosted with your own OIDC sign-in', 'API keys and signed webhooks for your own automation'],
   },
   {
     who: 'Engineering leadership', hue: '150', title: 'Say yes to the agents your team wants.',
-    points: ['Approvals for the few actions that matter: git push, prod, secrets', 'One policy covers every agent, whichever model drives it', 'Pricing Leaks finds the AI spend you can cut'],
+    points: ['Approvals for the few actions that matter: git push, prod, secrets', 'One policy covers every agent, whichever model drives it', 'A posture report every week: agents, MCP servers, blocks and approvals', 'Pricing Leaks finds the AI spend you can cut'],
   },
+];
+
+/** "Beyond the command" cards: title, text, docs page, accent hue. */
+const BEYOND: Array<[string, string, string, string]> = [
+  ['Actions & environments', 'Git pushes to protected branches, SQL writes, cloud changes and package installs, each with its target: the AWS account, kube context, Terraform workspace or database host. Rules can say prod only.', '/docs/actions', '25'],
+  ['Packages', 'Installs are checked against your allow and deny lists, your registries and the OSV feed of malicious and vulnerable packages, before they run.', '/docs/actions', '75'],
+  ['Cloud agents & containers', 'Claude Code on the web, the GitHub Copilot coding agent and Cursor background agents ask Effigent through the repository’s hooks. Agents in pods use the node’s hook socket.', '/docs/cloud-agents', '250'],
+  ['Model gateway', 'Choose the models each agent may use, cap output tokens and record the tokens of every Claude Code and Codex model call.', '/docs/model-gateway', '290'],
+  ['Inventory & posture report', 'Every agent and MCP server on every machine, the people using AI tools outside any managed machine, what is new this week, and a weekly report by email.', '/docs/inventory', '150'],
+  ['Self-hosted', 'Run the control plane and console in your own Kubernetes cluster or on one host, with Okta, Entra ID, Keycloak or any OIDC provider for sign-in.', '/docs/self-hosting', '200'],
 ];
 
 const STEPS: Array<[string, string]> = [
@@ -366,7 +376,7 @@ export default function Page() {
           <div className="marquee-track">
             {[0, 1].map((dup) => (
               <div key={dup} style={{ display: 'flex', gap: 56 }} aria-hidden={dup === 1}>
-                {[...platforms, 'Kernel enforcement · eBPF', 'Agent hooks', 'MCP servers', 'Signed policies', 'Offline enforcement', 'Slack · email approvals'].map((h) => (
+                {[...platforms, 'Kernel enforcement · eBPF', 'Agent hooks', 'MCP servers', 'Model gateway', 'Signed policies', 'Offline enforcement', 'Slack · email approvals', 'Self-hosted'].map((h) => (
                   <span key={h} className="marquee-item"><span className="mdot" />{h}</span>
                 ))}
               </div>
@@ -618,6 +628,7 @@ export default function Page() {
               ['Single-use', 'It resumes that call once. The next force-push asks again.'],
               ['Bound to the exact action', 'Change one argument and it is a different fingerprint, so a new request.'],
               ['Routed to the right people', 'Approver groups per kind of action: AWS changes to DevOps, outside hosts to security.'],
+              ['Two people when it matters', 'A rule can need two approvers and a ticket. Nobody approves their own request.'],
               ['Expires', 'Each rule sets a TTL. Nobody answering is a no, not a yes.'],
             ].map(([t, d]) => (
               <div key={t} style={{ display: 'flex', gap: 12, padding: '11px 0', borderTop: '1px solid oklch(0.92 0.005 90)' }}>
@@ -756,6 +767,26 @@ export default function Page() {
               <b style={{ color: 'var(--ink-2)' }}>Block</b> stops it before it runs. <b style={{ color: 'var(--ink-2)' }}>Require approval</b> holds it for a named reviewer. <b style={{ color: 'var(--ink-2)' }}>Audit</b> records it with the rule and policy version. In monitor mode every match is reported as <code style={{ fontFamily: 'var(--mono)' }}>would_block</code> first.
             </div>
             <Link href="/docs/enforcement" style={{ fontSize: 14, fontWeight: 600, color: LINK, whiteSpace: 'nowrap' }}>How enforcement works &rarr;</Link>
+          </div>
+        </Reveal>
+      </Section>
+
+      {/* BEYOND THE COMMAND — what each call means, and where agents run */}
+      <Section id="beyond" tint>
+        <Reveal>
+          <Eyebrow hue="290">Beyond the command</Eyebrow>
+          <H2 max={720}>Rules for what an action <b>does</b>, wherever the agent runs.</H2>
+          <Lead max={680} mb={30}>
+            A push to main, a DROP TABLE on the prod database, a terraform destroy in the prod workspace: Effigent reads what each tool call does and which environment it touches, and decides on that. The same policy follows agents into containers, into the vendor&apos;s cloud and down to the model they call.
+          </Lead>
+          <div className="beyond-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 14 }}>
+            {BEYOND.map(([title, text, href, hue]) => (
+              <Link key={href} href={href} className="tier-card" style={{ display: 'block', border: '1px solid var(--line)', borderRadius: 12, padding: '18px 20px', background: 'oklch(0.995 0.002 90)', borderTop: `3px solid oklch(0.6 0.15 ${hue})` }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>{title}</div>
+                <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>{text}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: LINK }}>Read more &rarr;</div>
+              </Link>
+            ))}
           </div>
         </Reveal>
       </Section>

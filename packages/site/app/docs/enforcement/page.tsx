@@ -5,18 +5,19 @@ import { CoverageTable } from '../../coverage';
 
 export const metadata: Metadata = {
   title: 'Enforcement & coverage — Effigent docs',
-  description: 'How Effigent enforces policy on coding agents: kernel-level eBPF enforcement across every child process, agent hooks for commands, files, URLs and MCP tools, approvals, enforcement from the first instruction, offline behaviour and emergency suspend.',
+  description: 'How Effigent enforces policy on coding agents: kernel-level eBPF enforcement across every child process, agent hooks for commands, files, URLs and MCP tools in Claude Code, Codex, Gemini CLI and Cursor, approvals, alerts when protection is switched off, enforcement from the first instruction, offline behaviour and emergency suspend.',
 };
 
 const AGENTS: Array<[string, string, string]> = [
   ['Claude Code', 'binary claude · args @anthropic-ai/claude-code', 'Kernel + PreToolUse hook'],
   ['Codex', 'binary codex · args @openai/codex', 'Kernel + PreToolUse hook'],
   ['Gemini CLI', 'binary gemini · args @google/gemini-cli', 'Kernel + BeforeTool hook'],
-  ['Cursor', 'binary cursor-agent', 'Kernel + process tree'],
+  ['Cursor', 'binary cursor-agent · the Cursor app', 'Kernel + Cursor hooks'],
   ['Aider', 'binary aider', 'Kernel + process tree'],
   ['OpenCode', 'binary opencode', 'Kernel + process tree'],
   ['Goose', 'binary goose', 'Kernel + process tree'],
   ['Your own agent', 'any binary name or launch argument', 'Kernel + process tree'],
+  ['Cloud agents', 'Claude Code on the web, Copilot coding agent, Cursor background agents', 'Repository hooks + cloud environment'],
 ];
 
 export default function Enforcement() {
@@ -32,9 +33,10 @@ export default function Enforcement() {
       <DocSection>
         <H2>The two layers</H2>
         <ul className="doc-list">
-          <li><b>Agent hooks.</b> Claude Code, Codex and Gemini CLI call a hook before each tool runs, on Linux, macOS and Windows. effigentd installs it in the agents&apos; machine-wide settings (<code>effigentd install-hooks</code>; the macOS and Windows installers run it). The hook sees the full command, file path, URL or MCP tool name, so it can allow, deny, or pause the call for approval. One policy covers all three agents: their tools are mapped onto the same names.</li>
+          <li><b>Agent hooks.</b> Claude Code, Codex, Gemini CLI and Cursor call a hook before each tool runs, on Linux, macOS and Windows. effigentd installs it in the agents&apos; machine-wide settings (<code>effigentd install-hooks</code>; the macOS and Windows installers run it). The hook sees the full command, file path, URL or MCP tool name, so it can allow, deny, or pause the call for approval. It also reads what the call does: a push to a protected branch, a destructive SQL statement, a cloud change in production, a package install (see <Link href="/docs/actions">Actions</Link>). One policy covers all four agents, because their tools are mapped onto the same names. Agents in Kubernetes pods reach it through the node&apos;s <Link href="/docs/kubernetes#hooks">hook socket</Link>, and agents in a vendor&apos;s cloud through a <Link href="/docs/cloud-agents">cloud environment</Link>.</li>
           <li><b>Kernel (eBPF, Linux).</b> effigentd loads a policy scoped to each agent&apos;s process tree through eBPF and BPF LSM (Tetragon). It sees every exec, file open and outbound connection from the agent and all of its children, including scripts the agent wrote, package hooks and MCP servers. It blocks exec by resolved binary path, file opens by path, and connections by destination (<code>network_deny</code>, <code>network_allow</code>, and hostnames in <code>domain_deny</code>, which effigentd resolves to addresses).</li>
           <li><b>Process tree.</b> effigentd recognises each agent by binary or launch arguments, follows every process it starts, and attributes each event to that agent, user and machine.</li>
+          <li><b>Model gateway.</b> Optionally, Claude Code and Codex send their model calls through effigentd on the machine. That is where models are allowed or refused and tokens are counted for each call. See <Link href="/docs/model-gateway">Model gateway</Link>.</li>
         </ul>
       </DocSection>
 
@@ -86,7 +88,7 @@ export default function Enforcement() {
       <DocSection>
         <H2>Offline</H2>
         <p className="doc-p">
-          Decisions are made on the machine, from the last policy the machine received. Losing the connection to the control plane changes nothing about enforcement. Events wait on the machine&apos;s disk and are sent when it reconnects. An action that needs an approval is denied until an approver can be reached, never silently allowed. The console shows each endpoint&apos;s last heartbeat and policy version, so stale machines are visible.
+          Decisions are made on the machine, from the last policy the machine received. Losing the connection to the control plane changes nothing about enforcement. Events wait on the machine&apos;s disk and are sent when it reconnects. An action that needs an approval is denied until an approver can be reached, never silently allowed. The console shows each endpoint&apos;s last heartbeat and policy version, and a machine that stays silent raises an offline alert.
         </p>
       </DocSection>
 
@@ -111,11 +113,23 @@ export default function Enforcement() {
       </DocSection>
 
       <DocSection>
+        <H2>When protection is switched off</H2>
+        <p className="doc-p">
+          Someone with admin rights on a machine can edit its files or stop its services. Effigent makes sure you know when that happens:
+        </p>
+        <ul className="doc-list">
+          <li><b>Hook health.</b> Every machine reports, for each agent, whether its hook is installed. It flags a hook that was removed, switched off in the agent&apos;s settings, edited to fail open, disabled by a user, or pointing at an effigentd binary that is gone. A new problem on a machine where that agent is installed raises an alert. You see it in the console, by email and on webhook <code>endpoint.hooks_missing</code>.</li>
+          <li><b>Stopped or silent.</b> A clean stop sends <code>daemon_stop</code> with the signal and how effigentd was run. A kill or crash shows up as <code>daemon_unclean_restart</code> at the next start. A machine silent longer than your threshold (default five minutes) goes offline, with an email and webhook <code>endpoint.offline</code>. The alert tells a stop apart from a machine that went silent.</li>
+          <li><b>Hooks fail closed.</b> If effigentd isn&apos;t running, the agents&apos; hooks deny the call rather than letting it through.</li>
+        </ul>
+      </DocSection>
+
+      <DocSection>
         <H2>Hardening recommendations</H2>
         <ul className="doc-list">
           <li>Pair exec rules with file and network rules. Kernel exec rules match the resolved binary, so <code>file_deny</code> and <code>network_allow</code> constrain what any interpreter an agent runs can reach.</li>
           <li>Use <code>require_launcher: true</code> for CI and headless agents, so the policy is live before the first instruction.</li>
-          <li>Deny <code>sudo</code> to agents that don&apos;t need it. The console shows every machine&apos;s heartbeat and policy version, so a stopped daemon stands out.</li>
+          <li>Deny <code>sudo</code> to agents that don&apos;t need it. Turn on the machine health alerts (Machines → Machine health alerts), so a removed hook or a stopped daemon reaches you by email or webhook.</li>
           <li>Keep effigentd&apos;s local policy API read-only (the default). Set a token only on machines you run standalone.</li>
         </ul>
       </DocSection>

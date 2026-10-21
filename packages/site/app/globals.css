@@ -71,6 +71,7 @@ a:hover { color: oklch(0.4 0.14 250); }
   .console-grid { grid-template-columns: 1fr !important; }
   .tier-mini-row { grid-template-columns: 1fr 1fr !important; }
   .roles-grid { grid-template-columns: 1fr !important; }
+  .beyond-grid { grid-template-columns: 1fr 1fr !important; }
   .leaks-grid { grid-template-columns: 1fr !important; gap: 36px !important; }
   .steps-row { grid-template-columns: 1fr 1fr !important; }
   /* diagram stacks: control plane ↓ machine ↓ team */
@@ -147,6 +148,7 @@ h1, h2, h3 { font-weight: 700; }
 @media (max-width: 640px) {
   .site-nav { padding: 12px 16px !important; }
   .site-nav .btn { padding: 8px 12px !important; font-size: 12.5px !important; }
+  .beyond-grid { grid-template-columns: 1fr !important; }
   .nav-login { padding: 8px 4px !important; font-size: 13px !important; }
   .site-footer { padding: 22px 20px !important; flex-direction: column !important; }
 
