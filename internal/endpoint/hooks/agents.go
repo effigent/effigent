@@ -232,6 +232,7 @@ type cursorInput struct {
 	Cwd            string   `json:"cwd"`
 	Command        string   `json:"command"` // beforeShellExecution; beforeMCPExecution: a stdio server's launch command
 	ToolName       string   `json:"tool_name"`
+	ToolUseID      string   `json:"tool_use_id"` // preToolUse, postToolUse
 	// an object for preToolUse, a JSON string for beforeMCPExecution
 	ToolInput   json.RawMessage `json:"tool_input"`
 	MCPServer   string          `json:"mcp_server_name"`
@@ -277,7 +278,7 @@ func ParseCursor(raw []byte) (Call, error) {
 	if cwd == "" && len(in.WorkspaceRoots) > 0 {
 		cwd = in.WorkspaceRoots[0]
 	}
-	orig := ClaudeInput{SessionID: in.ConversationID, Cwd: cwd, ToolName: in.ToolName, ToolInput: input}
+	orig := ClaudeInput{SessionID: in.ConversationID, Cwd: cwd, ToolName: in.ToolName, ToolInput: input, ToolUseID: in.ToolUseID}
 	c := Call{Orig: orig}
 	one := func(tool string, input map[string]any) {
 		c.Canon = append(c.Canon, ClaudeInput{SessionID: in.ConversationID, Cwd: cwd, ToolName: tool, ToolInput: input})

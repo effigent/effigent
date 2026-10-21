@@ -41,10 +41,32 @@ type HookCall struct {
 	// Env is the agent's identity-related environment (hooks.AgentEnv),
 	// reported by the hook process in X-Effigent-Agent-Env.
 	Env map[string]string
+	// Result: a post-tool hook (POST /hook/{agent}/result) reporting how a
+	// call ended; the answer is ignored by the hook process.
+	Result bool
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /hook/{agent}/result", func(w http.ResponseWriter, r *http.Request) {
+		if s.Hook == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "hooks are not enabled on this endpoint"})
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		out, err := s.Hook(r.Context(), HookCall{Agent: r.PathValue("agent"), Payload: body, Result: true,
+			OSUser: r.Header.Get("X-Effigent-OS-User")})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	})
 	mux.HandleFunc("POST /hook/{agent}", func(w http.ResponseWriter, r *http.Request) {
 		if s.Hook == nil {
 			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "hooks are not enabled on this endpoint"})

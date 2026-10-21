@@ -126,6 +126,16 @@ sess() { printf '{"session_id":"%s","cwd":"/work","tool_name":"%s","tool_input":
 sess sess-exfil WebFetch '{"url":"https://paste.example.org/new"}' | grep -q '"permissionDecision":"deny".*sending data to a new host after reading credentials' &&
   ok "then a new host in the same session is denied (exfil_sequence)" || bad "exfil_sequence not denied"
 
+echo "== outcomes (post-tool hooks)"
+printf '{"session_id":"sess-out","cwd":"/work","tool_name":"Bash","tool_input":{"command":"make test"},"tool_use_id":"toolu_out1"}' |
+  EFFIGENT_API=$EP ./bin/effigentd hook claude >/dev/null
+out=$(printf '{"session_id":"sess-out","cwd":"/work","hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"make test"},"tool_use_id":"toolu_out1","error":"Exit code 2\\nOUTPUT-BODY-MARKER password=hunter2","is_interrupt":false}' |
+  EFFIGENT_API=$EP ./bin/effigentd hook claude; echo "rc=$?")
+[ "$out" = "rc=0" ] && ok "PostToolUseFailure: the hook prints nothing and exits 0" || bad "post hook output: $out"
+out=$(printf '{"session_id":"sess-out","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' |
+  EFFIGENT_API=127.0.0.1:1 ./bin/effigentd hook claude; echo "rc=$?")
+[ "$out" = "rc=0" ] && ok "daemon unreachable: a post hook still never blocks" || bad "post hook without daemon: $out"
+
 echo "== events"
 sleep 1
 for t in approval_pending approved approval_denied; do
@@ -135,6 +145,10 @@ grep -q '"type":"approved".*Sam Sec' "$W/events.jsonl" && ok "approver named in 
 grep -q '"actions":\[{"kind":"force_push"' "$W/events.jsonl" && ok "events carry the actions" || bad "no actions on events"
 grep -q '"agent_env":{"ANTHROPIC_API_KEY":"set","AWS_PROFILE":"prod-admin"[,}]' "$W/events.jsonl" && ok "session start carries the agent env" || bad "no agent_env"
 ! grep -q 'sk-test-secret' "$W/events.jsonl" && ok "API key values never leave the hook" || bad "key value in events"
+grep '"type":"tool_result"' "$W/events.jsonl" | grep '"tool_use_id":"toolu_out1"' | grep -q '"outcome":{"status":"error","exit_code":2,"duration_ms":[0-9]*,"duration_approx":true}' &&
+  ok "tool_result: exit code, duration from the pre-tool hook, tied by tool_use_id" || bad "tool_result: $(grep tool_result "$W/events.jsonl")"
+grep '"type":"exec"' "$W/events.jsonl" | grep -q '"tool_use_id":"toolu_out1"' && ok "the call's event carries the same tool_use_id" || bad "no tool_use_id on the call"
+! grep -q 'OUTPUT-BODY-MARKER' "$W/events.jsonl" && ok "the tool's output never reaches the daemon" || bad "output in events"
 
 echo
 echo "passed $pass, failed $fail"

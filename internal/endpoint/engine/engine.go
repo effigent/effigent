@@ -130,6 +130,11 @@ func scrub(ev event.Event) event.Event {
 		}
 		ev.Actions = acts
 	}
+	if ev.Outcome != nil && ev.Outcome.Error != "" {
+		o := *ev.Outcome
+		o.Error = redact.String(o.Error)
+		ev.Outcome = &o
+	}
 	return ev
 }
 

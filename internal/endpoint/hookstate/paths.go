@@ -73,6 +73,19 @@ func ProgramData() string {
 // calls a dedicated event also sees (Shell, Read, MCP) are left to it.
 var CursorEvents = []string{"beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "preToolUse"}
 
+// Post-tool events effigentd registers to record how each call ended
+// (outcomes). They are optional: a missing one never makes the policy hook
+// "modified" (Agent.Outcomes says whether they are all there).
+var (
+	ClaudePostEvents = []string{"PostToolUse", "PostToolUseFailure"}
+	CodexPostEvents  = []string{"PostToolUse"}
+	GeminiPostEvents = []string{"AfterTool"}
+	CursorPostEvents = []string{"postToolUse", "postToolUseFailure"}
+)
+
+// GeminiResultHookName is the name of the Gemini CLI AfterTool hook.
+const GeminiResultHookName = "effigent-outcomes"
+
 // IsHookCmd reports whether a hook command runs `effigentd hook <agent>`.
 func IsHookCmd(c, agent string) bool {
 	_, ok := hookBinary(c, agent)

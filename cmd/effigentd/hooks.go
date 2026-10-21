@@ -56,10 +56,14 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 	var mu sync.Mutex
 	seen := map[string]time.Time{}  // agent/session id -> last call
 	sessions := hooks.NewSessions() // session rules (exfil_sequence, untrusted_then_risky)
+	calls := hooks.NewCalls()       // when each call started, for outcomes without a duration
 	return func(ctx context.Context, c api.HookCall) ([]byte, error) {
 		ag, ok := hookAgents[c.Agent]
 		if !ok {
 			return nil, fmt.Errorf("unknown agent hook %q", c.Agent)
+		}
+		if c.Result {
+			return hookResult(eng, ag, c, calls)
 		}
 		call, err := ag.parse(c.Payload)
 		if err != nil {
@@ -101,7 +105,10 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		// One event per tool call, so the console sees everything the agent
 		// did; a policy match makes it blocked / would_block / file_open.
 		ev := who.on(event.Event{Time: time.Now(), Type: event.Exec, Severity: "info", Agent: ag.name,
-			Kind: "tool", Target: call.Summary(), Rule: "hook", Message: "session " + short(in.SessionID)})
+			Kind: "tool", Target: call.Summary(), Rule: "hook", Message: "session " + short(in.SessionID), ToolUseID: cut(in.ToolUseID, 200)})
+		if in.SessionID != "" {
+			calls.Start(key, ev.ToolUseID, ev.Target)
+		}
 		if hooks.Claude == nil {
 			// No decision logic in this build: watch mode. Record the call,
 			// block nothing, and leave the user's own permission prompts as is.
@@ -141,6 +148,32 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		eng.Emit(ev)
 		return ag.output(d), nil
 	}
+}
+
+// hookResult records how a tool call ended (a post-tool hook) as a
+// tool_result event. The payload carries no output: the hook process
+// replaced it with the outcome (hooks.ReduceResult).
+func hookResult(eng *engine.Engine, ag hookAgent, c api.HookCall, calls *hooks.Calls) ([]byte, error) {
+	r, err := hooks.ParseResult(c.Agent, c.Payload)
+	if err != nil {
+		return nil, err
+	}
+	session, summary, o := r.Call.Orig.SessionID, r.Call.Summary(), r.Outcome
+	if session != "" {
+		if d, ok := calls.Finish(ag.name+"/"+session, r.ToolUseID, summary); ok && o.DurationMS == 0 {
+			o.DurationMS, o.DurationApprox = max(d.Milliseconds(), 1), true
+		}
+	}
+	eng.Emit(hookIdentity(c).on(event.Event{Time: time.Now(), Type: event.ToolResult, Severity: "info", Agent: ag.name,
+		Kind: "tool", Target: summary, Rule: "hook", ToolUseID: r.ToolUseID, Outcome: &o, Message: hooks.ResultMessage(o)}))
+	return []byte("{}"), nil
+}
+
+func cut(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // identity is who is behind a hook call, copied onto its events.
@@ -341,21 +374,25 @@ func hookCmd(args []string) {
 		os.Exit(2)
 	}
 	ag := hookAgents[args[0]]
-	limit := int64(1 << 20)
-	if ag.slim != nil {
-		limit = 64 << 20 // Cursor sends the whole file it is about to read; slim drops it
-	}
-	payload, err := io.ReadAll(io.LimitReader(os.Stdin, limit))
+	// Cursor sends the whole file it is about to read (slim drops it), and
+	// post-tool events carry the tool's output (ReduceResult drops it).
+	payload, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
 	if err != nil {
 		os.Stdout.Write(ag.failClosed("the hook input could not be read"))
 		return
 	}
-	if ag.slim != nil {
-		payload = ag.slim(payload)
-	}
 	addr := os.Getenv("EFFIGENT_API")
 	if addr == "" {
 		addr = "127.0.0.1:7777"
+	}
+	if hooks.IsResult(payload) {
+		hookResultCmd(args[0], addr, payload)
+		return
+	}
+	if ag.slim != nil {
+		payload = ag.slim(payload)
+	} else if len(payload) > 1<<20 {
+		payload = payload[:1<<20] // as before: a call too big to read fails closed
 	}
 	// How long the agent lets this hook run is the agent's setting, not ours:
 	// Claude Code reads it when a session starts (older installs set 30s) and
@@ -387,4 +424,28 @@ func hookCmd(args []string) {
 		return
 	}
 	os.Stdout.Write(out)
+}
+
+// hookResultCmd handles a post-tool event: it reports how the call ended and
+// never affects the agent. It prints nothing the agent acts on and exits 0
+// whatever happens (daemon down, slow, an older daemon without the route).
+func hookResultCmd(agent, addr string, payload []byte) {
+	defer os.Stdout.Write(hooks.ResultOutput(agent))
+	body, ok := hooks.ReduceResult(agent, payload)
+	if !ok {
+		return
+	}
+	c := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/hook/"+agent+"/result", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if u, err := user.Current(); err == nil {
+		req.Header.Set("X-Effigent-OS-User", u.Username)
+	}
+	if res, err := c.Do(req); err == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
+		res.Body.Close()
+	}
 }
