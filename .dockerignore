@@ -1,0 +1,9 @@
+# Build contexts are the repo root (Dockerfile.cp, Dockerfile.effigentd,
+# Dockerfile.console): never send dependencies, build output or secrets.
+.git
+**/node_modules
+**/.next
+**/.turbo
+.claude
+*.key
+**/.env*
