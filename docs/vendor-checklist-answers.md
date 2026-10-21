@@ -477,21 +477,35 @@ Endpoint Security or MDM-locked services.
 - **Limit:** pinning detects a changed configuration. It doesn't see a remote server changing
   its tools behind the same URL, or what an unversioned `npx` package resolves to.
 
-### 23. Model and provider control: **Partly**
-**New:**
-- `model_hosts_allow` checks where each agent is pointed. The host comes from
-  `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, Bedrock (`CLAUDE_CODE_USE_BEDROCK` + region), Vertex,
-  or the Gemini base URL; with none set, it's the vendor's default host. Any other host is
-  `model_endpoint`.
-- `model_api_key` flags an agent running with a direct API key (`ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `GEMINI_API_KEY`) instead of the company login or gateway.
-- Both can deny or require approval.
-- WebFetch and commands to non-approved AI hosts can be blocked with `domain_deny`.
+### 23. Model and provider control: **Yes** for Claude Code, **Partly** for the others
+**Already there:**
+- `model_hosts_allow` flags an agent pointed at an unapproved host (`model_endpoint`).
+- `model_api_key` flags a personal API key instead of the company login.
+- `domain_deny` blocks non-approved AI hosts.
+
+**New: a local model gateway in effigentd** (not a TLS-intercepting proxy; the agent is pointed
+at it through its base URL):
+- `effigentd install-gateway` writes the base URL into Claude Code's managed settings and
+  Codex's managed config. It's removable, and uninstalling Effigent removes it.
+- **Policy `models:`:** allowed or denied models per agent, an optional `max_tokens` cap, and
+  `require_gateway`, which makes going around the gateway a `model_endpoint` violation.
+  - A refused model gets the provider's own error format, which the agent shows.
+  - In monitor mode the call is reported and forwarded.
+- **One `model_call` event per request:** model, input/output/cache tokens, latency and status.
+  Bodies and credentials are never recorded. These events feed Pricing Leaks.
+- Your own login passes through untouched, including claude.ai sign-in.
+- Verified with real Claude Code (signed in with claude.ai): a streamed call went through, and
+  a denied model was refused locally without reaching Anthropic.
 
 **Limits:**
-- No model traffic proxy. Effigent sees configuration, not the bytes sent.
-- Which model is used is recorded when the agent reports it.
-- An agent that changes its own environment mid-session isn't re-read.
+- Codex is wired through its managed defaults, which a user can change during a run. Codex
+  hasn't been run through the gateway yet.
+- Gemini CLI takes a base URL only from the environment; Cursor sends requests through Cursor's
+  servers. Neither can be carried.
+- Bedrock and Vertex sessions go around the gateway.
+- If effigentd is down, agents pointed at the gateway can't reach their model. This fails
+  closed by design.
+- Token totals aren't shown in the console yet.
 
 ### 24. Prompt injection and anomalies: **Partly**
 Effigent doesn't detect prompt injection itself. What's new is pattern matching on what
