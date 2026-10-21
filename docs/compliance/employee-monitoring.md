@@ -21,7 +21,7 @@ the collecting.
 
 | Data | When | Detail |
 |---|---|---|
-| **Tool calls an agent makes** (hooks: Claude Code, Codex, Gemini CLI, Cursor) | Every call | Tool name plus **one** telling field: the shell command, file path, URL, search pattern or web-search query, cut to 300 characters (`hooks.Summary`). For Read/Write/Edit it is the **path only**, never the file's content. Cursor's hook payload carries the file being read; effigentd drops it before processing (`hooks.CursorSlim`) |
+| **Tool calls an agent makes** (hooks: Claude Code, Codex, Gemini CLI, Cursor) | Every call | Tool name plus **one** telling field: the shell command, file path, URL, search pattern or web-search query, cut to 300 characters (`hooks.Summary`). For Read/Write/Edit it is the **path only**, never the file's content. Cursor's hook payload carries the file being read; the hook process drops it before anything reaches the daemon (`hooks.CursorSlim`) |
 | **Actions read from a call** | When a command does something classified (§2e of the engineering guide) | Kind plus target, cut to 200 characters: pushed branch, package name, cloud operation and profile/account, database host, and **SQL statements** found in the command or in a `.sql`/script file it runs |
 | **Programs run inside an agent's process tree** (Linux, kernel layer) | Every exec in the tree | Binary path, full command line (redacted), working directory, uid |
 | **Sensitive files opened by an agent** | Only the paths on the policy's alert/deny lists, e.g. `.env`, SSH keys, cloud credentials | Path only |

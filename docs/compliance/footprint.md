@@ -79,7 +79,7 @@ agent and launcher execs, none for the plain ones.
   - A developer laptop or CI runner with heavy build fan-out will see that.
   - An idle server won't.
   - Filtering exec events at Tetragon (an export allowlist) would cut it. That isn't built.
-- **Tetragon uses about 2–3× effigentd's CPU per exec.** Its memory grows with its process
+- **Tetragon uses about 2–3× effigentd's CPU per exec outside agents, and 3–5× inside them.** Its memory grows with its process
   cache under heavy process churn and shrinks again (its process-cache GC interval is 30 s by
   default). Expect ~100–200 MB steady and several hundred MB under bursts. Tetragon's
   `--process-cache-size` (default 65,536) bounds it.
