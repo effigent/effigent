@@ -8,7 +8,39 @@
 import { ENDPOINTS, EVENTS } from '@/data.ts';
 import { createPricingLeaksFixture } from './pricing-leaks-fixture.ts';
 import { createPeopleFixture } from './people-fixture.ts';
-import { API_BASE, ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEvent, type ApiMe, type ApiNotifications, type ApiPolicyVersion } from './api.ts';
+import { API_BASE, ApiError, type Api, type ApiAuditEntry, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion } from './api.ts';
+
+/** Sample hook reports and offline state: emma-mba's Claude Code hook was removed, a user turned
+ *  Gemini CLI's hook off on alex-mbp, noa-mbp was stopped through launchd, ci-runner-03 went
+ *  silent, and mike-mbp runs an effigentd from before hook reporting. */
+function demoHealth(id: string, platform: string, ver: string, iso: (minAgo: number) => string): Partial<ApiEndpoint> {
+  const ok = (file: string, present = true) => ({ present, state: 'installed' as const, file });
+  const mac = (over: Partial<ApiHookReport['agents']> = {}): ApiHookReport => ({
+    sensor: 'hooks', expected: ['claude', 'codex', 'gemini', 'cursor'],
+    agents: {
+      claude: ok('/Library/Application Support/ClaudeCode/managed-settings.json'),
+      codex: ok('/etc/codex/requirements.toml'),
+      gemini: ok('/Library/Application Support/GeminiCli/settings.json', false),
+      cursor: ok('/Library/Application Support/Cursor/hooks.json'),
+      ...over,
+    } as ApiHookReport['agents'],
+  });
+  const linux: ApiHookReport = { sensor: 'tetragon', agents: Object.fromEntries(['claude', 'codex', 'gemini', 'cursor'].map((a) => [a,
+    { present: a === 'claude', state: 'missing' as const, file: a === 'claude' ? '/etc/claude-code/managed-settings.json' : a === 'codex' ? '/etc/codex/requirements.toml' : a === 'gemini' ? '/etc/gemini-cli/settings.json' : '/etc/cursor/hooks.json', detail: "the file doesn't exist" }])) };
+  const reported = { hooks_reported_at: iso(30), hooks_changed_at: iso(60 * 24 * 6) };
+  if (ver === '2.0.2' && id !== 'ep-emma-mba') return {}; // an effigentd from before hook reporting
+  switch (id) {
+    case 'ep-emma-mba':
+      return { ...reported, hooks_changed_at: iso(25), hooks: mac({ claude: { present: true, state: 'missing', file: '/Library/Application Support/ClaudeCode/managed-settings.json', detail: 'no effigentd PreToolUse hook' } }) };
+    case 'ep-alex-mbp':
+      return { ...reported, hooks: mac({ gemini: { present: true, state: 'installed', file: '/Library/Application Support/GeminiCli/settings.json', disabled_by: ['alex'] } }) };
+    case 'ep-noa-mbp':
+      return { ...reported, hooks: mac(), last_seen: iso(40), offline_at: iso(35), stopped_at: iso(40), stop: { signal: 'SIGTERM', via: 'launchd' } };
+    case 'ep-ci-03':
+      return { hooks: linux, hooks_reported_at: iso(60 * 3), last_seen: iso(60 * 3), offline_at: iso(60 * 3 - 5) };
+  }
+  return { ...reported, hooks: platform === 'linux' ? linux : mac() };
+}
 
 const DEMO_POLICY = `# effigentd policy (Demo Mode — sample workspace, not published anywhere)
 defaults:
@@ -72,7 +104,10 @@ export function createFixtureApi(): Api {
     os: e.platform === 'linux' ? 'linux' : 'darwin', arch: e.platform === 'linux' ? 'amd64' : 'arm64', version: e.version,
     enrolled_at: iso(60 * 24 * (10 + i)), last_seen: e.status === 'online' ? iso(0.1) : e.status === 'degraded' ? iso(2) : iso(90),
     policy_version: e.policyVersion >= 42 ? 3 : 2, revoked: false,
+    ...demoHealth(e.id, e.platform, e.version, iso),
   }));
+  let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, email_hooks: true, default_minutes: 5, min_minutes: 2,
+    tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing'], saved: false };
   const epId = new Map(ENDPOINTS.map((e, i) => [e.id, endpoints[i].id]));
   const events: ApiEvent[] = EVENTS.filter((e) => e.type !== 'approval' && e.endpoint && e.agentType).map((e, i) => ({
     id: 1000 - i, endpoint_id: epId.get(e.endpoint!) ?? endpoints[0].id, time: iso(minutesAgo(e.ago)), type: e.type,
@@ -137,6 +172,7 @@ export function createFixtureApi(): Api {
       if (p === '/audit/verify') return delay({ ok: true, entries: audit.length, head: audit[audit.length - 1]?.hash }) as Promise<T>;
       if (p === '/approvals') return delay([]) as Promise<T>; // the demo queue reads the sample store
       if (p === '/notifications') return delay(notifications) as Promise<T>;
+      if (p === '/endpoint-health') return delay({ ...endpointHealth, emails: notifications.emails }) as Promise<T>;
       if (p === '/api-keys') return delay(apiKeys) as Promise<T>;
       if (p === '/exceptions') return delay(exceptions) as Promise<T>;
       if (p === '/exceptions/options') return delay({ agents: ['claude-code', 'codex', 'gemini-cli'], mode: 'denylist', options: [
@@ -180,6 +216,16 @@ export function createFixtureApi(): Api {
         ep.revoked = true;
         log('endpoint.revoke', ep.id, null);
         return delay({ ok: true }) as Promise<T>;
+      }
+      if (method === 'PUT' && path === '/endpoint-health') {
+        const b = (body ?? {}) as { offline_after_minutes?: number; email_offline?: boolean; email_hooks?: boolean };
+        if (b.offline_after_minutes !== undefined && !(b.offline_after_minutes >= 2 && b.offline_after_minutes <= 10080)) {
+          return Promise.reject(new ApiError(400, 'offline_after_minutes must be 2 to 10080'));
+        }
+        const before = endpointHealth;
+        endpointHealth = { ...endpointHealth, ...b, saved: true, updated_by: me.user_id, updated_at: new Date().toISOString() };
+        log('endpoint_health.update', '', { before: { offline_after_seconds: before.offline_after_minutes * 60 }, after: { offline_after_seconds: endpointHealth.offline_after_minutes * 60 } });
+        return delay({ ...endpointHealth, emails: notifications.emails }) as Promise<T>;
       }
       if (method === 'PUT' && path === '/approval-routing') {
         routing = { ...(body as typeof routing), updated_by: me.user_id, updated_at: new Date().toISOString() };

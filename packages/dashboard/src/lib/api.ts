@@ -31,6 +31,40 @@ export interface ApiEndpoint {
   last_seen: string | null;
   policy_version: number;
   revoked: boolean;
+  /** effigentd ≥ the hook-state release: each agent's hook as last reported (null before). */
+  hooks?: ApiHookReport | null;
+  hooks_reported_at?: string | null;
+  hooks_changed_at?: string | null;
+  /** Set by the control plane's offline detector; cleared on the next heartbeat. */
+  offline_at?: string | null;
+  /** The last daemon_stop effigentd sent: when, and the signal / service manager / user. */
+  stopped_at?: string | null;
+  stop?: { signal?: string; via?: string; os_user?: string } | null;
+}
+
+export type ApiHookState = 'installed' | 'missing' | 'modified' | 'unreadable';
+
+/** hookstate.Report as stored (plus `expected`: agents whose hook was once seen in place). */
+export interface ApiHookReport {
+  sensor: string; // tetragon | hooks
+  agents: Record<string, { present: boolean; state: ApiHookState; file: string; detail?: string; disabled_by?: string[] }>;
+  expected?: string[];
+}
+
+/** GET|PUT /api/v1/endpoint-health */
+export interface ApiEndpointHealth {
+  offline_after_minutes: number;
+  email_offline: boolean;
+  email_hooks: boolean;
+  default_minutes: number;
+  min_minutes: number;
+  tick_seconds: number;
+  emails: string[];
+  email_available: boolean;
+  webhook_events: string[];
+  updated_by?: string;
+  updated_at?: string;
+  saved: boolean;
 }
 
 /** store.PolicyVersion — GET /api/v1/policy (with body), /policy/history (without) */

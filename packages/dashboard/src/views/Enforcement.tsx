@@ -6,15 +6,15 @@ import { AGENT_TYPES } from '@/data.ts';
 import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
-import { apiErrorText, type ApiEnrollment } from '@/lib/api.ts';
-import { ago, dateTime, type EndpointRow } from '@/lib/live-map.ts';
+import { apiErrorText, type ApiEndpointHealth, type ApiEnrollment } from '@/lib/api.ts';
+import { ago, dateTime, type EndpointRow, type HookRow } from '@/lib/live-map.ts';
 import type { AgentType } from '@/types.ts';
 import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageGuide, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
 
 /** How each agent is recognised (policy/default.yaml) and which layers enforce it. */
 const INTEGRATIONS: { type: AgentType; detect: string; hooks: string | null }[] = [
   { type: 'claude-code', detect: 'binary claude · args @anthropic-ai/claude-code', hooks: 'PreToolUse hook — checks every tool call against policy (macOS, Windows)' },
-  { type: 'cursor-agent', detect: 'binary cursor-agent', hooks: null },
+  { type: 'cursor-agent', detect: 'binary cursor-agent', hooks: 'hooks.json hooks — shell commands, MCP calls, file reads and other tool calls checked against policy (Cursor IDE and CLI, macOS, Windows)' },
   { type: 'codex', detect: 'binary codex · args @openai/codex', hooks: 'PreToolUse hook — checks every tool call against policy (Codex 0.124+, macOS, Windows)' },
   { type: 'gemini-cli', detect: 'binary gemini · args @google/gemini-cli', hooks: 'BeforeTool hook — checks every tool call against policy (Gemini CLI 0.27+, macOS, Windows)' },
   { type: 'aider', detect: 'binary aider', hooks: null },
@@ -190,6 +190,80 @@ function Enroll() {
   );
 }
 
+/** "Stopped by dana at 21 Oct 2026, 14:02 (SIGTERM via launchd)". A signal doesn't carry its
+ *  sender: the user is only known when effigentd ran in someone's terminal. */
+function stopText(s: NonNullable<EndpointRow['stopped']>): string {
+  const how = [s.signal, s.via && `via ${s.via}`].filter(Boolean).join(' ');
+  return `Stopped ${s.user ? `by ${s.user} ` : ''}at ${dateTime(s.at)}${how ? ` (${how})` : ''}`;
+}
+
+function hookProblemText(h: HookRow): string {
+  if (h.state === 'installed' && h.disabledBy.length) return `${h.label}: turned off by ${h.disabledBy.join(', ')}`;
+  return `${h.label}: hook ${h.state}${h.detail ? ` — ${h.detail}` : ''}`;
+}
+
+const HOOK_BADGE: Record<HookRow['state'], string> = { installed: 'b-green', missing: 'b-red', modified: 'b-red', unreadable: 'b-gold' };
+
+/** Offline threshold and who is emailed (GET|PUT /endpoint-health). */
+function HealthSettings() {
+  const { api, canWrite } = useLive();
+  const { dispatch } = useStore();
+  const [h, setH] = useState<ApiEndpointHealth | null>(null);
+  const [mins, setMins] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api.get<ApiEndpointHealth>('/endpoint-health').then((v) => { setH(v); setMins(String(v.offline_after_minutes)); }).catch((e) => setErr(apiErrorText(e)));
+  }, [api]);
+  const save = async (patch: Partial<Pick<ApiEndpointHealth, 'offline_after_minutes' | 'email_offline' | 'email_hooks'>>) => {
+    setSaving(true); setErr(null);
+    try {
+      const v = await api.send<ApiEndpointHealth>('PUT', '/endpoint-health', patch);
+      setH(v); setMins(String(v.offline_after_minutes));
+      dispatch({ t: 'toast', text: 'Machine health alerts saved' });
+    } catch (e) {
+      setErr(apiErrorText(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Card>
+      <CardHead title="Machine health alerts" sub="When a machine stops checking in, or an agent's hook is removed or turned off." />
+      {err && <div className="callout bad" style={{ margin: '0 0 10px' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
+      {!h ? (!err && <Loading />) : (
+        <div style={{ display: 'grid', gap: 10, fontSize: 13 }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            Offline after
+            <input className="input" type="number" min={h.min_minutes} max={10080} value={mins} disabled={!canWrite || saving}
+              onChange={(e) => setMins(e.target.value)} style={{ width: 90 }} aria-label="Minutes without a heartbeat" />
+            minutes without a heartbeat
+            {canWrite && Number(mins) !== h.offline_after_minutes && (
+              <button className="btn sm primary" disabled={saving} onClick={() => save({ offline_after_minutes: Number(mins) })}>Save</button>
+            )}
+          </label>
+          <div className="muted">
+            Detected within {h.offline_after_minutes} min + up to {Math.max(1, Math.round(h.tick_seconds / 60))} min. A laptop that sleeps or loses its network looks the same as a stopped daemon,
+            unless effigentd reported stopping (shown as “stopped”). Minimum {h.min_minutes} min.
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={h.email_offline} disabled={!canWrite || saving} onChange={(e) => save({ email_offline: e.target.checked })} />
+            Email when a machine goes offline
+          </label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={h.email_hooks} disabled={!canWrite || saving} onChange={(e) => save({ email_hooks: e.target.checked })} />
+            Email when an agent&apos;s hook is missing or turned off
+          </label>
+          <div className="muted">
+            {h.email_available ? (h.emails.length ? `Emails go to ${h.emails.join(', ')} (Settings → Notifications).` : 'No notification emails set (Settings → Notifications).') : 'Email is not configured on this control plane.'}
+            {' '}Webhooks: subscribe to {h.webhook_events.join(', ')} (Settings → Integrations). Every change is in the audit trail.
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
   const { endpointRows, consoleEvents, latestPolicy, loaded, now, canWrite, api, refresh } = useLive();
   const { dispatch } = useStore();
@@ -204,6 +278,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
   const current = eps.filter((e) => latestPolicy > 0 && e.policyVersion === latestPolicy).length;
   const newest = eps.reduce((m, e) => (cmpVersion(e.version, m) > 0 ? e.version : m), '0');
   const n = eps.length || 1;
+  const hookIssues = eps.filter((e) => e.hookProblems.length > 0);
+  const stoppedOffline = eps.filter((e) => e.status === 'offline' && e.stopped);
 
   // Agents seen per endpoint in the fetched event window, newest first.
   const agentsBy = useMemo(() => {
@@ -248,8 +324,20 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
             {e.policyVersion > 0 ? `v${e.policyVersion}` : 'default'}
           </td>
           <td className="tnum">{agents.length}</td>
-          <td><StatusPill status={e.status} /></td>
-          <td className="muted" title={dateTime(e.lastSeenAt)}>{ago(e.lastSeenAt, now)}</td>
+          <td>
+            <StatusPill status={e.status} />
+            {e.hookProblems.length > 0 && (
+              <span className="badge b-red" style={{ marginLeft: 6 }} title={e.hookProblems.map(hookProblemText).join('\n')}>
+                <Ic n="alert" size={12} /> {e.hookProblems.length === 1 ? `${e.hookProblems[0].label} hook off` : `${e.hookProblems.length} hooks off`}
+              </span>
+            )}
+          </td>
+          <td className="muted" title={dateTime(e.lastSeenAt)}>
+            {ago(e.lastSeenAt, now)}
+            {e.status === 'offline' && !e.revoked && (
+              <span className="cell-sub" title={e.stopped ? stopText(e.stopped) : undefined}>{e.stopped ? `stopped${e.stopped.signal ? ` · ${e.stopped.signal}` : ''}` : 'went silent'}</span>
+            )}
+          </td>
           <td className="right" onClick={(ev) => ev.stopPropagation()}>
             {!e.revoked && canWrite && (
               <button className="btn sm danger" disabled={busy === e.id} onClick={() => revoke(e)}><Ic n="ban" size={13} /> {busy === e.id ? 'Revoking…' : 'Revoke'}</button>
@@ -263,6 +351,41 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
                 Enrolled {dateTime(e.enrolledAt)} · id <span className="mono-sm">{e.id}</span>
                 {e.revoked && ' · revoked'}
               </div>
+              {e.status !== 'online' && !e.revoked && (e.stopped || e.offlineAt !== null) && (
+                <div className={`callout ${e.stopped ? 'warn' : 'bad'}`} style={{ margin: '0 0 10px' }}>
+                  <Ic n="alert" size={16} />
+                  <span>
+                    {e.stopped ? `${stopText(e.stopped)}. ` : `No heartbeat since ${dateTime(e.lastSeenAt)} and no stop was reported (asleep, off the network, killed, or the machine is gone). `}
+                    {e.offlineAt !== null && `Marked offline ${dateTime(e.offlineAt)}.`}
+                  </span>
+                </div>
+              )}
+              {e.hooks.length > 0 ? (
+                <div className="tbl-wrap" style={{ marginBottom: 10 }}>
+                  <table className="tbl">
+                    <thead><tr><th>Agent hook</th><th>State</th><th>Config file</th></tr></thead>
+                    <tbody>
+                      {e.hooks.map((h) => {
+                        const problem = e.hookProblems.some((p) => p.agent === h.agent);
+                        return (
+                          <tr key={h.agent}>
+                            <td>{h.label}<span className="cell-sub">{h.present ? 'installed on this machine' : 'not found on this machine'}</span></td>
+                            <td>
+                              <span className={`badge ${problem || h.state === 'installed' ? HOOK_BADGE[h.state] : 'b-muted'}`}>{h.state}</span>
+                              {h.disabledBy.length > 0 && <span className="badge b-red" style={{ marginLeft: 6 }}>turned off by {h.disabledBy.join(', ')}</span>}
+                              {h.detail && <span className="cell-sub">{h.detail}</span>}
+                            </td>
+                            <td className="mono-sm">{h.file}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {e.hooksReportedAt !== null && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Hook state reported {ago(e.hooksReportedAt, now)} (effigentd checks every minute and reports changes).</div>}
+                </div>
+              ) : !e.revoked && (
+                <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>This effigentd doesn&apos;t report its agents&apos; hooks: upgrade it to see them here.</div>
+              )}
               {agents.length === 0 ? <span className="muted">No agent events from this endpoint in the recent window.</span> : (
                 <div className="chips">
                   {agents.map(([a, at]) => (
@@ -285,7 +408,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
       <div className="grid-4">
         <Card className="mini-stat"><div className="k">Endpoints online</div><div className="v">{online.length}/{eps.length}</div><div className="s">{eps.length - online.length} need attention</div></Card>
         <Card className="mini-stat"><div className="k">Kernel-enforced</div><div className="v">{kernel.length}</div><div className="s">Linux · Tetragon BPF LSM, pid-scoped</div></Card>
-        <Card className="mini-stat"><div className="k">Agent hooks</div><div className="v">{observe.length}</div><div className="s">macOS / Windows · Claude Code checked before each action</div></Card>
+        <Card className="mini-stat"><div className="k">Agent hooks</div><div className="v">{observe.length}</div><div className="s">macOS / Windows · Claude Code, Codex, Gemini CLI, Cursor checked before each action</div></Card>
         <Card className="mini-stat"><div className="k">On latest policy</div><div className="v">{current}/{eps.length}</div><div className="s">{latestPolicy > 0 ? `Published v${latestPolicy}` : 'Nothing published yet'}</div></Card>
       </div>
 
@@ -298,10 +421,21 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
         </div>
         <div className="cov-legend">
           <span><i className="lg-dot" style={{ background: 'var(--green)' }} /> Kernel (exec / file blocked before it happens)</span>
-          <span><i className="lg-dot" style={{ background: 'var(--blue)' }} /> Agent hooks (macOS / Windows, Claude Code tool calls)</span>
+          <span><i className="lg-dot" style={{ background: 'var(--blue)' }} /> Agent hooks (macOS / Windows, agents' tool calls)</span>
           <span><i className="lg-dot" style={{ background: 'var(--red)' }} /> Degraded / offline</span>
         </div>
       </Card>
+
+      {(hookIssues.length > 0 || stoppedOffline.length > 0) && (
+        <div className="callout bad" role="alert">
+          <Ic n="alert" size={16} />
+          <span>
+            {hookIssues.length > 0 && <>Agent hooks are missing or turned off on {hookIssues.map((e) => e.hostname).join(', ')}: those agents&apos; tool calls aren&apos;t checked there. </>}
+            {stoppedOffline.length > 0 && <>effigentd was stopped on {stoppedOffline.map((e) => e.hostname).join(', ')}. </>}
+            Click the machine for details.
+          </span>
+        </div>
+      )}
 
       <Card>
         <CardHead info={HELP.endpoints} title="Endpoints" sub="Online = heartbeat in the last minute (effigentd syncs every 5s). Click a row for the agents it reported." />
@@ -319,6 +453,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
           </div>
         )}
       </Card>
+
+      <HealthSettings />
 
       <div id="enroll" style={{ scrollMarginTop: 88 }}><Enroll /></div>
 

@@ -25,7 +25,44 @@ export interface EndpointRow {
   lastSeenAt: number | null;
   enrolledAt: number;
   revoked: boolean;
+  /** Each agent's hook as effigentd last reported it (empty: an effigentd that doesn't report hooks). */
+  hooks: HookRow[];
+  /** Hooks gone or switched off where it matters (the control plane alerts on the same rule). */
+  hookProblems: HookRow[];
+  hooksReportedAt: number | null;
+  /** Marked offline by the control plane's detector (null while online). */
+  offlineAt: number | null;
+  /** The last deliberate stop effigentd reported, if it is why the machine went quiet. */
+  stopped: { at: number; signal: string; via: string; user: string } | null;
 }
+
+export interface HookRow {
+  agent: string; // claude | codex | gemini | cursor
+  label: string;
+  present: boolean;
+  state: 'installed' | 'missing' | 'modified' | 'unreadable';
+  file: string;
+  detail: string;
+  disabledBy: string[];
+}
+
+const HOOK_AGENT: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
+
+/** Mirrors hookReport.problems in the control plane: a hook that is not installed (or
+ *  that users turned off) on a machine relying on hooks where the agent is present, or
+ *  where the hook was in place before. */
+function hookRows(e: ApiEndpoint): { hooks: HookRow[]; problems: HookRow[] } {
+  const r = e.hooks;
+  if (!r || !r.agents) return { hooks: [], problems: [] };
+  const hooks = Object.entries(r.agents)
+    .map(([agent, a]) => ({ agent, label: HOOK_AGENT[agent] ?? agent, present: !!a.present, state: a.state, file: a.file, detail: a.detail ?? '', disabledBy: a.disabled_by ?? [] }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  const problems = hooks.filter((h) => (h.state !== 'installed' || h.disabledBy.length > 0) && ((h.present && r.sensor === 'hooks') || (r.expected ?? []).includes(h.agent)));
+  return { hooks, problems };
+}
+
+/** A daemon_stop counts as the reason when it came at (or just before) the last heartbeat. */
+const STOP_SLACK_MS = 30_000;
 
 export function ms(iso: string | null | undefined): number | null {
   if (!iso) return null;
@@ -59,12 +96,20 @@ export function dateTime(at: number | null): string {
 export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
   const seen = ms(e.last_seen);
   const age = seen === null ? Infinity : now - seen;
-  const status: EndpointStatus = e.revoked ? 'revoked' : age < ONLINE_MS ? 'online' : age < DEGRADED_MS ? 'degraded' : 'offline';
+  const offlineAt = ms(e.offline_at);
+  // The control plane's detector is authoritative once it has marked the machine offline.
+  const status: EndpointStatus = e.revoked ? 'revoked' : offlineAt !== null && (seen === null || seen <= offlineAt) ? 'offline'
+    : age < ONLINE_MS ? 'online' : age < DEGRADED_MS ? 'degraded' : 'offline';
   const os = e.os.toLowerCase();
+  const stoppedAt = ms(e.stopped_at);
+  const stopped = stoppedAt !== null && (seen === null || stoppedAt >= seen - STOP_SLACK_MS) && status !== 'online'
+    ? { at: stoppedAt, signal: e.stop?.signal ?? '', via: e.stop?.via ?? '', user: e.stop?.os_user ?? '' } : null;
+  const { hooks, problems } = hookRows(e);
   return {
     id: e.id, hostname: e.hostname || e.id, os: e.os === 'darwin' ? 'macOS' : e.os === 'linux' ? 'Linux' : e.os, arch: e.arch,
     platform: os === 'linux' ? 'linux' : os === 'darwin' ? 'macos' : 'other',
     version: e.version, policyVersion: e.policy_version, status, lastSeenAt: seen, enrolledAt: ms(e.enrolled_at) ?? 0, revoked: e.revoked,
+    hooks, hookProblems: e.revoked ? [] : problems, hooksReportedAt: ms(e.hooks_reported_at), offlineAt, stopped,
   };
 }
 
@@ -84,6 +129,7 @@ const TITLE: Record<string, string> = {
   file_open: 'Opened a sensitive file', connect: 'Outbound connection', blocked: 'Blocked by policy',
   would_block: 'Would block (monitor mode)', policy: 'Agent policy applied',
   approval_pending: 'Waiting for approval', approved: 'Approved and ran', approval_denied: 'Approval denied',
+  daemon_stop: 'effigentd stopped', daemon_unclean_restart: 'effigentd restarted after an unclean stop',
 };
 
 const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
