@@ -54,7 +54,8 @@ var hookAgents = map[string]hookAgent{
 // the machine isn't enrolled (approvals then can't be asked for).
 func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx context.Context, c api.HookCall) ([]byte, error) {
 	var mu sync.Mutex
-	seen := map[string]time.Time{} // agent/session id -> last call
+	seen := map[string]time.Time{}  // agent/session id -> last call
+	sessions := hooks.NewSessions() // session rules (exfil_sequence, untrusted_then_risky)
 	return func(ctx context.Context, c api.HookCall) ([]byte, error) {
 		ag, ok := hookAgents[c.Agent]
 		if !ok {
@@ -109,17 +110,24 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 			return ag.output(hooks.Decision{}), nil
 		}
 		rule := eng.RuleFor(ag.name)
+		hist := sessions.History(key)
+		for i := range call.Canon {
+			call.Canon[i].History = hist
+		}
 		d := hooks.EvaluateCall(hooks.Claude, rule, call)
 		ev.Mode = string(rule.Mode)
 		ev.Actions = d.Actions // redacted with the rest of the event (engine.scrub)
 		if d.Approve {
+			seenBy := d.Seen
 			d = askApproval(ctx, eng, cp(), c, pausedCall{
 				agent: ag.name, session: in.SessionID, tool: in.ToolName, cwd: in.Cwd,
 				summary: approvalSummary(call), action: callAction(call),
 			}, d, &ev)
+			sessions.Record(key, seenBy, !d.Deny)
 			eng.Emit(ev)
 			return ag.output(d), nil
 		}
+		sessions.Record(key, d.Seen, !d.Deny)
 		if t := reportType(d); t != "" {
 			ev.Type, ev.Severity = t, severity(t)
 			if d.Rule != "" {

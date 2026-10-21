@@ -27,6 +27,9 @@ type Decision struct {
 	// Actions is what the call does (git, SQL, packages, cloud, files…),
 	// whether or not a policy list matched.
 	Actions []event.Action `json:"actions,omitempty"`
+	// Seen is what the call adds to its session's history if it runs
+	// (session rules; the daemon records it).
+	Seen Seen `json:"-"`
 }
 
 // ClaudeInput is the part of Claude Code's PreToolUse payload effigentd uses.
@@ -47,6 +50,9 @@ type ClaudeInput struct {
 	// that user could read them; unknown means world-readable files only.
 	UID      int  `json:"-"`
 	UIDKnown bool `json:"-"`
+	// History is what earlier calls of this session did (session rules);
+	// nil when the call has no session.
+	History *History `json:"-"`
 }
 
 // ClaudeEvaluator decides a Claude Code tool call under the agent's rule.

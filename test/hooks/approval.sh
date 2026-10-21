@@ -25,7 +25,7 @@ TOK=$(curl -s "${A[@]}" -X POST "http://$CP/api/v1/enrollment-tokens" -d '{}' | 
   -sync-interval 1s 2>"$W/ep.err" & EPID=$!
 
 # denylist (curl denied) + approvals for `git push*` and GitHub MCP tools; short waits for the test
-sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]\n  tool_deny: ["mcp__claude-in-chrome__*"]\n  actions_deny: [force_push, "cloud_destroy@prod", remote_script]\n  actions_approve: ["destructive_sql"]\n  file_write_deny: [/.github/workflows/]|' \
+sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]\n  tool_approve: ["mcp__github__*"]\n  tool_deny: ["mcp__claude-in-chrome__*"]\n  actions_deny: [force_push, "cloud_destroy@prod", remote_script, exfil_sequence]\n  actions_approve: ["destructive_sql"]\n  file_write_deny: [/.github/workflows/]|' \
   internal/endpoint/policy/default.yaml > "$W/policy.yaml"
 printf 'approvals:\n  wait_seconds: 4\n  ttl_minutes: 10\nenvironments:\n  prod:\n    aws_profiles: ["prod-*"]\n' >> "$W/policy.yaml"
 python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"comment":"approvals test"}))' "$W/policy.yaml" |
@@ -119,6 +119,13 @@ out=$(printf '{"session_id":"sess-env","cwd":"/work","tool_name":"Bash","tool_in
   AWS_PROFILE=prod-admin ANTHROPIC_API_KEY=sk-test-secret EFFIGENT_API=$EP ./bin/effigentd hook claude)
 echo "$out" | grep -q '"permissionDecision":"deny".*on prod' && ok "the agent's AWS_PROFILE (hook env) makes it prod: denied" || bad "env header: $out"
 
+echo "== session rules"
+sess() { printf '{"session_id":"%s","cwd":"/work","tool_name":"%s","tool_input":%s}' "$1" "$2" "$3" | EFFIGENT_API=$EP ./bin/effigentd hook claude; }
+[ "$(sess sess-clean WebFetch '{"url":"https://paste.example.org/new"}')" = "{}" ] && ok "WebFetch to a new host with no credential read runs" || bad "clean session fetch"
+[ "$(sess sess-exfil Read '{"file_path":"/work/.env"}')" = "{}" ] && ok "reading .env is only an alert" || bad "env read"
+sess sess-exfil WebFetch '{"url":"https://paste.example.org/new"}' | grep -q '"permissionDecision":"deny".*sending data to a new host after reading credentials' &&
+  ok "then a new host in the same session is denied (exfil_sequence)" || bad "exfil_sequence not denied"
+
 echo "== events"
 sleep 1
 for t in approval_pending approved approval_denied; do
@@ -126,7 +133,7 @@ for t in approval_pending approved approval_denied; do
 done
 grep -q '"type":"approved".*Sam Sec' "$W/events.jsonl" && ok "approver named in the event" || bad "approver name"
 grep -q '"actions":\[{"kind":"force_push"' "$W/events.jsonl" && ok "events carry the actions" || bad "no actions on events"
-grep -q '"agent_env":{"ANTHROPIC_API_KEY":"set","AWS_PROFILE":"prod-admin"}' "$W/events.jsonl" && ok "session start carries the agent env" || bad "no agent_env"
+grep -q '"agent_env":{"ANTHROPIC_API_KEY":"set","AWS_PROFILE":"prod-admin"[,}]' "$W/events.jsonl" && ok "session start carries the agent env" || bad "no agent_env"
 ! grep -q 'sk-test-secret' "$W/events.jsonl" && ok "API key values never leave the hook" || bad "key value in events"
 
 echo

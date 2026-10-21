@@ -157,6 +157,10 @@ var ActionKinds = map[string]string{
 	"mcp_unlisted":       "calling an MCP server outside mcp_allow",
 	"model_endpoint":     "an agent configured for a model API host outside model_hosts_allow",
 	"model_api_key":      "an agent running with a personal model API key in its environment",
+	"mcp_changed":        "an MCP server whose definition (command, args, URL, env/header names) doesn't match its mcp_pins entry",
+	"exfil_sequence":     "a network call to a host new to the session after a credential read in the session (last 50 calls / 30 min)",
+	"untrusted_then_risky": "a risky action (fs_destroy, destructive_sql, cloud_destroy, force_push, guardrail_edit, remote_script, " +
+		"credential_read) after outside content entered the session (WebFetch, WebSearch, unlisted MCP, curl/wget; last 50 calls / 30 min)",
 }
 
 // implied lets a broader kind match its narrower ones (sql_write covers

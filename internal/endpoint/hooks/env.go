@@ -182,13 +182,15 @@ func (x *actx) mcp(tool string, input map[string]any) {
 	if len(x.rule.MCPAllow) > 0 && !slices.ContainsFunc(x.rule.MCPAllow, func(p string) bool { return wild(p, server) }) {
 		x.add(event.Action{Kind: "mcp_unlisted", Target: server, Attrs: map[string]string{"tool": tool}})
 	}
+	if x.mcpDatabase(server, tool, input) {
+		return // its statements carry the server (access@env included)
+	}
 	for _, e := range x.rule.Environments {
 		if slices.ContainsFunc(e.MCPServers, func(p string) bool { return wild(p, server) }) {
 			x.add(event.Action{Kind: "access", Target: tool, Attrs: map[string]string{"mcp_server": server}})
 			break
 		}
 	}
-	_ = input
 }
 
 // mcpServer is the server of an mcp__<server>__<tool> name.

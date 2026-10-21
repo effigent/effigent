@@ -187,20 +187,23 @@ func EvaluateCall(eval ClaudeEvaluator, rule policy.Rule, c Call) Decision {
 		return 0
 	}
 	var acts []event.Action
-	seen := map[string]bool{}
+	var seen Seen
+	dup := map[string]bool{}
 	for _, in := range c.Canon {
 		d := eval(rule, in)
 		for _, a := range d.Actions {
-			if k := a.Kind + "\x00" + a.Target + "\x00" + a.In; !seen[k] {
-				seen[k] = true
+			if k := a.Kind + "\x00" + a.Target + "\x00" + a.In; !dup[k] {
+				dup[k] = true
 				acts = append(acts, a)
 			}
 		}
+		seen = seen.merge(d.Seen)
 		if rank(d) > rank(best) {
 			best = d
 		}
 	}
 	best.Actions = acts
+	best.Seen = seen
 	return best
 }
 

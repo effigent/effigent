@@ -36,6 +36,7 @@ type facts struct {
 	writes  []string    // absolute paths the call writes
 	pkgs    []pkgRef    // packages it installs by name or restores from a manifest
 	cmds    []simpleCmd // Bash: the command line's simple commands, then its scripts'
+	seen    Seen        // what the call adds to its session (session rules)
 }
 
 // actx classifies one canonical tool call.
@@ -84,6 +85,7 @@ func classify(rule policy.Rule, in ClaudeInput) facts {
 	}
 	x.model()
 	x.lookupPackages()
+	x.observe()
 	return x.f
 }
 
@@ -492,29 +494,32 @@ func listsName(r policy.Rule, kinds ...string) bool {
 
 // kindLabel says what an action kind is in a sentence.
 var kindLabel = map[string]string{
-	"protected_push":     "pushing to a protected branch",
-	"force_push":         "force-pushing",
-	"branch_delete":      "deleting a branch",
-	"history_rewrite":    "discarding git history or uncommitted work",
-	"hook_bypass":        "skipping git hooks",
-	"destructive_sql":    "a destructive database statement",
-	"sql_write":          "changing a database",
-	"cloud_change":       "changing cloud or cluster resources",
-	"cloud_destroy":      "deleting cloud or cluster resources",
-	"access":             "reaching this target",
-	"package_install":    "installing packages",
-	"package_unlisted":   "a package outside the approved list",
-	"package_registry":   "installing from an unapproved registry or source",
-	"package_scripts":    "running package install scripts (use --ignore-scripts)",
-	"package_malicious":  "a package known to be malicious",
-	"package_vulnerable": "a package version with a known vulnerability",
-	"guardrail_edit":     "changing CI config, git hooks, agent settings or startup files",
-	"credential_read":    "reading credentials or secrets",
-	"remote_script":      "running a downloaded script",
-	"fs_destroy":         "deleting a directory tree",
-	"mcp_unlisted":       "an MCP server that isn't approved",
-	"model_endpoint":     "an unapproved model API endpoint",
-	"model_api_key":      "a personal model API key",
+	"protected_push":       "pushing to a protected branch",
+	"force_push":           "force-pushing",
+	"branch_delete":        "deleting a branch",
+	"history_rewrite":      "discarding git history or uncommitted work",
+	"hook_bypass":          "skipping git hooks",
+	"destructive_sql":      "a destructive database statement",
+	"sql_write":            "changing a database",
+	"cloud_change":         "changing cloud or cluster resources",
+	"cloud_destroy":        "deleting cloud or cluster resources",
+	"access":               "reaching this target",
+	"package_install":      "installing packages",
+	"package_unlisted":     "a package outside the approved list",
+	"package_registry":     "installing from an unapproved registry or source",
+	"package_scripts":      "running package install scripts (use --ignore-scripts)",
+	"package_malicious":    "a package known to be malicious",
+	"package_vulnerable":   "a package version with a known vulnerability",
+	"guardrail_edit":       "changing CI config, git hooks, agent settings or startup files",
+	"credential_read":      "reading credentials or secrets",
+	"remote_script":        "running a downloaded script",
+	"fs_destroy":           "deleting a directory tree",
+	"mcp_unlisted":         "an MCP server that isn't approved",
+	"model_endpoint":       "an unapproved model API endpoint",
+	"model_api_key":        "a personal model API key",
+	"mcp_changed":          "an MCP server whose definition changed since it was pinned",
+	"exfil_sequence":       "sending data to a new host after reading credentials",
+	"untrusted_then_risky": "a risky action after reading outside content",
 }
 
 // describe is an action in a reason: "force-pushing (main, prod)".

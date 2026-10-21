@@ -57,6 +57,10 @@ func EvaluateClaude(rule policy.Rule, in ClaudeInput) Decision {
 	facts := classify(rule, in)
 	d := evaluate(rule, in, facts)
 	d.Actions = facts.actions
+	d.Seen = facts.seen
+	if d.Report == "file_open" && d.Seen.Secret == "" {
+		d.Seen.Secret = d.Target // a file_alert match counts as a credential read
+	}
 	return d
 }
 
@@ -160,8 +164,10 @@ func actionKind(a event.Action) string {
 		if strings.HasPrefix(a.Target, "/") {
 			return "file_open"
 		}
-	case "mcp_unlisted", "model_endpoint", "model_api_key":
+	case "mcp_unlisted", "mcp_changed", "model_endpoint", "model_api_key":
 		return "tool"
+	case "exfil_sequence":
+		return "connect"
 	}
 	return "exec"
 }
