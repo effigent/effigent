@@ -40,6 +40,18 @@ export interface ApiEndpoint {
   /** The last daemon_stop effigentd sent: when, and the signal / service manager / user. */
   stopped_at?: string | null;
   stop?: { signal?: string; via?: string; os_user?: string } | null;
+  /** machine (effigentd enrolled on it) | cloud (a cloud environment: hooks in a vendor's sessions, migration 019). */
+  kind?: 'machine' | 'cloud';
+  /** Cloud environments: claude-code-web | copilot | cursor | other. */
+  vendor?: string;
+}
+
+/** POST /api/v1/cloud-environments — the token is shown once. */
+export interface ApiCloudEnvironment {
+  endpoint: ApiEndpoint;
+  token: string;
+  server: string;
+  hook_agent: string; // the agent name in `effigentd hook <agent> --remote`
 }
 
 export type ApiHookState = 'installed' | 'missing' | 'modified' | 'unreadable';

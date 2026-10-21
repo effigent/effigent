@@ -10,6 +10,7 @@ import { apiErrorText, type ApiEndpointHealth, type ApiEnrollment } from '@/lib/
 import { ago, dateTime, type EndpointRow, type HookRow } from '@/lib/live-map.ts';
 import type { AgentType } from '@/types.ts';
 import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageGuide, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
+import { CLOUD_VENDORS, CloudEnvironments, type CloudVendor } from '@/components/CloudEnvironments.tsx';
 
 /** How each agent is recognised (policy/default.yaml) and which layers enforce it. */
 const INTEGRATIONS: { type: AgentType; detect: string; hooks: string | null }[] = [
@@ -270,7 +271,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
   const [sel, setSel] = useState<string | null>(initialEndpoint ?? null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const eps = endpointRows.filter((e) => !e.revoked);
+  const eps = endpointRows.filter((e) => !e.revoked && !e.cloud); // machines; cloud environments are listed after them
+  const clouds = endpointRows.filter((e) => !e.revoked && e.cloud);
   const revoked = endpointRows.filter((e) => e.revoked);
   const online = eps.filter((e) => e.status === 'online');
   const kernel = eps.filter((e) => e.platform === 'linux');
@@ -314,11 +316,11 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
         <tr className={`clickable ${sel === e.id ? 'sel' : ''} ${e.revoked ? 'revoked' : ''}`} onClick={() => setSel(sel === e.id ? null : e.id)}>
           <td>
             <span className="agent-cell">
-              <span className="res-glyph"><Ic n={e.platform === 'linux' ? 'server' : 'laptop'} size={15} /></span>
-              <span><span className="cell-main mono-sm" style={{ color: 'var(--txt)' }}>{e.hostname}</span><span className="cell-sub">{e.os} · {e.arch}</span></span>
+              <span className="res-glyph"><Ic n={e.cloud ? 'cloud' : e.platform === 'linux' ? 'server' : 'laptop'} size={15} /></span>
+              <span><span className="cell-main mono-sm" style={{ color: 'var(--txt)' }}>{e.hostname}</span><span className="cell-sub">{e.cloud ? `cloud environment · ${CLOUD_VENDORS[e.vendor as CloudVendor] ?? e.vendor}` : `${e.os} · ${e.arch}`}</span></span>
             </span>
           </td>
-          <td className="muted">{e.platform === 'linux' ? 'Kernel (Tetragon)' : 'Agent hooks'}</td>
+          <td className="muted">{e.cloud ? 'Remote hooks' : e.platform === 'linux' ? 'Kernel (Tetragon)' : 'Agent hooks'}</td>
           <td className="mono-sm" style={{ color: cmpVersion(e.version, newest) < 0 ? 'var(--gold)' : undefined }}>{e.version || '—'}</td>
           <td className="mono-sm" style={{ color: latestPolicy > 0 && e.policyVersion !== latestPolicy && !e.revoked ? 'var(--gold)' : undefined }}>
             {e.policyVersion > 0 ? `v${e.policyVersion}` : 'default'}
@@ -383,6 +385,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
                   </table>
                   {e.hooksReportedAt !== null && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Hook state reported {ago(e.hooksReportedAt, now)} (effigentd checks every minute and reports changes).</div>}
                 </div>
+              ) : e.cloud ? (
+                <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>A cloud environment: heard from while one of its sessions runs (idle otherwise). Its hooks are the repository&apos;s.</div>
               ) : !e.revoked && (
                 <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>This effigentd doesn&apos;t report its agents&apos; hooks: upgrade it to see them here.</div>
               )}
@@ -447,6 +451,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
               <thead><tr><th>Endpoint</th><th>Enforcement</th><th>effigentd</th><th>Policy</th><th>Agents</th><th>Status</th><th>Last seen</th><th aria-label="Actions" /></tr></thead>
               <tbody>
                 {eps.map(row)}
+                {clouds.map(row)}
                 {revoked.map(row)}
               </tbody>
             </table>
@@ -457,6 +462,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
       <HealthSettings />
 
       <div id="enroll" style={{ scrollMarginTop: 88 }}><Enroll /></div>
+
+      <div id="cloud" style={{ scrollMarginTop: 88 }}><CloudEnvironments /></div>
 
       <div className="grid-2">
         <Card>
