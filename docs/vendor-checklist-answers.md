@@ -384,10 +384,15 @@ machine reconnects) is designed but not built.
 ### 19. Console access, SSO, SCIM, tickets: **Partly**
 - **SSO (available through Clerk, not yet set up for a customer):** console login is Clerk.
   Clerk supports enterprise SSO (SAML for Okta, Entra, Google; OIDC) linked to an
-  organisation, which needs Clerk's Pro/Business plan plus its Enhanced B2B add-on.
+  organisation, which needs Clerk's Pro or Business plan plus its "B2B Authentication
+  (Enhanced)" add-on. Our custom `security_admin` role needs that add-on in production too.
+  Setup steps and open questions: `docs/compliance/sso-scim.md`.
 - **SCIM:** Clerk's Directory Sync (GA April 2026) deactivates deprovisioned users and revokes
   their sessions. Mapping directory groups to roles is also available. Effigent's console roles
   still come from org membership; nothing in Effigent depends on SCIM yet.
+- **Known gap:** someone removed through SCIM stays in approver groups, and their email
+  approval links keep working until the group is edited. API keys outlive the person who
+  created them.
 - **Ticket references (new):** a routing rule can require a ticket before approving: a
   Jira-style key (`SEC-123`) or an https link. A per-workspace link template turns keys into
   links. When a ticket is required, the email and Slack buttons open the console instead of
@@ -456,15 +461,28 @@ Anomaly detection over sequences is on the roadmap, not built.
   machine with your sensor is the honest next step.
 - **macOS:** effigentd ships as an MDM-deployable pkg.
 - **Windows:** effigentd ships as an install.ps1 installer.
-- **Footprint:** not yet measured on a fleet.
+- **Footprint (measured 2026-10-21, `docs/compliance/footprint.md`, script
+  `test/footprint/measure.sh`):**
+  - **Hooks mode (Apple M3 Max):** idle 0.03% CPU and 25–30 MB. A hook call adds 10.7 ms at
+    p50 and 28 ms at p99, almost all of it starting the hook process; the decision itself
+    takes 0.24 ms. A burst of 2000 calls ran at 622 calls/s using a quarter of one core.
+  - **Kernel mode (Docker Desktop's Linux VM, not a real host):** effigentd 28–59 MB and about
+    0.15 ms of CPU per exec on the whole machine. Tetragon 100–118 MB idle, peaking at 547 MB
+    under 90,000 short-lived execs. No measurable slowdown of exec inside an agent.
+  - Not measured on a fleet or next to an EDR; the doc has a pilot test plan.
 
 ### 26. Employee monitoring and privacy: **Partly**
 - **New masking:** policy `redact:` adds workspace patterns (customer ids, internal hostnames)
   and an optional PII set (email, phone, card numbers, IBAN). It runs on the machine before
   anything leaves it, on top of the secret rules. Applies to commands, paths, messages, approval
   summaries and reasons.
-- **DPA:** template not written yet.
-- **Works-council / employee-monitoring guidance (EU, Israel):** not written yet.
+- **DPA:** draft in `docs/compliance/dpa-template.md` (GDPR Art. 28, Israeli data-security
+  rules). Marked as needing legal review.
+- **Employee-monitoring guidance:** `docs/compliance/employee-monitoring.md`: exactly what is
+  and isn't collected, an employee notice template, EU (DPIA, works councils) and Israel
+  sections. Not legal advice; needs review.
+- **Known gaps:** the identity fields (OS user, git email, hostname) can't be masked, and one
+  person's events can't be erased before retention ends (the event log is append-only).
 - **Data minimisation:** what's collected per user is listed in
   `docs/security/architecture-and-data-flow.md`.
 
@@ -472,7 +490,6 @@ Anomaly detection over sequences is on the roadmap, not built.
 - **Online retention:** set per workspace (new), 90 to 3650 days. Without a setting the
   control plane default applies (`EFFIGENT_EVENT_RETENTION_DAYS`, also never under 90).
 - **Archive:** daily gzip archives in S3 with Object Lock (governance mode, 365 days).
-  Customers can bring their own bucket.
 - **Legal hold (new, migration 015):** a workspace can be put on legal hold (a reason is
   required, and it is audited).
   - Retention skips it.
@@ -487,8 +504,9 @@ Anomaly detection over sequences is on the roadmap, not built.
 doesn't reach files people already downloaded or data webhook receivers hold.
 
 ### 28. SOC 2, self-hosting, redaction: **Partly**
-- **SOC 2:** in progress. No report yet; until then we answer questionnaires (SIG Lite, CAIQ)
-  directly.
+- **SOC 2:** not certified. A gap list and plan is in `docs/compliance/soc2-plan.md` (Vanta or
+  Drata; Type I in about 2–3 months, Type II in about 6–9). Until then we answer
+  questionnaires (SIG Lite, CAIQ) directly.
 - **Self-hosted:** the control plane is one Go binary on Postgres, with a published Docker image
   for effigentd. Running the control plane in your own infrastructure is on the roadmap, not
   offered.
