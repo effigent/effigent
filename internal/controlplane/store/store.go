@@ -40,6 +40,16 @@ func (s *Store) Close() { s.db.Close() }
 
 // Migrate applies embedded migrations once each, tracked in cp.schema_migrations.
 func (s *Store) Migrate(ctx context.Context) error {
+	// Several replicas starting together (Kubernetes) migrate one at a time.
+	conn, err := s.db.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `select pg_advisory_lock(hashtext('cp.schema_migrations'))`); err != nil {
+		return err
+	}
+	defer conn.Exec(context.Background(), `select pg_advisory_unlock(hashtext('cp.schema_migrations'))`)
 	// Only create the schema when it's missing: in production the control
 	// plane's role owns schema cp but may not create schemas in the database,
 	// and Postgres checks that permission even for "if not exists".

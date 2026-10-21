@@ -126,7 +126,7 @@ func TestClerkAuth(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if p.UserID != c.want.UserID || p.Tenant != c.want.Tenant || p.Role != c.want.Role || p.Via != c.want.Via || len(p.Scopes) != 0 {
+			if p.UserID != c.want.UserID || p.Tenant != c.want.Tenant || p.Role != c.want.Role || p.Via != c.want.Via || len(p.Scopes) != 0 || p.Email != "" || p.Name != "" || p.Groups != nil {
 				t.Fatalf("principal = %+v, want %+v", p, c.want)
 			}
 		})

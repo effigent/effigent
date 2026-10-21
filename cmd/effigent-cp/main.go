@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"flag"
 	"log"
@@ -48,11 +49,17 @@ func main() {
 	if err != nil {
 		logger.Fatalf("signing key: %v", err)
 	}
+	// Self-hosted sign-in: a generic OIDC provider (EFFIGENT_OIDC_*), one workspace.
+	oidc, err := server.OIDCOptionsFromEnv(os.Getenv)
+	if err != nil {
+		logger.Fatalf("oidc: %v", err)
+	}
 	auth, err := server.NewAuthenticator(ctx, server.Options{
 		ClerkIssuer:       os.Getenv("CLERK_ISSUER"),
 		AdminToken:        os.Getenv("EFFIGENT_ADMIN_TOKEN"),
 		AdminTenants:      strings.Split(os.Getenv("EFFIGENT_ADMIN_TENANTS"), ","), // "" = admin token disabled
 		AuthorizedParties: strings.Split(os.Getenv("CLERK_AUTHORIZED_PARTIES"), ","),
+		OIDC:              oidc,
 	})
 	if err != nil {
 		logger.Fatalf("auth: %v", err)
@@ -97,6 +104,9 @@ func main() {
 	// (matched by email through Clerk's Backend API).
 	if k := os.Getenv("CLERK_SECRET_KEY"); k != "" {
 		srv.Directory = &server.ClerkDirectory{SecretKey: k}
+	} else if oidc != nil {
+		// no directory API with a generic OIDC provider: the users who signed in
+		srv.Directory = &server.StoreDirectory{Store: st}
 	}
 	if srv.AllowInsecureWebhooks {
 		logger.Printf("WARNING: EFFIGENT_DEV_INSECURE_WEBHOOKS=1: webhooks may target http:// and private addresses")
@@ -108,8 +118,14 @@ func main() {
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
-	logger.Printf("listening on %s", *listen)
-	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Self-hosted without a TLS-terminating proxy: serve HTTPS directly.
+	certFile, keyFileTLS := os.Getenv("EFFIGENT_TLS_CERT_FILE"), os.Getenv("EFFIGENT_TLS_KEY_FILE")
+	serve := hs.ListenAndServe
+	if certFile != "" || keyFileTLS != "" {
+		serve = func() error { return hs.ListenAndServeTLS(certFile, keyFileTLS) }
+	}
+	logger.Printf("listening on %s (tls=%v); policy signing public key %s", *listen, certFile != "", sign.EncodePublic(key.Public().(ed25519.PublicKey)))
+	if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Fatal(err)
 	}
 }
