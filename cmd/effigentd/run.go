@@ -46,11 +46,19 @@ func runAgent(args []string) {
 
 	// Gated binaries (FR Q3): put PATH shims in front so bare invocations route
 	// through `effigentd gate`, and refuse to launch the agent command itself if
-	// it is a gated binary (that would run as effigentd, exempt from the kernel
-	// gate). Best effort: if the daemon can't be reached the kernel still blocks
-	// a direct exec, so the agent simply can't use the binary.
+	// it resolves to a gated binary. `effigentd run` execs its command in place,
+	// as effigentd, which the kernel exempts from the gate (run and gate share
+	// the one binary), so a gated binary launched directly here would run
+	// unjudged. When the daemon's API is unreachable we can't fetch the gated
+	// list to make that check or build shims; we warn rather than block, because
+	// --strict governs kernel-enforcement confirmation (the canary below), which
+	// works without the API (e.g. an agent in a container). See §5 limits.
 	runEnv := os.Environ()
-	if gated := gatedPaths(*agent); len(gated) > 0 {
+	gated, gotList := gatedPaths(*agent)
+	switch {
+	case !gotList:
+		fmt.Fprintf(os.Stderr, "effigentd: warning: could not check %q against gated_exec (daemon API unreachable); a gated binary launched this way would run unjudged\n", cmd[0])
+	case len(gated) > 0:
 		if real, rerr := filepath.EvalSymlinks(bin); rerr == nil {
 			if slices.Contains(gated, real) || slices.Contains(gated, bin) {
 				fatalf("%q is a gated binary; run it through `effigentd gate -- %s …`, not as the agent command (that would bypass the gate)", cmd[0], cmd[0])
@@ -111,31 +119,33 @@ func runAgent(args []string) {
 }
 
 // gatedPaths asks the daemon which binaries are gated for this agent (FR Q3).
-// Best effort: any error means no shims (the kernel still blocks a direct exec).
-func gatedPaths(agent string) []string {
+// ok is false when the daemon's API couldn't be reached or didn't answer 200
+// (e.g. an agent in a container, or a token-protected API the gate doesn't
+// authenticate to): the caller then can't verify the command against the list.
+func gatedPaths(agent string) (paths []string, ok bool) {
 	addr := os.Getenv("EFFIGENT_API")
 	if addr == "" {
 		addr = "127.0.0.1:7777"
 	}
 	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/gated/"+agent, nil)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	res, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil
+		return nil, false
 	}
 	var d struct {
 		Paths []string `json:"paths"`
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&d); err != nil {
-		return nil
+		return nil, false
 	}
-	return d.Paths
+	return d.Paths, true
 }
 
 // withShims builds a shim directory of symlinks (basename -> effigentd), prepends
