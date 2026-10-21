@@ -153,15 +153,16 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 		batchID = "cp-" + uuid.NewString()
 	}
 	if len(evs) > 0 {
-		n, dup, err := s.Store.IngestBatch(r.Context(), ep.Tenant, ep.ID, batchID, evs)
+		res, err := s.Store.Ingest(r.Context(), ep.Tenant, ep.ID, batchID, evs)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
-		if dup {
-			writeJSON(w, http.StatusOK, map[string]any{"accepted": n, "duplicate": true})
+		if res.Duplicate {
+			writeJSON(w, http.StatusOK, map[string]any{"accepted": res.Accepted, "duplicate": true})
 			return
 		}
+		s.announceAnomalies(r.Context(), ep, res.Anomalies)
 		for _, e := range evs {
 			if e.Type == "blocked" || e.Type == "approval_denied" {
 				s.emit(r.Context(), ep.Tenant, "action.blocked", map[string]any{"endpoint_id": ep.ID, "hostname": ep.Hostname,

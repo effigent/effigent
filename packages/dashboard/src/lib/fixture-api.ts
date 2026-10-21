@@ -8,6 +8,7 @@
 import { ENDPOINTS, EVENTS } from '@/data.ts';
 import { createPricingLeaksFixture } from './pricing-leaks-fixture.ts';
 import { createPeopleFixture } from './people-fixture.ts';
+import { createInventoryFixture } from './inventory-fixture.ts';
 import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAuditEntry, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
 
 /** Sample hook reports and offline state: emma-mba's Claude Code hook was removed, a user turned
@@ -141,6 +142,7 @@ export function createFixtureApi(): Api {
 
   const spend = createPricingLeaksFixture(now);
   const people = createPeopleFixture(now);
+  const inventory = createInventoryFixture(now);
 
   const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
   const delay = <T>(v: T) => new Promise<T>((r) => setTimeout(() => r(clone(v)), 120));
@@ -206,11 +208,22 @@ export function createFixtureApi(): Api {
         { list: 'domain_deny', value: 'pastebin.com', agents: [''] }, { list: 'command_approve', value: 'git push*', agents: [''] }] }) as Promise<T>;
       if (p === '/webhooks') return delay(webhooks) as Promise<T>;
       if (/^\/webhooks\/[^/]+\/deliveries$/.test(p)) return delay([]) as Promise<T>;
+      const invPage = inventory.get(path);
+      if (invPage instanceof ApiError) return Promise.reject(invPage);
+      if (invPage) return delay(invPage) as Promise<T>;
       const spendPage = spend.get(p) ?? people.get(p);
       if (spendPage) return delay(spendPage) as Promise<T>;
       return Promise.reject(new ApiError(404, 'not found'));
     },
     send<T>(method: string, path: string, body?: unknown): Promise<T> {
+      if (path.startsWith('/report/')) {
+        const r = inventory.send(method, path, body);
+        if (r instanceof ApiError) return Promise.reject(r);
+        if (r !== undefined) {
+          log(path === '/report/send' ? 'report.send' : 'report.schedule.update', '', null);
+          return delay(r) as Promise<T>;
+        }
+      }
       if (path.startsWith('/people/')) {
         const r = people.send(method, path, body);
         if (r instanceof ApiError) return Promise.reject(r);

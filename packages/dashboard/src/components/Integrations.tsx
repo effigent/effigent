@@ -33,6 +33,7 @@ const EVENTS: { id: string; label: string }[] = [
   { id: 'policy.published', label: 'Policy published' },
   { id: 'policy.proposed', label: 'Policy change waiting for approval' },
   { id: 'pricing_leaks.runaway_cost', label: 'Runaway AI spend (Pricing Leaks)' },
+  { id: 'anomaly.first_seen', label: 'New agent behaviour, first seen (busy: max 60/min)' },
 ];
 
 const OLD_CP = 'The control plane does not support integrations yet — it needs to be updated.';
