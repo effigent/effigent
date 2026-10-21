@@ -366,9 +366,9 @@ func (s *Server) announceHooks(ctx context.Context, ep store.Endpoint, agents []
 		s.Logf("endpoint health: settings %s: %v", ep.Tenant, err)
 	}
 	m := notify.Message{
-		Title: "Agent hook missing on " + cmpOr(ep.Hostname, ep.ID),
+		Title:  "Agent hook missing on " + cmpOr(ep.Hostname, ep.ID),
 		Fields: [][2]string{{"Machine", cmpOr(ep.Hostname, ep.ID) + " (" + ep.OS + ")"}},
-		Link:  s.endpointLink(ep.ID),
+		Link:   s.endpointLink(ep.ID),
 		Footer: "Without its hook an agent's tool calls aren't checked against your policy on this machine. " +
 			"Re-run `sudo effigentd install-hooks` there (the installers do this), and find out who changed the file.",
 	}
@@ -421,7 +421,7 @@ func (s *Server) healthView(ctx context.Context, tenant string) (map[string]any,
 		"default_minutes": int(s.offlineAfter() / time.Minute), "min_minutes": int(offlineAfterMin / time.Minute),
 		"tick_seconds": int(s.healthTick() / time.Second), "emails": n.Emails, "email_available": s.Notify != nil && s.Notify.EmailEnabled(),
 		"webhook_events": []string{"endpoint.offline", "endpoint.online", "endpoint.hooks_missing"},
-		"updated_by": set.UpdatedBy, "updated_at": set.UpdatedAt, "saved": set.Saved,
+		"updated_by":     set.UpdatedBy, "updated_at": set.UpdatedAt, "saved": set.Saved,
 	}, nil
 }
 

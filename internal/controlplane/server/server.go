@@ -54,7 +54,7 @@ type Server struct {
 	OfflineAfter time.Duration
 	HealthTick   time.Duration
 
-	limits        *limits
+	limits         *limits
 	whOnce         sync.Once
 	whCap          *capLimiter
 	whClientOnce   sync.Once
@@ -88,8 +88,8 @@ func (s *Server) Handler() http.Handler {
 					s.runRetention(context.Background())
 				}
 			}()
-			go s.runSpendSyncs(context.Background())   // Pricing Leaks: nightly vendor syncs
-			go s.runSpendRollups(context.Background()) // ...report history and runaway cost alerts
+			go s.runSpendSyncs(context.Background())     // Pricing Leaks: nightly vendor syncs
+			go s.runSpendRollups(context.Background())   // ...report history and runaway cost alerts
 			go s.runEndpointHealth(context.Background()) // machines gone silent / back
 		})
 		if s.Auth != nil && s.Auth.APIKeys == nil {
