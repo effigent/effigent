@@ -48,6 +48,9 @@ var hookAgents = map[string]hookAgent{
 	// Cursor's IDE and CLI share hooks.json and send no field that tells them apart: one policy agent.
 	"cursor": {name: "cursor-agent", label: "Cursor", parse: hooks.ParseCursor, output: hooks.CursorOutput, failClosed: hooks.CursorFailClosed,
 		slim: hooks.CursorSlim},
+	// GitHub Copilot (the cloud agent and the CLI): .github/hooks/*.json preToolUse.
+	"copilot": {name: "copilot-agent", label: "GitHub Copilot", parse: hooks.ParseCopilot, output: hooks.CopilotOutput,
+		failClosed: hooks.CopilotFailClosed},
 }
 
 // hookHandler answers POST /hook/{agent} on the local API. cp is nil when
@@ -55,6 +58,23 @@ var hookAgents = map[string]hookAgent{
 func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx context.Context, c api.HookCall) ([]byte, error) {
 	var mu sync.Mutex
 	seen := map[string]time.Time{} // agent/session id -> last call
+	return hookHandlerSeen(eng, cp, func(key string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		_, known := seen[key]
+		seen[key] = time.Now()
+		for id, t := range seen {
+			if time.Since(t) > 24*time.Hour {
+				delete(seen, id)
+			}
+		}
+		return known
+	})
+}
+
+// hookHandlerSeen is hookHandler with the record of sessions already
+// reported: known(agent/session) says whether one was, and remembers it.
+func hookHandlerSeen(eng *engine.Engine, cp func() *cpclient.Client, known func(string) bool) func(ctx context.Context, c api.HookCall) ([]byte, error) {
 	return func(ctx context.Context, c api.HookCall) ([]byte, error) {
 		ag, ok := hookAgents[c.Agent]
 		if !ok {
@@ -90,17 +110,7 @@ func hookHandler(eng *engine.Engine, cp func() *cpclient.Client) func(ctx contex
 		in := call.Orig
 		// There is no kernel to report agents starting, so a session's first
 		// tool call stands in for it (the console counts agents from these).
-		mu.Lock()
-		key := ag.name + "/" + in.SessionID
-		_, known := seen[key]
-		seen[key] = time.Now()
-		for id, t := range seen {
-			if time.Since(t) > 24*time.Hour {
-				delete(seen, id)
-			}
-		}
-		mu.Unlock()
-		if !known && in.SessionID != "" {
+		if in.SessionID != "" && !known(ag.name+"/"+in.SessionID) {
 			eng.Emit(who.on(event.Event{Time: time.Now(), Type: event.AgentStart, Severity: "info", Agent: ag.name,
 				Kind: "agent", Target: in.Cwd, Rule: "hook", Message: ag.label + " session " + short(in.SessionID), AgentEnv: env}))
 		}
@@ -366,7 +376,8 @@ func severity(t event.Type) string {
 // get a free pass because effigentd was stopped.
 func hookCmd(args []string) {
 	if len(args) < 1 || hookAgents[args[0]].parse == nil {
-		fmt.Fprintln(os.Stderr, "usage: effigentd hook claude|codex|gemini|cursor   (reads the agent's pre-tool hook JSON on stdin)")
+		fmt.Fprintln(os.Stderr, "usage: effigentd hook claude|codex|gemini|cursor|copilot [--remote]   (reads the agent's pre-tool hook JSON on stdin;\n"+
+			"  --remote, or $EFFIGENT_CLOUD_TOKEN set: no local daemon, decide here with the cloud environment's policy)")
 		os.Exit(2)
 	}
 	ag := hookAgents[args[0]]
@@ -387,7 +398,14 @@ func hookCmd(args []string) {
 	// treats a timeout as a block. Stay well inside the smallest common limit;
 	// the daemon waits at most budget-10s for an approver, and a later
 	// retry of the same call picks up an approval given after that.
-	const budget = 28 * time.Second
+	budget := 28 * time.Second
+	if args[0] == "copilot" {
+		budget = 20 * time.Second // Copilot lets a call run when its hook times out (default 30s)
+	}
+	if remoteMode(args[1:]) {
+		os.Stdout.Write(remoteHook(args[0], ag, payload, budget))
+		return
+	}
 	base, c := daemonTransport(budget) // TCP 127.0.0.1:7777, or the hook socket in a container
 	req, _ := http.NewRequest(http.MethodPost, base+"/hook/"+args[0], bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")

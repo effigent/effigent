@@ -240,8 +240,16 @@ func (c *Client) accept(ctx context.Context, d sign.Document, persist bool) erro
 	}
 	c.current = d.Version
 	if persist {
+		// Write-then-rename: remote hooks (one process per tool call) read
+		// this file while another call may be replacing it.
 		b, _ := json.Marshal(d)
-		_ = os.WriteFile(policyPath(c.Dir), b, 0o600)
+		if f, err := os.CreateTemp(c.Dir, ".policy-*.tmp"); err == nil {
+			_, werr := f.Write(b)
+			if cerr := f.Close(); werr == nil && cerr == nil && os.Chmod(f.Name(), 0o600) == nil {
+				_ = os.Rename(f.Name(), policyPath(c.Dir))
+			}
+			os.Remove(f.Name()) // gone after a rename; left behind by a failed write
+		}
 	}
 	if c.OnApply != nil {
 		c.OnApply(d.Version)

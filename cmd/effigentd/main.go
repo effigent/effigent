@@ -64,6 +64,9 @@ func main() {
 		case "install-hooks":
 			installHooksCmd(os.Args[2:])
 			return
+		case "cloud-setup":
+			cloudSetupCmd(os.Args[2:])
+			return
 		}
 	}
 	if runAsServiceIfNeeded(daemon) {
