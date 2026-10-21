@@ -13,7 +13,7 @@ Keep this file current when architecture, data model or deployment change.
 
 | Path | What | Runs on |
 |---|---|---|
-| `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync, `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork). Subcommands: `enroll`, `run` (zero-gap launcher). | Linux host next to Tetragon (dev: Docker Desktop VM) |
+| `cmd/effigentd`, `internal/endpoint/*` | Endpoint daemon (Go). `tetragon/` gRPC client + TracingPolicy rendering, `engine/` agent detection, attribution, per-agent kernel policy lifecycle, `policy/` the endpoint policy format (`default.yaml`), `cpclient/` enrollment + signed policy sync + heartbeat (incl. hook state), `sink/` stdout/JSONL/HTTP, `api/` local REST, `procscan/`, `vmwatch/` (agents in their own VM: Claude Cowork), `hooks/` agent hook payloads → canonical tools, `hookstate/` hook file locations + per-agent hook health (see 2e). Subcommands: `enroll`, `run` (zero-gap launcher). | Linux host next to Tetragon (dev: Docker Desktop VM) |
 | `cmd/effigent-cp`, `internal/controlplane/*` | Control plane (Go): `store/` Postgres (schema `cp`, embedded migrations tracked in `cp.schema_migrations`), `server/` endpoint protocol `/ep/v1/*` + console API `/api/v1/*`, `compile/` central policies per machine, `spend/` Pricing Leaks (see 2d). Image: `Dockerfile.cp`. | AWS App Runner `effigent-cp` (628713530358, us-east-1) at https://api.effigent.ai — redeploy with `AWS_PROFILE=effigent deploy/aws/deploy-cp.sh` |
 | `internal/shared/*` | `action/` action model, fingerprint, state machine · `policy/` central policy types + evaluator · `sign/` ed25519 policy signing. | both |
 | `packages/dashboard` | Console — Next.js 16 + Clerk. **Live** on `/api/v1` (`src/lib/api.ts`, Clerk Bearer token, `NEXT_PUBLIC_EFFIGENT_API_URL`): Overview, Enforcement (machines, enroll, revoke), Policies (YAML editor, versions), Audit (events + verifiable trail), Settings (workspace/role). No sample data by default: pages without a backend (Allow/Deny Lists) show "Coming soon" empty states; the Agent Graph is built client-side from real events (`src/lib/live-graph.ts`). **Demo Mode** (Settings / user menu; localStorage `effigent.demoMode`) swaps in a sample workspace from `src/lib/fixture-api.ts` on every page and never calls the real API. | Vercel, app.effigent.ai |
@@ -154,7 +154,8 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   `X-Effigent-Signature: t=<unix>,v1=hex(HMAC-SHA256(secret, "t.body"))`, secret shown once.
   Events: approval.requested, approval.decided, action.blocked (opt-in, 60/min cap,
   `dropped` counter), endpoint.enrolled, endpoint.revoked, policy.published,
-  pricing_leaks.runaway_cost (opt-in, see 2d), test.
+  pricing_leaks.runaway_cost (opt-in, see 2d), endpoint.hooks_missing / endpoint.offline /
+  endpoint.online (opt-in, see 2e), test.
   `emit()` only enqueues (`cp.webhook_deliveries`); the worker (started by `Handler()`)
   claims due rows with `for update skip locked` + a 60s lease and retries 10s, 1m, 5m,
   30m, 2h, 6h; 4xx except 408/429 are final. `EFFIGENT_DEV_INSECURE_WEBHOOKS=1` (local
@@ -248,6 +249,51 @@ Full write-up: `docs/pricing-leaks.md`.
   Alerts off (`alerts.runaway_cost: false`) → the leak is still claimed and recorded `alerts: off`,
   nothing is sent, and turning them back on doesn't replay it.
 
+## 2e. Endpoint health (hooks, offline, stops)
+
+Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at/stopped_at/stop`,
+`cp.endpoint_health_settings`), `server/endpoint_health.go`, `store/endpoint_health.go`.
+- **Hook state**: effigentd (`internal/endpoint/hookstate`, read at most once a minute, files only)
+  reports per agent (`claude`, `codex`, `gemini`, `cursor`) `installed` / `missing` / `modified`
+  (switched off: Claude `onFailure` not `block`, matcher changed, `disableAllHooks` in the file or a
+  `managed-settings.d/*.json` drop-in; Codex `[features] hooks = true` pin gone; Gemini name changed,
+  `hooksConfig.enabled` not true, listed in `hooksConfig.disabled`; Cursor an event or `failClosed`
+  missing; any: the hook's effigentd binary is gone; invalid JSON/TOML) / `unreadable`, plus
+  `disabled_by` (Gemini users whose `~/.gemini/settings.json` disables `effigent`) and `present`
+  (agent program found in PATH, common install dirs or each home; Cursor app bundles). It rides the
+  heartbeat (`hooks`) only when it differs from what the control plane last acknowledged (every
+  start sends it once); the heartbeat now goes out even when the policy fetch fails.
+  The control plane stores it under a row lock and keeps `expected` = agents whose hook it has seen
+  installed. A **problem** = not installed or user-disabled where it matters: the agent is present on
+  a `hooks`-sensor machine, or the agent is in `expected` (a Linux/Tetragon machine that never had
+  hooks is not an alarm). A new problem → webhook `endpoint.hooks_missing` (`{endpoint_id, hostname,
+  os, agents[{agent, state, file, detail, disabled_by, agent_installed}], review_url}`), email to the notification
+  emails (if `email_hooks`), audit `endpoint.hooks_missing` (actor via `system`); fixed →
+  audit `endpoint.hooks_restored` only. effigentd builds before this release don't report hooks
+  (the console says so).
+- **Stops**: SIGTERM / SIGINT / Windows service stop or shutdown → event `daemon_stop` (high;
+  `target` = signal, `rule` = `systemd` | `launchd` (job `ai.effigent.effigentd`) | `windows-service` |
+  `terminal` | `background`, `os_user` only for a terminal run: `SUDO_USER` or the current user) before
+  any teardown; the control-plane sink's last batch gets 3s (`HTTPConfig.CloseTimeout`), then it waits
+  in the spool and is sent after the next start. Ingest records the newest stop in `stopped_at`/`stop`.
+  Enrolled daemons keep `<state>/running` (pid, start, version); one left at start →
+  `daemon_unclean_restart` (high: kill -9, crash, power loss).
+- **Offline detector**: `runEndpointHealth` ticks every minute (`HealthTick`) under a session
+  advisory lock (`EndpointHealthLock`); `MarkEndpointsOffline` sets `offline_at` once per outage
+  (`update … where offline_at is null … for update skip locked`) for unrevoked machines silent
+  longer than the tenant's threshold (default `EFFIGENT_ENDPOINT_OFFLINE_AFTER`, 5m; tenant 2 min …
+  7 days); the first tick after a newer heartbeat/ingest clears it (`MarkEndpointsOnline`). Detection time = threshold +
+  up to one tick. Offline → webhook `endpoint.offline` (`reason: stopped` when a `daemon_stop` came
+  within 30s of the last heartbeat, else `silent`; `stop`, `last_seen`, `review_url`), email (if
+  `email_offline`), audit `endpoint.offline`; back → webhook `endpoint.online` + audit only (laptops
+  sleep: no email for coming back).
+- Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
+  `email_hooks`; people only; audited `endpoint_health.update` before/after). `GET /api/v1/endpoints`
+  carries the new columns. Console: Machines (`views/Enforcement.tsx`) shows each machine's hooks,
+  a warning per problem, offline (detector) and "stopped · SIGTERM" vs "went silent", and the
+  Machine health alerts card; Demo Mode data in `lib/fixture-api.ts` (`demoHealth`).
+- Deploy order: control plane (migration 014) → console → effigentd release (endpoints reinstall).
+
 ## 3. Auth
 
 - Endpoints: one-time enrollment token (`eft_…`, hashed, expiry + max uses) →
@@ -288,7 +334,7 @@ npm run -w @effigent/site build                     # site
 - Network: connects to IPs/CIDRs in `network_deny` / outside `network_allow` are blocked (verified by hand, e7c5125; no automated e2e check yet).
 - `domain_deny` (hostnames) is enforced by address: `internal/endpoint/domains` resolves each name every `-dns-refresh` (30s) via the system resolver + `-dns-servers` (1.1.1.1, 8.8.8.8, 9.9.9.9), keeps every address seen in the last 15 min (max 64 per name; a failed lookup never shrinks the set; loopback/link-local answers are dropped), and the engine adds them to `network_deny` at apply time, re-applying only agents whose names changed. While it is in force, a DNS bypass guard blocks agents from DoT (:853 anywhere) and from well-known public resolvers on :53/:443/:853, except the nameservers in effigentd's and the agent's own `resolv.conf` and single addresses listed in `network_allow`. effigentd itself queries the public resolvers every 30s; `-dns-servers ""` limits it to the system resolver. Limits: shared CDN IPs over-block or miss; names are exact (no wildcards, `www.` separate); private DoH, hard-coded IPs, `/etc/hosts` pins and proxies evade it; effigentd resolves from its own vantage point (split-horizon DNS can differ). `network_allow` is the stronger control. e2e section 6.
 - macOS / Windows: no kernel enforcement (macOS needs an Endpoint Security entitlement).
-  `-sensor hooks`: the agents' pre-tool hooks (`effigentd hook claude|codex|gemini`)
+  `-sensor hooks`: the agents' pre-tool hooks (`effigentd hook claude|codex|gemini|cursor`)
   ask the daemon before every tool call; `internal/endpoint/hooks.EvaluateClaude` denies
   in denylist/allowlist mode and reports `would_block` in monitor/learn. It checks Bash
   commands (a small shell reader: pipes, `&&`, `$( )`, `sh -c`, sudo/env/xargs wrappers)
@@ -306,10 +352,19 @@ npm run -w @effigent/site build                     # site
   email buttons.
   Every call is one event (`exec`, or `blocked`/`would_block`/`file_open`, kind `tool`).
 - Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
-  `--agents claude,codex,gemini`, `--remove`, `--exclusive`): each agent's calls are
+  `--agents claude,codex,gemini,cursor` (default), `--remove`, `--exclusive`): each agent's calls are
   translated to Claude Code's canonical tools (`internal/endpoint/hooks/agents.go`), so
-  one policy (deny + approval lists, `mcp__<server>__<tool>` names) covers all three.
+  one policy (deny + approval lists, `mcp__<server>__<tool>` names) covers all four.
+  Hook health (removed, switched off, user-disabled) is reported to the control plane, which
+  alerts (2e). A local admin/root can still edit or delete any of these files, or stop
+  effigentd: that is **detected, not prevented** (hook state ≤ ~1 min + one heartbeat;
+  offline = threshold + ≤ 1 min; a signal's sender isn't known, only how effigentd was run).
+  A sleeping or disconnected laptop looks the same as a killed daemon unless effigentd sent
+  `daemon_stop`; kill -9 sends nothing (reported as `daemon_unclean_restart` at the next start).
   - Claude Code: managed-settings.json `PreToolUse`, timeout 120, `onFailure: block`.
+    `managedSourcesBehavior: "first-wins"` with a remote/MDM managed source makes Claude Code skip
+    the file-based managed settings — and our hook — silently; hookstate can't see that (it reads
+    only the file and `managed-settings.d/`).
   - Codex ≥ 0.124 (0.131 recommended): `/etc/codex/requirements.toml`
     (Windows `%ProgramData%\OpenAI\Codex\requirements.toml`) `[[hooks.PreToolUse]]` +
     `[features] hooks = true`; same deny JSON as Claude. Shell = `Bash`, edits =
@@ -326,7 +381,25 @@ npm run -w @effigent/site build                     # site
     users can disable a hook by name (`/hooks disable effigent`); timeouts fail open;
     `GEMINI_CLI_SYSTEM_SETTINGS_PATH` can point elsewhere. Gemini's admin policy TOML
     (`…/gemini-cli/policies`) is the harder backstop — not written by effigentd yet.
-  - Cursor and the others: detection only (no hook).
+    hookstate sees `/hooks disable` in users' `~/.gemini/settings.json` (`disabled_by`), not in a
+    project's `.gemini/settings.json`, and can't parse a user file with comments.
+  - Cursor (IDE and CLI, agent name `cursor-agent`; docs https://cursor.com/docs/hooks): enterprise
+    `hooks.json` (macOS `/Library/Application Support/Cursor/hooks.json`, Linux `/etc/cursor/hooks.json`,
+    Windows `%ProgramData%\Cursor\hooks.json`), `version: 1`, events `beforeShellExecution` (→ `Bash`),
+    `beforeMCPExecution` (→ `mcp__<server>__<tool>`, arguments arrive as a JSON string),
+    `beforeReadFile` (→ `Read`, plus attachments) and `preToolUse` (Write/Delete → `Write`, Grep, List →
+    `LS`, WebFetch/Fetch → `WebFetch`, WebSearch, others by name; Shell / Read / `MCP:*` there are
+    answered allow without an event, the dedicated events check them), each `timeout: 120`,
+    `failClosed: true` (Cursor's default is fail open). Answer `{"permission":"allow"|"deny",
+    "user_message","agent_message"}` (Cursor needs a permission in every answer). `effigentd hook cursor`
+    strips the file contents Cursor sends (stdin ≤ 64 MB) and a Windows BOM. Limits: Cursor runs every
+    source's hooks (team/dashboard, project `.cursor/hooks.json`, user `~/.cursor/hooks.json`) next to
+    ours, deny wins; whether our `allow` skips Cursor's own approval prompt is unverified; `preToolUse`
+    doesn't name an MCP tool's server (so it's left to `beforeMCPExecution`), `beforeMCPExecution` in the
+    CLI is unverified; Tab completions (`beforeTabFileRead`) and edits after the fact (`afterFileEdit`)
+    aren't hooked; no documented user switch turns enterprise hooks off (unverified); not yet run
+    against a live Cursor build (payloads from the docs).
+  - Aider, OpenCode, Goose and the others: detection only (no hook).
   - Claude Cowork (Claude desktop app): runs Claude Code inside its own Linux VM (Apple
     Virtualization framework; `claude-code-vm/<ver>/claude`, `vm_bundles/claudevm.bundle`), even without
     `requireCoworkFullVmSandbox` — the Mac's managed settings and our hook don't exist there and the VM's
