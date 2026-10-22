@@ -119,7 +119,7 @@ export default function Enforcement() {
         </p>
         <ul className="doc-list">
           <li><b>Hook health.</b> Every machine reports, for each agent, whether its hook is installed. It flags a hook that was removed, switched off in the agent&apos;s settings, edited to fail open, disabled by a user, or pointing at an effigentd binary that is gone. A new problem on a machine where that agent is installed raises an alert. You see it in the console, by email and on webhook <code>endpoint.hooks_missing</code>.</li>
-          <li><b>Stopped or silent.</b> A clean stop sends <code>daemon_stop</code> with the signal and how effigentd was run. A kill or crash shows up as <code>daemon_unclean_restart</code> at the next start. A machine silent longer than your threshold (default five minutes) goes offline, with an email and webhook <code>endpoint.offline</code>. The alert tells a stop apart from a machine that went silent.</li>
+          <li><b>Stopped or silent.</b> A clean stop sends <code>daemon_stop</code> with the signal and how effigentd was run. A kill or crash shows up as <code>daemon_unclean_restart</code> at the next start. A machine silent longer than your threshold (default five minutes) goes offline, with webhook <code>endpoint.offline</code>. Offline emails are off by default; turn them on in Enforcement settings with a repeat interval (every hour to once a week), and a machine is emailed about at most once per interval, however often it sleeps and wakes. The alert tells a stop apart from a machine that went silent.</li>
           <li><b>Hooks fail closed.</b> If effigentd isn&apos;t running, the agents&apos; hooks deny the call rather than letting it through.</li>
         </ul>
       </DocSection>

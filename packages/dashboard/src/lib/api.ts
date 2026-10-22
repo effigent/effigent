@@ -77,6 +77,8 @@ export interface ApiHookReport {
 export interface ApiEndpointHealth {
   offline_after_minutes: number;
   email_offline: boolean;
+  /** 0 = never email about a machine going offline (default); N = at most once per machine per N minutes (60…10080). */
+  offline_alert_interval_minutes: number;
   email_hooks: boolean;
   default_minutes: number;
   min_minutes: number;
