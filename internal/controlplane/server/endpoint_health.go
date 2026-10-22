@@ -24,9 +24,13 @@ import (
 //   - offline: the detector marks machines not heard from for the tenant's
 //     threshold (default 5 min, never under 2) once per silence and clears the
 //     mark when they're back: webhooks endpoint.offline / endpoint.online,
-//     email (offline only), audit. A machine whose last word was daemon_stop
-//     was stopped deliberately; otherwise it just went silent (sleep, network,
-//     power, or a kill that left no time to say so).
+//     audit, and an offline email only when the tenant picked a repeat
+//     interval (default never; migration 021). The interval is remembered per
+//     machine across online/offline flips, so a laptop that sleeps, wakes
+//     briefly and sleeps again isn't emailed about every time. A machine
+//     whose last word was daemon_stop was stopped deliberately; otherwise it
+//     just went silent (sleep, network, power, or a kill that left no time to
+//     say so).
 // Detection time is the threshold plus up to one tick (1 min).
 
 const (
@@ -37,7 +41,44 @@ const (
 	// a daemon_stop counts as the machine's last word when nothing was heard
 	// later than this after it (the final batch itself updates last_seen)
 	stopSlack = 30 * time.Second
+	// offline alert emails: 0 = never, else at most once per machine per interval
+	offlineAlertIntervalMin = time.Hour
+	offlineAlertIntervalMax = 7 * 24 * time.Hour
 )
+
+func validOfflineAlertInterval(mins int) bool {
+	d := time.Duration(mins) * time.Minute
+	return mins == 0 || (d >= offlineAlertIntervalMin && d <= offlineAlertIntervalMax)
+}
+
+// everyText: 60 → "hour", 360 → "6 hours", 1440 → "day", 10080 → "week".
+func everyText(mins int) string {
+	switch {
+	case mins == 10080:
+		return "week"
+	case mins == 1440:
+		return "day"
+	case mins == 60:
+		return "hour"
+	case mins%1440 == 0:
+		return fmt.Sprintf("%d days", mins/1440)
+	case mins%60 == 0:
+		return fmt.Sprintf("%d hours", mins/60)
+	}
+	return fmt.Sprintf("%d minutes", mins)
+}
+
+// offlineEmailOff says why no offline email goes out under these settings
+// ("" = it may, subject to the per-machine interval).
+func offlineEmailOff(set store.EndpointHealthSettings) string {
+	switch {
+	case set.OfflineAlertIntervalMinutes <= 0:
+		return "off: offline alerts set to never"
+	case !set.EmailOffline:
+		return "off"
+	}
+	return ""
+}
 
 func (s *Server) offlineAfter() time.Duration {
 	if s.OfflineAfter > 0 {
@@ -152,8 +193,9 @@ func (s *Server) announceOffline(ctx context.Context, ep store.Endpoint) {
 			{"Last heard from", last},
 		},
 		Link: s.endpointLink(ep.ID),
-		Footer: "Effigent reports a machine once when it has been silent for " + minutes(set.OfflineAfterSeconds) +
-			". A laptop that sleeps looks the same as one whose effigentd was killed; agents on it keep the last policy it has.",
+		Footer: "A machine counts as offline after " + minutes(set.OfflineAfterSeconds) + " of silence. Effigent emails about a machine at most once every " +
+			everyText(set.OfflineAlertIntervalMinutes) + "; change this in Enforcement settings. " +
+			"A laptop that sleeps looks the same as one whose effigentd was killed; agents on it keep the last policy it has.",
 	}
 	if stopped {
 		how := cmpOr(si.Signal, "a stop request")
@@ -169,9 +211,34 @@ func (s *Server) announceOffline(ctx context.Context, ep store.Endpoint) {
 		m.Fields = append(m.Fields, [2]string{"What happened", "effigentd stopped reporting without saying it was stopping: " +
 			"the machine may be asleep, off or offline, or effigentd was killed."})
 	}
-	res := s.emailHealth(ctx, ep.Tenant, set.EmailOffline, m)
+	res := s.offlineEmail(ctx, ep, set, m)
 	s.auditSystem(ctx, ep.Tenant, "endpoint.offline", ep.ID, map[string]any{"hostname": ep.Hostname, "last_seen": ep.LastSeen,
-		"reason": reason, "stop": data["stop"], "offline_after_seconds": set.OfflineAfterSeconds, "channels": res})
+		"reason": reason, "stop": data["stop"], "offline_after_seconds": set.OfflineAfterSeconds,
+		"offline_alert_interval_minutes": set.OfflineAlertIntervalMinutes, "channels": res})
+}
+
+// offlineEmail sends the offline email when the tenant wants one and none
+// went out about this machine within the interval. Nothing that could stop
+// the email from being sent is checked after the claim, so a claimed slot
+// means an email was attempted.
+func (s *Server) offlineEmail(ctx context.Context, ep store.Endpoint, set store.EndpointHealthSettings, m notify.Message) map[string]string {
+	if why := offlineEmailOff(set); why != "" {
+		return map[string]string{"email": why}
+	}
+	emails, why := s.healthRecipients(ctx, ep.Tenant)
+	if why != "" {
+		return map[string]string{"email": why}
+	}
+	every := time.Duration(set.OfflineAlertIntervalMinutes) * time.Minute
+	ok, err := s.Store.ClaimOfflineAlert(ctx, ep.ID, every)
+	switch {
+	case err != nil:
+		s.Logf("endpoint health: offline alert claim %s: %v", ep.ID, err)
+		return map[string]string{"email": "error: " + clip(err.Error(), 500)}
+	case !ok:
+		return map[string]string{"email": "suppressed: alerted within the last " + everyText(set.OfflineAlertIntervalMinutes)}
+	}
+	return s.sendHealth(ctx, emails, m)
 }
 
 // announceOnline: webhook and audit only (a laptop waking up is not news
@@ -188,33 +255,43 @@ func (s *Server) announceOnline(ctx context.Context, ep store.Endpoint) {
 // emailHealth sends a health alert to the workspace's notification emails
 // and says where it went (for the audit entry).
 func (s *Server) emailHealth(ctx context.Context, tenant string, on bool, m notify.Message) map[string]string {
-	res := map[string]string{}
 	if !on {
-		res["email"] = "off"
-		return res
+		return map[string]string{"email": "off"}
 	}
+	emails, why := s.healthRecipients(ctx, tenant)
+	if why != "" {
+		return map[string]string{"email": why}
+	}
+	return s.sendHealth(ctx, emails, m)
+}
+
+// healthRecipients returns the workspace's notification emails, or why no
+// email can go out.
+func (s *Server) healthRecipients(ctx context.Context, tenant string) ([]string, string) {
 	n, err := s.Store.GetNotificationSettings(ctx, tenant)
 	if err != nil {
 		s.Logf("endpoint health: notification settings %s: %v", tenant, err)
 	}
 	switch {
 	case len(n.Emails) == 0:
-		res["email"] = "no recipients"
+		return nil, "no recipients"
 	case s.Notify == nil || !s.Notify.EmailEnabled():
-		res["email"] = "off: this control plane doesn't send email"
-	default:
-		var failed []string
-		for _, rcpt := range n.Emails {
-			if err := s.Notify.Email(ctx, []string{rcpt}, m); err != nil {
-				failed = append(failed, rcpt+": "+err.Error())
-			}
-		}
-		res["email"] = "sent"
-		if len(failed) > 0 {
-			res["email"] = "error: " + clip(strings.Join(failed, "; "), 500)
+		return nil, "off: this control plane doesn't send email"
+	}
+	return n.Emails, ""
+}
+
+func (s *Server) sendHealth(ctx context.Context, emails []string, m notify.Message) map[string]string {
+	var failed []string
+	for _, rcpt := range emails {
+		if err := s.Notify.Email(ctx, []string{rcpt}, m); err != nil {
+			failed = append(failed, rcpt+": "+err.Error())
 		}
 	}
-	return res
+	if len(failed) > 0 {
+		return map[string]string{"email": "error: " + clip(strings.Join(failed, "; "), 500)}
+	}
+	return map[string]string{"email": "sent"}
 }
 
 func minutes(secs int) string {
@@ -419,7 +496,7 @@ func (s *Server) healthView(ctx context.Context, tenant string) (map[string]any,
 	return map[string]any{
 		"offline_after_minutes": set.OfflineAfterSeconds / 60, "email_offline": set.EmailOffline, "email_hooks": set.EmailHooks,
 		"default_minutes": int(s.offlineAfter() / time.Minute), "min_minutes": int(offlineAfterMin / time.Minute),
-		"tick_seconds": int(s.healthTick() / time.Second), "emails": n.Emails, "email_available": s.Notify != nil && s.Notify.EmailEnabled(),
+		"tick_seconds": int(s.healthTick() / time.Second), "offline_alert_interval_minutes": set.OfflineAlertIntervalMinutes, "emails": n.Emails, "email_available": s.Notify != nil && s.Notify.EmailEnabled(),
 		"webhook_events": []string{"endpoint.offline", "endpoint.online", "endpoint.hooks_missing"},
 		"updated_by":     set.UpdatedBy, "updated_at": set.UpdatedAt, "saved": set.Saved,
 	}, nil
@@ -436,9 +513,10 @@ func (s *Server) getEndpointHealth(w http.ResponseWriter, r *http.Request, p Pri
 
 func (s *Server) putEndpointHealth(w http.ResponseWriter, r *http.Request, p Principal) {
 	var req struct {
-		OfflineAfterMinutes *int  `json:"offline_after_minutes"`
-		EmailOffline        *bool `json:"email_offline"`
-		EmailHooks          *bool `json:"email_hooks"`
+		OfflineAfterMinutes         *int  `json:"offline_after_minutes"`
+		EmailOffline                *bool `json:"email_offline"`
+		OfflineAlertIntervalMinutes *int  `json:"offline_alert_interval_minutes"`
+		EmailHooks                  *bool `json:"email_hooks"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad body")
@@ -458,6 +536,14 @@ func (s *Server) putEndpointHealth(w http.ResponseWriter, r *http.Request, p Pri
 		}
 		after.OfflineAfterSeconds = int(d / time.Second)
 	}
+	if req.OfflineAlertIntervalMinutes != nil {
+		if !validOfflineAlertInterval(*req.OfflineAlertIntervalMinutes) {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("offline_alert_interval_minutes must be 0 (never) or %d to %d",
+				int(offlineAlertIntervalMin/time.Minute), int(offlineAlertIntervalMax/time.Minute)))
+			return
+		}
+		after.OfflineAlertIntervalMinutes = *req.OfflineAlertIntervalMinutes
+	}
 	if req.EmailOffline != nil {
 		after.EmailOffline = *req.EmailOffline
 	}
@@ -468,9 +554,10 @@ func (s *Server) putEndpointHealth(w http.ResponseWriter, r *http.Request, p Pri
 		s.fail(w, err)
 		return
 	}
-	s.audit(r, p, "endpoint_health.update", "", map[string]any{
-		"before": map[string]any{"offline_after_seconds": before.OfflineAfterSeconds, "email_offline": before.EmailOffline, "email_hooks": before.EmailHooks},
-		"after":  map[string]any{"offline_after_seconds": after.OfflineAfterSeconds, "email_offline": after.EmailOffline, "email_hooks": after.EmailHooks},
-	})
+	view := func(h store.EndpointHealthSettings) map[string]any {
+		return map[string]any{"offline_after_seconds": h.OfflineAfterSeconds, "email_offline": h.EmailOffline,
+			"offline_alert_interval_minutes": h.OfflineAlertIntervalMinutes, "email_hooks": h.EmailHooks}
+	}
+	s.audit(r, p, "endpoint_health.update", "", map[string]any{"before": view(before), "after": view(after)})
 	s.getEndpointHealth(w, r, p)
 }
