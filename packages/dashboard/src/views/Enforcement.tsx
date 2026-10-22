@@ -11,6 +11,7 @@ import { ago, dateTime, type EndpointRow, type HookRow } from '@/lib/live-map.ts
 import type { AgentType } from '@/types.ts';
 import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageGuide, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
 import { CLOUD_VENDORS, CloudEnvironments, type CloudVendor } from '@/components/CloudEnvironments.tsx';
+import { BreakGlass } from '@/components/BreakGlass.tsx';
 
 /** How each agent is recognised (policy/default.yaml) and which layers enforce it. */
 const INTEGRATIONS: { type: AgentType; detect: string; hooks: string | null }[] = [
@@ -472,6 +473,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
       </Card>
 
       <HealthSettings />
+
+      <div id="break-glass" style={{ scrollMarginTop: 88 }}><BreakGlass machines={eps} /></div>
 
       <div id="enroll" style={{ scrollMarginTop: 88 }}><Enroll /></div>
 

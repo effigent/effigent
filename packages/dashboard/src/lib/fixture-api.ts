@@ -9,7 +9,7 @@ import { ENDPOINTS, EVENTS } from '@/data.ts';
 import { createPricingLeaksFixture } from './pricing-leaks-fixture.ts';
 import { createPeopleFixture } from './people-fixture.ts';
 import { createInventoryFixture } from './inventory-fixture.ts';
-import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAuditEntry, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
+import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAuditEntry, type ApiBreakGlassCode, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
 
 /** Sample hook reports and offline state: emma-mba's Claude Code hook was removed, a user turned
  *  Gemini CLI's hook off on alex-mbp, noa-mbp was stopped through launchd, ci-runner-03 went
@@ -127,6 +127,7 @@ export function createFixtureApi(): Api {
   }));
   endpoints.push({ id: '00000099-dem0-4000-8000-c10udc0de000', hostname: 'acme/web', os: 'cloud', arch: '', version: '', kind: 'cloud',
     vendor: 'copilot', enrolled_at: iso(60 * 24 * 3), last_seen: iso(60 * 5), policy_version: 3, revoked: false });
+  const breakGlass: Omit<ApiBreakGlassCode, 'status'>[] = [];
   let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, offline_alert_interval_minutes: 0, email_hooks: true, default_minutes: 5, min_minutes: 2,
     tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing'], saved: false };
   const epId = new Map(ENDPOINTS.map((e, i) => [e.id, endpoints[i].id]));
@@ -203,6 +204,7 @@ export function createFixtureApi(): Api {
       if (p === '/approvals') return delay([]) as Promise<T>; // the demo queue reads the sample store
       if (p === '/notifications') return delay(notifications) as Promise<T>;
       if (p === '/endpoint-health') return delay({ ...endpointHealth, emails: notifications.emails }) as Promise<T>;
+      if (p === '/break-glass') return delay({ codes: breakGlass.map((c) => ({ ...c, status: c.revoked_at ? 'revoked' : c.used_at ? 'used' : Date.parse(c.expiry) < Date.now() ? 'expired' : 'active' })) }) as Promise<T>;
       if (p === '/api-keys') return delay(apiKeys) as Promise<T>;
       if (p === '/exceptions') return delay(exceptions) as Promise<T>;
       if (p === '/exceptions/options') return delay({ agents: ['claude-code', 'codex', 'gemini-cli'], mode: 'denylist', options: [
@@ -414,6 +416,26 @@ export function createFixtureApi(): Api {
       if (method === 'POST' && path === '/notifications/test') {
         return delay({ ...(notifications.slack_webhook_set ? { slack: 'sent (Demo Mode: nothing was posted)' } : {}),
           ...(notifications.emails.length ? { email: 'sent (Demo Mode: nothing was sent)' } : {}) }) as Promise<T>;
+      }
+      if (method === 'POST' && path === '/break-glass') {
+        const b = (body ?? {}) as { endpoint_id?: string; duration_minutes?: number; reason?: string };
+        if (!b.reason?.trim()) return Promise.reject(new ApiError(400, 'a reason is required'));
+        const mins = b.duration_minutes || 60;
+        if (mins < 1 || mins > 480) return Promise.reject(new ApiError(400, 'break-glass duration must be at most 8h0m0s'));
+        const id = Math.random().toString(16).slice(2, 18).padEnd(16, '0');
+        const expiry = new Date(Date.now() + mins * 60_000).toISOString();
+        breakGlass.unshift({ id, endpoint_id: b.endpoint_id ?? '', reason: b.reason.trim(), expiry, created_by: 'demo', created_by_name: 'You (Demo Mode)',
+          created_via: 'clerk', created_at: new Date().toISOString(), revoked_at: null, used_at: null, used_by: '', used_on: '' });
+        log('break_glass.create', id, { endpoint_id: b.endpoint_id ?? '', duration_minutes: mins, reason: b.reason.trim() });
+        return delay({ id, code: `DEMO-${id.toUpperCase()}-NOT-A-REAL-CODE`, endpoint_id: b.endpoint_id ?? '', expiry, duration_minutes: mins,
+          message: 'Demo Mode: this code works nowhere.' }) as Promise<T>;
+      }
+      if (method === 'DELETE' && path.startsWith('/break-glass/')) {
+        const c = breakGlass.find((x) => x.id === decodeURIComponent(path.split('/')[2]) && !x.revoked_at);
+        if (!c) return Promise.reject(new ApiError(404, 'no such code, or already revoked'));
+        c.revoked_at = new Date().toISOString();
+        log('break_glass.revoke', c.id, null);
+        return delay({ ok: true }) as Promise<T>;
       }
       if (method === 'POST' && path === '/cloud-environments') {
         const b = (body ?? {}) as { name?: string; vendor?: string };

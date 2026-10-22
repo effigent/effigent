@@ -4,17 +4,19 @@ A summary of everything built for the CISO vendor checklist: what each feature d
 works, how it was tested, and what a release needs. Point-by-point answers to the checklist are in
 `docs/vendor-checklist-answers.md`. The engineering detail is in `CLAUDE.md` (section numbers in brackets).
 
-The work shipped in two rounds:
+The work shipped in three rounds:
 
 - **Round 1 is live.**
   - Control plane `f9a7774` is deployed (migrations 012–015).
   - `main` is pushed (console).
   - `effigentd-v0.7.0` is tagged.
-- **Round 2 is being released (2026-10-22).**
+- **Round 2 is live (2026-10-22).**
   - Control plane `3d9b228` is deployed (migrations 016, 017, 019, 020).
   - `main` is pushed (console + site).
-- **Round 3 (break-glass, Linux self-protection, gated binaries) is merged** and goes out with
-  the next control plane deploy (migration 018) and effigentd release.
+- **Round 3 (break-glass, Linux self-protection, gated binaries) is live (2026-10-22).**
+  - Control plane deployed (migration 018), console Break-glass card on Machines.
+  - `effigentd-v0.8.0` is tagged; endpoints pick it up when they reinstall.
+  - Self-hosted images and chart `v0.1.0` are published (public on ghcr).
 
 ---
 
@@ -228,16 +230,18 @@ The work shipped in two rounds:
 - **What:** a signed code that lets a machine run calls needing approval while the control plane
   is unreachable. Deny rules keep working.
 - **How:**
-  - An admin issues a code (`POST /api/v1/break-glass`): one machine or all of them, 1 minute
+  - An admin issues a code in the console (Machines → Break-glass) or with
+    `POST /api/v1/break-glass`: one machine or all of them, 1 minute
     to 8 hours, with a written reason.
   - The person at the machine runs `effigentd break-glass <code>`.
   - effigentd verifies it offline against the key pinned at enrollment and lifts approval
     lists, in hooks and in the kernel, until the code expires.
   - Each code works once per machine.
   - Creation and use alert email and webhooks and are audited. Use is reported on reconnect.
-- **Verified:** sign/verify unit tests and a database test. Not run end to end.
+- **Verified:** sign/verify unit tests and a database test; the console card was checked in
+  Chrome against a local control plane (issue, list, revoke) and in Demo Mode. Not run end to
+  end on a machine.
 - **Limits:**
-  - API only: there's no console screen yet.
   - The user who ran it is what the machine reports.
   - A revoked code still works on a machine that stays offline.
   - It never covers policy changes.

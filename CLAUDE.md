@@ -757,8 +757,10 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
     deny lists ran before.
   - Single use per machine: `<state>/break-glass.json`, written then renamed. `break_glass_start` is
     reported on reconnect and marks the code used.
-  - The console link is `/enforcement?tab=break-glass`, but that tab isn't built yet. The posture
-    report's `break_glass` section isn't registered yet.
+  - Console: Machines → Break-glass card (`components/BreakGlass.tsx`, anchor `/enforcement#break-glass`,
+    the alerts' link): issue (machine or all, 30 min…8 h, reason; the code is shown once), list with
+    status, revoke. Demo Mode in `lib/fixture-api.ts`. The posture report's `break_glass` section isn't
+    registered yet.
 - **Self-protection** (`cmd/effigentd/guard.go`, `tetragon/render.go`, policy top-level
   `self_protection`, default on):
   - Each tracked agent gets `-guard` (file writes / append / create / O_TRUNC via inode_setattr /
@@ -880,8 +882,7 @@ npm run -w @effigent/site build                     # site
   and the admin token can't count toward two-person approval and aren't checked as the
   requester when one approver suffices; the agent's message says only "pending" until the
   quorum (the "1 of 2" wording would be in effigentd).
-- Break-glass / self-protection / gated binaries (2l): break-glass has no console screen yet (API only),
-  the user who ran it is self-asserted, a revoked code still works on a machine that stays offline, and
+- Break-glass / self-protection / gated binaries (2l): break-glass: the user who ran it is self-asserted, a revoked code still works on a machine that stays offline, and
   use is known only on reconnect. Self-protection covers the agent tree only: `systemctl stop effigentd`
   (systemd sends the signal), Tetragon's local gRPC API (127.0.0.1:54321) and root outside the agent tree
   aren't blocked; path prefixes also cover same-prefixed siblings; Linux only. Gated binaries match exact

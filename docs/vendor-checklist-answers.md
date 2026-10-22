@@ -480,10 +480,11 @@ audited.
 (`ANTHROPIC_API_KEY: set`), never their values. Redaction now strips `NAME_TOKEN=…`-style values
 from everything sent (see 28).
 
-### 18. Break-glass during an outage: **Yes** (new; API, no console screen yet)
+### 18. Break-glass during an outage: **Yes** (new)
 When the control plane is unreachable, a call that needs approval is denied, and deny rules keep
 working from the cached signed policy. **Break-glass (new)** lets work continue:
-- **Issuing a code:** an admin or security admin issues a code (`POST /api/v1/break-glass`).
+- **Issuing a code:** an admin or security admin issues a code in the console (Machines →
+  Break-glass) or with `POST /api/v1/break-glass`.
   It is for one machine or all of them, lasts 1 minute to 8 hours, and needs a written
   reason. The control plane signs it with the workspace key and keeps only its id. Codes
   can be listed and revoked.

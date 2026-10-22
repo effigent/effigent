@@ -199,7 +199,7 @@ func (s *Server) breakGlassLink() string {
 	if s.ConsoleOrigin == "" {
 		return ""
 	}
-	return s.ConsoleOrigin + "/enforcement?tab=break-glass"
+	return s.ConsoleOrigin + "/enforcement#break-glass"
 }
 
 // emailNotify sends m to the tenant's notification emails (unconditional:

@@ -64,6 +64,33 @@ export interface ApiCloudEnvironment {
   hook_agent: string; // the agent name in `effigentd hook <agent> --remote`
 }
 
+/** A break-glass code (GET /break-glass). The code itself is shown only once, when created. */
+export interface ApiBreakGlassCode {
+  id: string;
+  endpoint_id: string; // '' = all machines
+  reason: string;
+  expiry: string;
+  created_by: string;
+  created_by_name: string;
+  created_via: string;
+  created_at: string;
+  revoked_at: string | null;
+  used_at: string | null;
+  used_by: string; // the OS user who ran it, as the machine reports
+  used_on: string; // endpoint id
+  status: 'active' | 'used' | 'expired' | 'revoked';
+}
+
+/** POST /break-glass. */
+export interface ApiBreakGlassCreated {
+  id: string;
+  code: string;
+  endpoint_id: string;
+  expiry: string;
+  duration_minutes: number;
+  message: string;
+}
+
 export type ApiHookState = 'installed' | 'missing' | 'modified' | 'unreadable';
 
 /** hookstate.Report as stored (plus `expected`: agents whose hook was once seen in place). */
