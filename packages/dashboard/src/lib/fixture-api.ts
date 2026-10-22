@@ -127,7 +127,7 @@ export function createFixtureApi(): Api {
   }));
   endpoints.push({ id: '00000099-dem0-4000-8000-c10udc0de000', hostname: 'acme/web', os: 'cloud', arch: '', version: '', kind: 'cloud',
     vendor: 'copilot', enrolled_at: iso(60 * 24 * 3), last_seen: iso(60 * 5), policy_version: 3, revoked: false });
-  let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, email_hooks: true, default_minutes: 5, min_minutes: 2,
+  let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, offline_alert_interval_minutes: 0, email_hooks: true, default_minutes: 5, min_minutes: 2,
     tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing'], saved: false };
   const epId = new Map(ENDPOINTS.map((e, i) => [e.id, endpoints[i].id]));
   const events: ApiEvent[] = EVENTS.filter((e) => e.type !== 'approval' && e.endpoint && e.agentType).map((e, i) => ({
@@ -268,9 +268,13 @@ export function createFixtureApi(): Api {
         return delay({ ok: true }) as Promise<T>;
       }
       if (method === 'PUT' && path === '/endpoint-health') {
-        const b = (body ?? {}) as { offline_after_minutes?: number; email_offline?: boolean; email_hooks?: boolean };
+        const b = (body ?? {}) as { offline_after_minutes?: number; email_offline?: boolean; offline_alert_interval_minutes?: number; email_hooks?: boolean };
         if (b.offline_after_minutes !== undefined && !(b.offline_after_minutes >= 2 && b.offline_after_minutes <= 10080)) {
           return Promise.reject(new ApiError(400, 'offline_after_minutes must be 2 to 10080'));
+        }
+        const every = b.offline_alert_interval_minutes;
+        if (every !== undefined && !(every === 0 || (every >= 60 && every <= 10080))) {
+          return Promise.reject(new ApiError(400, 'offline_alert_interval_minutes must be 0 (never) or 60 to 10080'));
         }
         const before = endpointHealth;
         endpointHealth = { ...endpointHealth, ...b, saved: true, updated_by: me.user_id, updated_at: new Date().toISOString() };

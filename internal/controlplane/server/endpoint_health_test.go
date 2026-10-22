@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/effigent/effigent/internal/controlplane/notify"
 	"github.com/effigent/effigent/internal/controlplane/store"
 	"github.com/jackc/pgx/v5"
 )
@@ -274,8 +275,12 @@ func TestEndpointHealth(t *testing.T) {
 
 	// ---- settings ----
 	var h map[string]any
-	if code := call("GET", "/api/v1/endpoint-health", "", nil, &h); code != 200 || h["offline_after_minutes"] != float64(5) || h["min_minutes"] != float64(2) {
+	if code := call("GET", "/api/v1/endpoint-health", "", nil, &h); code != 200 || h["offline_after_minutes"] != float64(5) || h["min_minutes"] != float64(2) ||
+		h["offline_alert_interval_minutes"] != float64(0) {
 		t.Fatalf("get %d %v", code, h)
+	}
+	if a := audits("endpoint.offline"); emailChannel(a[0]) != "off: offline alerts set to never" {
+		t.Fatalf("offline audit channels %s", a[0].Details)
 	}
 	if code := call("PUT", "/api/v1/endpoint-health", "", map[string]any{"offline_after_minutes": 1}, nil); code != 400 {
 		t.Fatalf("1 minute accepted: %d", code)
@@ -294,5 +299,299 @@ func TestEndpointHealth(t *testing.T) {
 	}
 	if a := audits("endpoint_health.update"); len(a) != 1 {
 		t.Fatalf("settings audit %+v", a)
+	}
+}
+
+// emailChannel is what an audit entry's channels say about email.
+func emailChannel(e store.AuditEntry) string {
+	var d struct {
+		Channels map[string]string `json:"channels"`
+	}
+	_ = json.Unmarshal(e.Details, &d)
+	return d.Channels["email"]
+}
+
+func TestOfflineAlertIntervalRules(t *testing.T) {
+	for mins, ok := range map[int]bool{0: true, 60: true, 360: true, 10080: true, -1: false, 1: false, 30: false, 59: false, 10081: false} {
+		if validOfflineAlertInterval(mins) != ok {
+			t.Errorf("validOfflineAlertInterval(%d) = %v", mins, !ok)
+		}
+	}
+	for mins, want := range map[int]string{60: "hour", 360: "6 hours", 720: "12 hours", 1440: "day", 2880: "2 days", 10080: "week", 90: "90 minutes"} {
+		if got := everyText(mins); got != want {
+			t.Errorf("everyText(%d) = %q, want %q", mins, got, want)
+		}
+	}
+	cases := []struct {
+		set  store.EndpointHealthSettings
+		want string
+	}{
+		{store.EndpointHealthSettings{EmailOffline: true}, "off: offline alerts set to never"}, // the default, and rows saved before 021
+		{store.EndpointHealthSettings{EmailOffline: false}, "off: offline alerts set to never"},
+		{store.EndpointHealthSettings{EmailOffline: false, OfflineAlertIntervalMinutes: 60}, "off"},
+		{store.EndpointHealthSettings{EmailOffline: true, OfflineAlertIntervalMinutes: 60}, ""},
+	}
+	for _, c := range cases {
+		if got := offlineEmailOff(c.set); got != c.want {
+			t.Errorf("offlineEmailOff(%+v) = %q, want %q", c.set, got, c.want)
+		}
+	}
+}
+
+// TestOfflineAlertEmails: offline emails are off by default (webhook and audit
+// still happen); with an interval, a machine that sleeps, wakes and sleeps
+// again is emailed about once per interval, not once per silence.
+func TestOfflineAlertEmails(t *testing.T) {
+	dbURL := testDatabaseURL(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	db, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+
+	tenant := fmt.Sprintf("org:offline-alerts-%d", time.Now().UnixNano())
+	rcpt := fmt.Sprintf("grok-bot-%d@example.com", time.Now().UnixNano())
+	auth, _ := NewAuthenticator(ctx, Options{AdminToken: "t0ken", AdminTenants: []string{tenant}})
+	_, key, _ := ed25519.GenerateKey(nil)
+	sink := &smtpSink{}
+	addr := sink.start(t)
+	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, AllowInsecureWebhooks: true, WebhookPoll: 50 * time.Millisecond,
+		HealthTick: time.Hour, ConsoleOrigin: "https://app.example",
+		Notify: &notify.Sender{SMTPURL: "smtp://u:p@" + addr, From: "Effigent <alerts@effigent.ai>"}}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	if err := st.PutNotificationSettings(ctx, tenant, store.NotificationSettings{Emails: []string{rcpt}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	offlineHooks := 0
+	recv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ev map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&ev)
+		if ev["type"] == "endpoint.offline" {
+			mu.Lock()
+			offlineHooks++
+			mu.Unlock()
+		}
+	}))
+	defer recv.Close()
+	if _, err := st.CreateWebhook(ctx, tenant, "soc", recv.URL, []string{"endpoint.offline"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(method, path, bearer string, body any, out any) int {
+		t.Helper()
+		var rd io.Reader = http.NoBody
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rd = bytes.NewReader(b)
+		}
+		req, _ := http.NewRequest(method, srv.URL+path, rd)
+		if bearer == "" {
+			req.Header.Set("Authorization", "Bearer t0ken")
+			req.Header.Set("X-Effigent-Tenant", tenant)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if out != nil && res.StatusCode < 300 {
+			_ = json.NewDecoder(res.Body).Decode(out)
+		}
+		return res.StatusCode
+	}
+	var tok struct {
+		Token struct{ Token string } `json:"token"`
+	}
+	call("POST", "/api/v1/enrollment-tokens", "", map[string]any{}, &tok)
+	var mac EnrollResponse
+	call("POST", "/ep/v1/enroll", "-", map[string]any{"token": tok.Token.Token, "info": map[string]string{"hostname": "grok-bot-mbp", "os": "darwin"}}, &mac)
+
+	emails := func() int {
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		n := 0
+		for _, r := range sink.rcpts {
+			if r == rcpt {
+				n++
+			}
+		}
+		return n
+	}
+	offlineAudits := func() []store.AuditEntry {
+		t.Helper()
+		es, err := st.ListAudit(ctx, tenant, 100, "endpoint.offline", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return es // newest first
+	}
+	// sleep: silent past the threshold, then the detector marks it offline
+	sleep := func() {
+		t.Helper()
+		if _, err := db.Exec(ctx, `update cp.endpoints set last_seen = now() - interval '20 minutes' where id = $1`, mac.EndpointID); err != nil {
+			t.Fatal(err)
+		}
+		s.checkEndpointHealth(ctx)
+		if e, _ := st.GetEndpoint(ctx, tenant, mac.EndpointID); e.OfflineAt == nil {
+			t.Fatal("not marked offline")
+		}
+	}
+	// wake: a heartbeat, then the detector marks it online
+	wake := func() {
+		t.Helper()
+		if code := call("POST", "/ep/v1/heartbeat", mac.Secret, map[string]any{"policy_version": 0, "version": "v0.6.0"}, nil); code != 200 {
+			t.Fatalf("heartbeat: %d", code)
+		}
+		s.checkEndpointHealth(ctx)
+		if e, _ := st.GetEndpoint(ctx, tenant, mac.EndpointID); e.OfflineAt != nil {
+			t.Fatal("still marked offline")
+		}
+	}
+	waitHooks := func(n int) {
+		t.Helper()
+		for i := 0; i < 60; i++ {
+			mu.Lock()
+			got := offlineHooks
+			mu.Unlock()
+			if got >= n {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatalf("fewer than %d endpoint.offline webhooks", n)
+	}
+
+	// (e) defaults: never
+	var h map[string]any
+	if code := call("GET", "/api/v1/endpoint-health", "", nil, &h); code != 200 || h["offline_alert_interval_minutes"] != float64(0) {
+		t.Fatalf("get %d %v", code, h)
+	}
+
+	// (a) default settings: webhook and audit, no email
+	sleep()
+	waitHooks(1)
+	if a := offlineAudits(); len(a) != 1 || emailChannel(a[0]) != "off: offline alerts set to never" {
+		t.Fatalf("audit %+v", a)
+	}
+	// email_offline alone (what older consoles send) doesn't turn offline emails on
+	if code := call("PUT", "/api/v1/endpoint-health", "", map[string]any{"email_offline": true}, &h); code != 200 || h["offline_alert_interval_minutes"] != float64(0) {
+		t.Fatalf("put email_offline %d %v", code, h)
+	}
+	wake()
+	sleep()
+	waitHooks(2)
+	if a := offlineAudits(); len(a) != 2 || emailChannel(a[0]) != "off: offline alerts set to never" {
+		t.Fatalf("audit %+v", a)
+	}
+	if n := emails(); n != 0 {
+		t.Fatalf("%d offline emails with the default settings", n)
+	}
+
+	// (e) validation
+	for _, bad := range []any{-1, 1, 30, 59, 10081, "60"} {
+		if code := call("PUT", "/api/v1/endpoint-health", "", map[string]any{"offline_alert_interval_minutes": bad}, nil); code != 400 {
+			t.Fatalf("interval %v accepted: %d", bad, code)
+		}
+	}
+	if code := call("PUT", "/api/v1/endpoint-health", "", map[string]any{"offline_alert_interval_minutes": 60, "email_offline": true}, &h); code != 200 ||
+		h["offline_alert_interval_minutes"] != float64(60) || h["email_offline"] != true {
+		t.Fatalf("put %d %v", code, h)
+	}
+	if a, _ := st.ListAudit(ctx, tenant, 10, "endpoint_health.update", ""); len(a) != 2 {
+		t.Fatalf("settings audit %+v", a)
+	} else {
+		var d struct{ Before, After map[string]any }
+		_ = json.Unmarshal(a[0].Details, &d)
+		if d.Before["offline_alert_interval_minutes"] != float64(0) || d.After["offline_alert_interval_minutes"] != float64(60) {
+			t.Fatalf("settings audit %s", a[0].Details)
+		}
+	}
+
+	// (b) first offline with an interval: one email
+	wake()
+	sleep()
+	if n := emails(); n != 1 {
+		t.Fatalf("%d emails after the first offline, want 1", n)
+	}
+	if a := offlineAudits(); emailChannel(a[0]) != "sent" {
+		t.Fatalf("audit %s", a[0].Details)
+	}
+	alertedAt := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := db.QueryRow(ctx, `select offline_alerted_at from cp.endpoints where id = $1`, mac.EndpointID).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	if alertedAt() == nil {
+		t.Fatal("offline_alerted_at not set")
+	}
+
+	// (c) back online and offline again within the hour: webhook + audit, no email
+	wake()
+	if alertedAt() == nil {
+		t.Fatal("coming back online cleared offline_alerted_at")
+	}
+	sleep()
+	waitHooks(4)
+	if n := emails(); n != 1 {
+		t.Fatalf("%d emails after offline again within the interval, want 1", n)
+	}
+	if a := offlineAudits(); emailChannel(a[0]) != "suppressed: alerted within the last hour" {
+		t.Fatalf("audit %s", a[0].Details)
+	}
+
+	// (d) after the interval: a second email
+	wake()
+	if _, err := db.Exec(ctx, `update cp.endpoints set offline_alerted_at = now() - interval '61 minutes' where id = $1`, mac.EndpointID); err != nil {
+		t.Fatal(err)
+	}
+	sleep()
+	if n := emails(); n != 2 {
+		t.Fatalf("%d emails after the interval passed, want 2", n)
+	}
+	if a := offlineAudits(); len(a) != 5 || emailChannel(a[0]) != "sent" {
+		t.Fatalf("audit %+v", a)
+	}
+
+	// the claim is exactly-once across concurrent callers
+	if _, err := db.Exec(ctx, `update cp.endpoints set offline_alerted_at = null where id = $1`, mac.EndpointID); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	won := 0
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := st.ClaimOfflineAlert(ctx, mac.EndpointID, time.Hour)
+			if err != nil {
+				t.Error(err)
+			}
+			if ok {
+				mu.Lock()
+				won++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if won != 1 {
+		t.Fatalf("%d concurrent claims won, want 1", won)
 	}
 }

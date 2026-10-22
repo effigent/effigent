@@ -205,6 +205,11 @@ function hookProblemText(h: HookRow): string {
 
 const HOOK_BADGE: Record<HookRow['state'], string> = { installed: 'b-green', missing: 'b-red', modified: 'b-red', unreadable: 'b-gold' };
 
+/** Offline alert email intervals in minutes (0 = never, the default). */
+const OFFLINE_EVERY: [number, string][] = [
+  [0, 'Never'], [60, 'Every hour'], [360, 'Every 6 hours'], [720, 'Every 12 hours'], [1440, 'Once a day'], [10080, 'Once a week'],
+];
+
 /** Offline threshold and who is emailed (GET|PUT /endpoint-health). */
 function HealthSettings() {
   const { api, canWrite } = useLive();
@@ -216,7 +221,7 @@ function HealthSettings() {
   useEffect(() => {
     api.get<ApiEndpointHealth>('/endpoint-health').then((v) => { setH(v); setMins(String(v.offline_after_minutes)); }).catch((e) => setErr(apiErrorText(e)));
   }, [api]);
-  const save = async (patch: Partial<Pick<ApiEndpointHealth, 'offline_after_minutes' | 'email_offline' | 'email_hooks'>>) => {
+  const save = async (patch: Partial<Pick<ApiEndpointHealth, 'offline_after_minutes' | 'email_offline' | 'offline_alert_interval_minutes' | 'email_hooks'>>) => {
     setSaving(true); setErr(null);
     try {
       const v = await api.send<ApiEndpointHealth>('PUT', '/endpoint-health', patch);
@@ -228,6 +233,8 @@ function HealthSettings() {
       setSaving(false);
     }
   };
+  // offline emails go out only with an interval and email_offline on
+  const offlineEvery = h && h.email_offline ? h.offline_alert_interval_minutes : 0;
   return (
     <Card>
       <CardHead title="Machine health alerts" sub="When a machine stops checking in, or an agent's hook is removed or turned off." />
@@ -247,9 +254,14 @@ function HealthSettings() {
             Detected within {h.offline_after_minutes} min + up to {Math.max(1, Math.round(h.tick_seconds / 60))} min. A laptop that sleeps or loses its network looks the same as a stopped daemon,
             unless effigentd reported stopping (shown as “stopped”). Minimum {h.min_minutes} min.
           </div>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input type="checkbox" checked={h.email_offline} disabled={!canWrite || saving} onChange={(e) => save({ email_offline: e.target.checked })} />
-            Email when a machine goes offline
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            Offline alert emails
+            <select className="select" style={{ width: 160 }} value={offlineEvery} disabled={!canWrite || saving} aria-label="Offline alert emails"
+              onChange={(e) => { const v = Number(e.target.value); save(v > 0 ? { offline_alert_interval_minutes: v, email_offline: true } : { offline_alert_interval_minutes: 0 }); }}>
+              {OFFLINE_EVERY.some(([v]) => v === offlineEvery) ? null : <option value={offlineEvery}>Every {offlineEvery} minutes</option>}
+              {OFFLINE_EVERY.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+            </select>
+            <span className="muted">at most once per machine, however often it sleeps and wakes</span>
           </label>
           <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input type="checkbox" checked={h.email_hooks} disabled={!canWrite || saving} onChange={(e) => save({ email_hooks: e.target.checked })} />

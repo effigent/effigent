@@ -99,23 +99,41 @@ func (s *Store) queryEndpoints(ctx context.Context, sql string, args ...any) ([]
 	return out, rows.Err()
 }
 
+// ClaimOfflineAlert records that an offline email about the endpoint goes out
+// now, unless one went out less than interval ago (migration 021). The check
+// and the mark are one update, so two instances can't both send. The mark
+// survives the machine coming back online: a laptop that wakes and sleeps
+// again within the interval is not emailed about twice.
+func (s *Store) ClaimOfflineAlert(ctx context.Context, id string, interval time.Duration) (bool, error) {
+	err := s.db.QueryRow(ctx, `update cp.endpoints set offline_alerted_at = now()
+		where id = $1 and (offline_alerted_at is null or offline_alerted_at <= now() - make_interval(secs => $2))
+		returning id`, id, int(interval.Seconds())).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // EndpointHealthSettings is a tenant's offline threshold and email choices.
 type EndpointHealthSettings struct {
-	OfflineAfterSeconds int       `json:"offline_after_seconds"`
-	EmailOffline        bool      `json:"email_offline"`
-	EmailHooks          bool      `json:"email_hooks"`
-	UpdatedBy           string    `json:"updated_by,omitempty"`
-	UpdatedAt           time.Time `json:"updated_at,omitzero"`
-	Saved               bool      `json:"saved"` // false: the defaults, nothing stored yet
+	OfflineAfterSeconds int  `json:"offline_after_seconds"`
+	EmailOffline        bool `json:"email_offline"`
+	// OfflineAlertIntervalMinutes: 0 = never email about a machine going
+	// offline (the default); N = at most once per machine per N minutes.
+	OfflineAlertIntervalMinutes int       `json:"offline_alert_interval_minutes"`
+	EmailHooks                  bool      `json:"email_hooks"`
+	UpdatedBy                   string    `json:"updated_by,omitempty"`
+	UpdatedAt                   time.Time `json:"updated_at,omitzero"`
+	Saved                       bool      `json:"saved"` // false: the defaults, nothing stored yet
 }
 
 // GetEndpointHealthSettings returns the tenant's settings, or the defaults
-// (defaultAfter, both emails on) when it has none.
+// (defaultAfter, hook emails on, offline emails never) when it has none.
 func (s *Store) GetEndpointHealthSettings(ctx context.Context, tenant string, defaultAfter time.Duration) (EndpointHealthSettings, error) {
 	h := EndpointHealthSettings{Saved: true}
-	err := s.db.QueryRow(ctx, `select offline_after_seconds, email_offline, email_hooks, updated_by, updated_at
+	err := s.db.QueryRow(ctx, `select offline_after_seconds, email_offline, offline_alert_interval_minutes, email_hooks, updated_by, updated_at
 		from cp.endpoint_health_settings where tenant_ref = $1`, tenant).
-		Scan(&h.OfflineAfterSeconds, &h.EmailOffline, &h.EmailHooks, &h.UpdatedBy, &h.UpdatedAt)
+		Scan(&h.OfflineAfterSeconds, &h.EmailOffline, &h.OfflineAlertIntervalMinutes, &h.EmailHooks, &h.UpdatedBy, &h.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return EndpointHealthSettings{OfflineAfterSeconds: int(defaultAfter.Seconds()), EmailOffline: true, EmailHooks: true}, nil
 	}
@@ -123,9 +141,10 @@ func (s *Store) GetEndpointHealthSettings(ctx context.Context, tenant string, de
 }
 
 func (s *Store) PutEndpointHealthSettings(ctx context.Context, tenant string, h EndpointHealthSettings, by string) error {
-	_, err := s.db.Exec(ctx, `insert into cp.endpoint_health_settings (tenant_ref, offline_after_seconds, email_offline, email_hooks, updated_by, updated_at)
-		values ($1, $2, $3, $4, $5, now())
-		on conflict (tenant_ref) do update set offline_after_seconds = $2, email_offline = $3, email_hooks = $4, updated_by = $5, updated_at = now()`,
-		tenant, h.OfflineAfterSeconds, h.EmailOffline, h.EmailHooks, by)
+	_, err := s.db.Exec(ctx, `insert into cp.endpoint_health_settings (tenant_ref, offline_after_seconds, email_offline, email_hooks, updated_by, updated_at, offline_alert_interval_minutes)
+		values ($1, $2, $3, $4, $5, now(), $6)
+		on conflict (tenant_ref) do update set offline_after_seconds = $2, email_offline = $3, email_hooks = $4, updated_by = $5, updated_at = now(),
+			offline_alert_interval_minutes = $6`,
+		tenant, h.OfflineAfterSeconds, h.EmailOffline, h.EmailHooks, by, h.OfflineAlertIntervalMinutes)
 	return err
 }

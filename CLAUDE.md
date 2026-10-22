@@ -354,15 +354,22 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   longer than the tenant's threshold (default `EFFIGENT_ENDPOINT_OFFLINE_AFTER`, 5m; tenant 2 min …
   7 days); the first tick after a newer heartbeat/ingest clears it (`MarkEndpointsOnline`). Detection time = threshold +
   up to one tick. Offline → webhook `endpoint.offline` (`reason: stopped` when a `daemon_stop` came
-  within 30s of the last heartbeat, else `silent`; `stop`, `last_seen`, `review_url`), email (if
-  `email_offline`), audit `endpoint.offline`; back → webhook `endpoint.online` + audit only (laptops
-  sleep: no email for coming back).
+  within 30s of the last heartbeat, else `silent`; `stop`, `last_seen`, `review_url`), audit
+  `endpoint.offline`; back → webhook `endpoint.online` + audit only (laptops sleep: no email for
+  coming back). Offline **email** (migration 021): only when the tenant's
+  `offline_alert_interval_minutes` > 0 (default 0 = never, also for rows saved before 021; 60…10080)
+  and `email_offline`; at most once per machine per interval via `cp.endpoints.offline_alerted_at`
+  (claimed with one `update … where offline_alerted_at is null or <= now() - interval returning`,
+  never cleared on coming back, so a laptop that wakes and sleeps doesn't re-alert). The audit's
+  `channels.email` says why none went out (`off: offline alerts set to never`, `suppressed: …`).
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
-  `email_hooks`; people only; audited `endpoint_health.update` before/after). `GET /api/v1/endpoints`
+  `offline_alert_interval_minutes`, `email_hooks`; people only; audited `endpoint_health.update`
+  before/after). `GET /api/v1/endpoints`
   carries the new columns. Console: Machines (`views/Enforcement.tsx`) shows each machine's hooks,
   a warning per problem, offline (detector) and "stopped · SIGTERM" vs "went silent", and the
   Machine health alerts card; Demo Mode data in `lib/fixture-api.ts` (`demoHealth`).
 - Deploy order: control plane (migration 014) → console → effigentd release (endpoints reinstall).
+  Offline alert interval: control plane (migration 021) → console; effigentd unchanged.
 
 ## 2f. Actions (what a tool call does)
 
@@ -839,7 +846,7 @@ npm run -w @effigent/site build                     # site
   - Not live-tested: Codex (both sign-ins, the ChatGPT-backend route, the zstd bodies, the 426 fallback)
     and Gemini. Only Claude Code with a claude.ai login was run through it.
   - No `model_call` token sums in the console or Pricing Leaks yet: the events carry them, Pricing Leaks
-    uses only the model. Migration 021 is reserved for a rollup.
+    uses only the model. Migration 022 is reserved for a rollup (021 is the offline alert interval, 2e).
   - Fail-closed: a stopped daemon cuts pointed agents off from their model.
   - Rollout: effigentd builds without `models:` refuse a policy that has it (parse error → they stay on
     their current version). Upgrade endpoints, then run `install-gateway`, then publish `models:` /
