@@ -97,8 +97,9 @@ The work shipped in three rounds:
   - The database refuses deletes for a held tenant (trigger).
   - Retention skips held tenants.
   - Every archived object under the tenant gets an S3 Object Lock legal hold.
-- **Still to do:** run `deploy/aws/set-event-archive.sh` in CloudShell; it adds the S3
-  legal-hold permissions.
+- **Done 2026-10-22:** the control plane role got the S3 legal-hold and version permissions
+  (the `put-role-policy` step of `deploy/aws/set-event-archive.sh`, run in CloudShell; the bucket
+  has Object Lock and versioning on).
 
 ---
 
@@ -297,7 +298,7 @@ The work shipped in three rounds:
 - **The GitHub repo `effigent/effigent` is public** and contains a document marked "Confidential,
   under NDA" (`docs/security/`). Decide before the next push. Everything in `docs/`, including this
   file, becomes public on push.
-- Run `deploy/aws/set-event-archive.sh` in CloudShell (legal-hold permissions, from round 1).
+- Upgrade `grok-bot-vm-303323554` to v0.8.0 when it's back online (this Mac is on v0.8.0).
 - Check that the `effigentd-v0.7.0` release workflow finished.
 - **Repository hygiene:**
   - `main` has no branch protection.
