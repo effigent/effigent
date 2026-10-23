@@ -407,7 +407,7 @@ func TestTwoPersonApproval(t *testing.T) {
 	// (in no group, not in the directory) can't be told apart from them.
 	r3 := ask(3, "Bash: git push origin dev")
 	if code, out := console("user_ghost", "admin", r3.ID, map[string]any{"decision": "approve"}); code != 403 || out.Code != refuseUnverified ||
-		!strings.Contains(out.Error, "only by email") {
+		!strings.Contains(out.Error, "by email and has no email for you") {
 		t.Fatalf("admin without a known email: %d %+v", code, out)
 	}
 	s.Directory = userEmailDirectory{"user_boss": {"Boss@Acme.io"}}

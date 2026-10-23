@@ -83,7 +83,7 @@ func voteRefusal(a store.Approval, requester store.Requester, who approver, appr
 			by, fix = "console account", "add your email to an approver group (Team & Approvers) so Effigent knows your console account, "+
 				"or set the machine's owner as an email (Machines)"
 		}
-		return refuseUnverified, "Effigent knows the requester (" + cmpOr(requester.Label, requestedFrom(a)) + ") only by " + by +
+		return refuseUnverified, "Effigent knows the requester (" + cmpOr(requester.Label, requestedFrom(a)) + ") by " + by +
 			" and has no " + by + " for you, so it can't make sure you aren't approving your own request: " + fix + ", then approve again"
 	case a.RequireTicket && ticket == "":
 		return refuseTicket, "approving this request needs a ticket reference (e.g. SEC-123 or a link)"
@@ -211,6 +211,22 @@ func (s *Server) resolveRequester(ctx context.Context, a store.Approval) (store.
 		}
 	}
 	return q, nil
+}
+
+// requesterNow is the requester to show whether someone may approve: the one
+// recorded when the request was filed, re-resolved while that was nobody, so
+// an owner or People mapping added since makes a waiting request approvable
+// (castVote re-resolves the same way).
+func (s *Server) requesterNow(ctx context.Context, a store.Approval) store.Requester {
+	q := a.Requester
+	if a.State == store.ApprovalPending && a.ExcludeRequester && q.Unknown() {
+		if now, err := s.resolveRequester(ctx, a); err != nil {
+			s.Logf("approval %s: requester: %v", a.ID, err)
+		} else {
+			q = q.Merge(now)
+		}
+	}
+	return q
 }
 
 // rulesFor is how requests on a route (nil = the default) are decided.

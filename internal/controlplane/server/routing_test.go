@@ -362,4 +362,49 @@ func TestApprovalRouting(t *testing.T) {
 	if a, _ := st.GetApproval(ctx, tenant, r3.ID); a.State != "denied" || a.DecidedByName != "Dev One <dev@acme.io> (via email)" {
 		t.Fatalf("member's link: %s by %q", a.State, a.DecidedByName)
 	}
+
+	// a machine nobody owns: its request can't be approved (the requester is kept
+	// out and unknown) until an owner is set; then the same waiting request can be
+	// approved without filing it again
+	call("POST", "/api/v1/enrollment-tokens", "", map[string]any{}, &tok)
+	var box EnrollResponse
+	call("POST", "/ep/v1/enroll", "-", map[string]any{"token": tok.Token.Token, "info": map[string]string{"hostname": "grok-bot-box"}}, &box)
+	var r4 endpointApprovalResp
+	call("POST", "/ep/v1/approvals", box.Secret, map[string]any{"fingerprint": "fp1:" + strings.Repeat("0f", 32), "agent": "grok-bot",
+		"tool": "Bash", "summary": "Bash: aws s3 ls", "rule": "command_approve", "reason": "needs approval", "os_user": "grok"}, &r4)
+	devView := func() (canApprove bool, refusal string) {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/v1/approvals?state=pending", nil)
+		rec := httptest.NewRecorder()
+		s.listApprovals(rec, req, Principal{UserID: "user_dev", Tenant: tenant, Role: "member", Via: "clerk"})
+		var vs []struct {
+			ID             string `json:"id"`
+			CanApprove     bool   `json:"can_approve"`
+			ApproveRefusal string `json:"approve_refusal"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &vs)
+		for _, v := range vs {
+			if v.ID == r4.ID {
+				return v.CanApprove, v.ApproveRefusal
+			}
+		}
+		t.Fatalf("request %s not listed: %s", r4.ID, rec.Body.String())
+		return false, ""
+	}
+	if ok, why := devView(); ok || why != refuseUnknown {
+		t.Fatalf("unknown requester: can_approve %v (%s)", ok, why)
+	}
+	if code, body := consoleDecision(s, tenant, "user_dev", "member", r4.ID, map[string]any{"decision": "approve"}); code != 403 ||
+		!strings.Contains(string(body), refuseUnknown) || !strings.Contains(string(body), "OS user grok on grok-bot-box") {
+		t.Fatalf("approve with an unknown requester: %d %s", code, body)
+	}
+	if code := call("PATCH", "/api/v1/endpoints/"+box.EndpointID, "", map[string]any{"owner": "user_dana"}, nil); code != 200 {
+		t.Fatalf("owner: %d", code)
+	}
+	if ok, why := devView(); !ok {
+		t.Fatalf("after the owner was set: can_approve false (%s)", why)
+	}
+	if code, body := consoleDecision(s, tenant, "user_dev", "member", r4.ID, map[string]any{"decision": "approve"}); code != 200 {
+		t.Fatalf("approve after the owner was set: %d %s", code, body)
+	}
 }

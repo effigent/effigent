@@ -885,6 +885,7 @@ go test ./internal/controlplane/server/ -args -effigent.db=postgres://effigent:e
 # console against a local control plane (dev only): add to the dev command
 #   NEXT_PUBLIC_EFFIGENT_API_URL=http://127.0.0.1:8080 NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN=devadmin NEXT_PUBLIC_EFFIGENT_DEV_TENANT=org:dev
 #   (control plane: EFFIGENT_ADMIN_TENANTS=org:dev EFFIGENT_CONSOLE_ORIGIN=http://localhost:3000)
+#   the admin token isn't a person: this console can deny approvals but not approve them or decide policy proposals
 npm run -w @effigent/dashboard dev                  # console (with the dev bypass vars)
 npm run -w @effigent/site build                     # site
 ```
