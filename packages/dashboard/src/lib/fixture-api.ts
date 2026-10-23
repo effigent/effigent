@@ -9,7 +9,7 @@ import { ENDPOINTS, EVENTS } from '@/data.ts';
 import { createPricingLeaksFixture } from './pricing-leaks-fixture.ts';
 import { createPeopleFixture } from './people-fixture.ts';
 import { createInventoryFixture } from './inventory-fixture.ts';
-import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAuditEntry, type ApiBreakGlassCode, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
+import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAction, type ApiAuditEntry, type ApiBreakGlassCode, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
 
 /** Sample hook reports and offline state: emma-mba's Claude Code hook was removed, a user turned
  *  Gemini CLI's hook off on alex-mbp, noa-mbp was stopped through launchd, ci-runner-03 went
@@ -64,6 +64,14 @@ agents:
   - name: codex
     binary_names: [codex]
 `;
+
+/** What effigentd's hooks would read from a demo command (cloud/DB targets, as in hooks/cloud.go, sql.go). */
+function demoActions(target: string | undefined): ApiAction[] | undefined {
+  if (target?.startsWith('kubectl delete')) {
+    return [{ kind: 'cloud_destroy', target: 'kubectl delete ns', attrs: { kube_context: 'arn:aws:eks:us-east-1:412398765012:cluster/prod-payments', kube_namespace: 'payments-canary' }, envs: ['prod'] }];
+  }
+  return undefined;
+}
 
 const AGO_MIN: Record<string, number> = {};
 function minutesAgo(label: string): number {
@@ -134,7 +142,7 @@ export function createFixtureApi(): Api {
   const events: ApiEvent[] = EVENTS.filter((e) => e.type !== 'approval' && e.endpoint && e.agentType).map((e, i) => ({
     id: 1000 - i, endpoint_id: epId.get(e.endpoint!) ?? endpoints[0].id, time: iso(minutesAgo(e.ago)), type: e.type,
     severity: e.severity, agent: e.agentType!,
-    body: { type: e.type, severity: e.severity, agent: e.agentType!, target: e.target, rule: e.rule, via: e.via, mode: e.mode },
+    body: { type: e.type, severity: e.severity, agent: e.agentType!, target: e.target, rule: e.rule, via: e.via, mode: e.mode, actions: demoActions(e.target) },
   }));
   const audit: ApiAuditEntry[] = history.slice().reverse().map((h, i) => ({
     seq: i + 1, at: h.created_at, actor: h.created_by, actor_via: 'clerk', actor_role: 'admin', action: 'policy.publish', target: `v${h.version}`,

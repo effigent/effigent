@@ -2,7 +2,7 @@
  * Control-plane JSON → the console's view types. Kept pure (no React) so the
  * mapping rules — status thresholds, outcome per event type — live in one place.
  */
-import type { ApiEndpoint, ApiEvent, ApiToolOutcome } from './api.ts';
+import type { ApiEndpoint, ApiEvent, ApiEventBody, ApiToolOutcome } from './api.ts';
 import { classify, launchedAs, type Classified } from './live-graph.ts';
 import type { ConsoleEvent, EventType, Outcome, Severity } from '@/types.ts';
 
@@ -166,6 +166,28 @@ function toolSummary(c: Classified): string {
   return c.full;
 }
 
+/** The action attrs that say where a call pointed (effigentd hooks/cloud.go, sql.go), in display order. */
+export const IDENTITY_ATTRS: { key: string; label: string }[] = [
+  { key: 'aws_profile', label: 'AWS profile' }, { key: 'aws_account', label: 'AWS account' },
+  { key: 'kube_context', label: 'kube context' }, { key: 'gcloud_project', label: 'gcloud project' },
+  { key: 'azure_subscription', label: 'Azure subscription' }, { key: 'terraform_workspace', label: 'Terraform workspace' },
+  { key: 'pulumi_stack', label: 'Pulumi stack' }, { key: 'db_host', label: 'DB host' },
+];
+
+/** The identity attrs of an event's actions, merged (distinct values joined), and their environments. */
+export function identityOf(b: ApiEventBody): { identity: { key: string; label: string; value: string }[]; envs: string[] } {
+  const acts = b.actions ?? [];
+  const identity = IDENTITY_ATTRS.flatMap(({ key, label }) => {
+    const vals = [...new Set(acts.map((a) => {
+      const v = a.attrs?.[key] ?? '';
+      const name = key === 'azure_subscription' ? a.attrs?.azure_subscription_name : '';
+      return v && name ? `${name} (${v})` : v;
+    }).filter(Boolean))];
+    return vals.length ? [{ key, label, value: vals.join(', ') }] : [];
+  });
+  return { identity, envs: [...new Set(acts.flatMap((a) => a.envs ?? []))] };
+}
+
 export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): ConsoleEvent {
   const b = e.body ?? {};
   const at = ms(e.time) ?? 0;
@@ -196,6 +218,7 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
     default: summary = b.message || e.type;
   }
   const severity: Severity = e.severity === 'high' || e.severity === 'medium' ? e.severity : 'info';
+  const { identity, envs } = identityOf(b);
   return {
     id: `ev-${e.id}`, at, time: clock(at), ago: '',
     type, severity, outcome: OUTCOME[e.type] ?? 'system', title: mcp && e.type === 'exec' ? 'Called an MCP tool' : TITLE[e.type] ?? e.type,
@@ -205,6 +228,7 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
     rule: b.rule || undefined, via: b.via || undefined, mode: (b.mode as ConsoleEvent['mode']) || undefined,
     risk: c?.kind === 'command' ? c.risk : undefined,
     riskRule: c?.kind === 'command' ? c.rule : undefined,
+    identity: identity.length ? identity : undefined, targetEnvs: envs.length ? envs : undefined,
   };
 }
 

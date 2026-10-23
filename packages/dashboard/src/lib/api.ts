@@ -150,6 +150,20 @@ export interface ApiEventBody {
   tool_use_id?: string;
   /** tool_result only: how the call ended (never its output). */
   outcome?: ApiToolOutcome;
+  /** Hook events: what the call does (git, SQL, cloud, packages…), matched by policy or not. */
+  actions?: ApiAction[];
+}
+
+/** event.Action — read from a hook call by effigentd (hooks.classify). */
+export interface ApiAction {
+  kind: string; // force_push | destructive_sql | cloud_destroy | access | …
+  target?: string;
+  /** Where it points: aws_profile, aws_account, kube_context, gcloud_project, azure_subscription, terraform_workspace, pulumi_stack, db_host, … */
+  attrs?: Record<string, string>;
+  /** Policy environments its target belongs to (prod). */
+  envs?: string[];
+  /** The script it was found in. */
+  in?: string;
 }
 
 /** event.Outcome — from the agent's post-tool hook. */

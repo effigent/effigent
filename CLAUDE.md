@@ -413,6 +413,10 @@ or not; `engine.scrub` redacts their targets.
   aws_accounts, kube_contexts, gcloud_projects, azure_subscriptions, terraform_workspaces,
   pulumi_stacks, hosts, mcp_servers, match_unknown}}`; an entry `kind@prod` matches only actions
   whose target is in it. `access` covers every action on a target and must name an environment.
+  Console: Audit → Agent events shows the actions' environments and identity attrs (AWS profile /
+  account, kube context, gcloud project, Azure subscription, Terraform workspace, Pulumi stack, DB host;
+  `IDENTITY_ATTRS` in `lib/live-map.ts`) under the target; the CSV export has a column per attr plus
+  `environments`.
 - Lists (per rule, merged like the others, compile `overrides`/`sameRule` carry them):
   `actions_deny` / `actions_approve` (kind or kind@env; `sql_write` ⊇ `destructive_sql`,
   `cloud_change` ⊇ `cloud_destroy`), `command_deny` (like `command_approve`; `*` anywhere in
