@@ -37,6 +37,19 @@ export interface EndpointRow {
   /** A cloud environment (sessions in a vendor's cloud) rather than a machine. */
   cloud: boolean;
   vendor: string;
+  /** Linux kernel layer: enforcing, observe-only (no BPF LSM / Tetragon down), or not reported
+   *  by this effigentd; null where there is no kernel layer (hooks sensor, macOS, cloud). */
+  kernel: KernelState | null;
+}
+
+export type KernelState = 'enforcing' | 'no_bpf_lsm' | 'tetragon_down' | 'unreported';
+
+export function kernelState(e: ApiEndpoint): KernelState | null {
+  const k = e.kernel;
+  if (e.kind === 'cloud' || e.os.toLowerCase() !== 'linux' || k?.sensor === 'hooks') return null;
+  if (!k) return 'unreported';
+  if (!k.tetragon_connected) return 'tetragon_down';
+  return k.bpf_lsm ? 'enforcing' : 'no_bpf_lsm';
 }
 
 export interface HookRow {
@@ -115,7 +128,7 @@ export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
     platform: os === 'linux' ? 'linux' : os === 'darwin' ? 'macos' : 'other',
     version: e.version, policyVersion: e.policy_version, status, lastSeenAt: seen, enrolledAt: ms(e.enrolled_at) ?? 0, revoked: e.revoked,
     hooks, hookProblems: e.revoked ? [] : problems, hooksReportedAt: ms(e.hooks_reported_at), offlineAt, stopped,
-    cloud, vendor: e.vendor ?? '',
+    cloud, vendor: e.vendor ?? '', kernel: e.revoked ? null : kernelState(e),
   };
 }
 

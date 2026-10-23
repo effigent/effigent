@@ -7,7 +7,7 @@ import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiEndpointHealth, type ApiEnrollment } from '@/lib/api.ts';
-import { ago, dateTime, type EndpointRow, type HookRow } from '@/lib/live-map.ts';
+import { ago, dateTime, type EndpointRow, type HookRow, type KernelState } from '@/lib/live-map.ts';
 import type { AgentType } from '@/types.ts';
 import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageGuide, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
 import { CLOUD_VENDORS, CloudEnvironments, type CloudVendor } from '@/components/CloudEnvironments.tsx';
@@ -206,6 +206,15 @@ function hookProblemText(h: HookRow): string {
 
 const HOOK_BADGE: Record<HookRow['state'], string> = { installed: 'b-green', missing: 'b-red', modified: 'b-red', unreadable: 'b-gold' };
 
+const KERNEL_LABEL: Record<Exclude<KernelState, 'enforcing'>, string> = {
+  no_bpf_lsm: 'observe-only: BPF LSM off', tetragon_down: 'Tetragon disconnected', unreported: 'kernel state not reported',
+};
+const KERNEL_TEXT: Record<Exclude<KernelState, 'enforcing'>, string> = {
+  no_bpf_lsm: "BPF LSM isn't in this kernel's active LSM list, so the kernel layer only observes: blocks become alerts. Agent hooks still decide. Add bpf to the lsm= boot parameter and reboot.",
+  tetragon_down: "effigentd has lost its connection to Tetragon: agents that start now get no kernel policy, and policy changes don't reach the kernel until it reconnects (if Tetragon itself stopped, nothing is enforced by the kernel). Agent hooks still decide. effigentd reconnects on its own; check that Tetragon is running.",
+  unreported: "This effigentd doesn't report whether the kernel layer can enforce (BPF LSM, Tetragon connection): upgrade it to see it here.",
+};
+
 /** Offline alert email intervals in minutes (0 = never, the default). */
 const OFFLINE_EVERY: [number, string][] = [
   [0, 'Never'], [60, 'Every hour'], [360, 'Every 6 hours'], [720, 'Every 12 hours'], [1440, 'Once a day'], [10080, 'Once a week'],
@@ -297,6 +306,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
   const revoked = endpointRows.filter((e) => e.revoked);
   const online = eps.filter((e) => e.status === 'online');
   const kernel = eps.filter((e) => e.platform === 'linux');
+  const kernelOff = kernel.filter((e) => e.kernel === 'no_bpf_lsm' || e.kernel === 'tetragon_down');
   const observe = eps.filter((e) => e.platform !== 'linux');
   const current = eps.filter((e) => latestPolicy > 0 && e.policyVersion === latestPolicy).length;
   const newest = eps.reduce((m, e) => (cmpVersion(e.version, m) > 0 ? e.version : m), '0');
@@ -341,7 +351,12 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
               <span><span className="cell-main mono-sm" style={{ color: 'var(--txt)' }}>{e.hostname}</span><span className="cell-sub">{e.cloud ? `cloud environment · ${CLOUD_VENDORS[e.vendor as CloudVendor] ?? e.vendor}` : `${e.os} · ${e.arch}`}</span></span>
             </span>
           </td>
-          <td className="muted">{e.cloud ? 'Remote hooks' : e.platform === 'linux' ? 'Kernel (Tetragon)' : 'Agent hooks'}</td>
+          <td className="muted">
+            {e.cloud ? 'Remote hooks' : e.platform === 'linux' ? (e.kernel === null ? 'Agent hooks' : 'Kernel (Tetragon)') : 'Agent hooks'}
+            {e.kernel !== null && e.kernel !== 'enforcing' && (
+              <span className="cell-sub" style={{ color: e.kernel === 'unreported' ? undefined : 'var(--gold)' }} title={KERNEL_TEXT[e.kernel]}>{KERNEL_LABEL[e.kernel]}</span>
+            )}
+          </td>
           <td className="mono-sm" style={{ color: cmpVersion(e.version, newest) < 0 ? 'var(--gold)' : undefined }}>{e.version || '—'}</td>
           <td className="mono-sm" style={{ color: latestPolicy > 0 && e.policyVersion !== latestPolicy && !e.revoked ? 'var(--gold)' : undefined }}>
             {e.policyVersion > 0 ? `v${e.policyVersion}` : 'default'}
@@ -381,6 +396,12 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
                     {e.stopped ? `${stopText(e.stopped)}. ` : `No heartbeat since ${dateTime(e.lastSeenAt)} and no stop was reported (asleep, off the network, killed, or the machine is gone). `}
                     {e.offlineAt !== null && `Marked offline ${dateTime(e.offlineAt)}.`}
                   </span>
+                </div>
+              )}
+              {e.kernel !== null && e.kernel !== 'enforcing' && (
+                <div className={e.kernel === 'unreported' ? 'callout' : 'callout warn'} style={{ margin: '0 0 10px' }}>
+                  <Ic n="alert" size={16} />
+                  <span>{KERNEL_TEXT[e.kernel]}</span>
                 </div>
               )}
               {e.hooks.length > 0 ? (
@@ -432,7 +453,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
 
       <div className="grid-4">
         <Card className="mini-stat"><div className="k">Endpoints online</div><div className="v">{online.length}/{eps.length}</div><div className="s">{eps.length - online.length} need attention</div></Card>
-        <Card className="mini-stat"><div className="k">Kernel-enforced</div><div className="v">{kernel.length}</div><div className="s">Linux · Tetragon BPF LSM, pid-scoped</div></Card>
+        <Card className="mini-stat"><div className="k">Kernel-enforced</div><div className="v">{kernel.length - kernelOff.length}</div>
+          <div className="s">{kernelOff.length > 0 ? `+ ${kernelOff.length} observe-only (BPF LSM off or Tetragon disconnected)` : 'Linux · Tetragon BPF LSM, pid-scoped'}</div></Card>
         <Card className="mini-stat"><div className="k">Agent hooks</div><div className="v">{observe.length}</div><div className="s">macOS / Windows · Claude Code, Codex, Gemini CLI, Cursor checked before each action</div></Card>
         <Card className="mini-stat"><div className="k">On latest policy</div><div className="v">{current}/{eps.length}</div><div className="s">{latestPolicy > 0 ? `Published v${latestPolicy}` : 'Nothing published yet'}</div></Card>
       </div>

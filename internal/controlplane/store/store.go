@@ -194,6 +194,11 @@ type Endpoint struct {
 	// --remote`); Vendor names the cloud agent (claude-code-web, copilot, cursor…).
 	Kind   string `json:"kind"`
 	Vendor string `json:"vendor,omitempty"`
+	// Kernel (migration 023): the kernel layer effigentd last reported with
+	// its heartbeat ({sensor, bpf_lsm, tetragon_connected}); nil = a build that
+	// doesn't report it.
+	Kernel           json.RawMessage `json:"kernel"`
+	KernelReportedAt *time.Time      `json:"kernel_reported_at"`
 }
 
 // CreateCloudEnvironment registers a cloud environment: an endpoint every
@@ -207,12 +212,13 @@ func (s *Store) CreateCloudEnvironment(ctx context.Context, tenant, name, vendor
 }
 
 const endpointCols = `id, tenant_ref, hostname, os, arch, version, enrolled_at, last_seen, policy_version, revoked_at is not null, owner, teams,
-	hooks, hooks_reported_at, hooks_changed_at, offline_at, stopped_at, stop, kind, cloud_vendor`
+	hooks, hooks_reported_at, hooks_changed_at, offline_at, stopped_at, stop, kind, cloud_vendor, kernel, kernel_reported_at`
 
 func scanEndpoint(r pgx.Row) (Endpoint, error) {
 	var e Endpoint
 	err := r.Scan(&e.ID, &e.Tenant, &e.Hostname, &e.OS, &e.Arch, &e.Version, &e.EnrolledAt, &e.LastSeen, &e.PolicyVersion, &e.Revoked, &e.Owner, &e.Teams,
-		&e.Hooks, &e.HooksReportedAt, &e.HooksChangedAt, &e.OfflineAt, &e.StoppedAt, &e.Stop, &e.Kind, &e.Vendor)
+		&e.Hooks, &e.HooksReportedAt, &e.HooksChangedAt, &e.OfflineAt, &e.StoppedAt, &e.Stop, &e.Kind, &e.Vendor,
+		&e.Kernel, &e.KernelReportedAt)
 	return e, err
 }
 
@@ -230,6 +236,12 @@ func (s *Store) Heartbeat(ctx context.Context, id string, policyVersion int64, v
 	// version: the effigentd build now running (enrollment recorded the first one)
 	_, err := s.db.Exec(ctx, `update cp.endpoints set last_seen = now(), policy_version = $2,
 		version = case when $3 = '' then version else $3 end where id = $1`, id, policyVersion, version)
+	return err
+}
+
+// SetEndpointKernel records the kernel layer an endpoint reported.
+func (s *Store) SetEndpointKernel(ctx context.Context, id string, kernel json.RawMessage) error {
+	_, err := s.db.Exec(ctx, `update cp.endpoints set kernel = $2, kernel_reported_at = now() where id = $1`, id, kernel)
 	return err
 }
 

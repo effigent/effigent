@@ -107,11 +107,26 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endp
 		Version       string `json:"version"`
 		// effigentd's hook state, sent when it changed (older builds never send it)
 		Hooks json.RawMessage `json:"hooks"`
+		// the kernel layer, with every heartbeat (older builds never send it)
+		Kernel *struct {
+			Sensor            string `json:"sensor"`
+			BPFLSM            *bool  `json:"bpf_lsm"`
+			TetragonConnected *bool  `json:"tetragon_connected"`
+		} `json:"kernel"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req)
 	if err := s.Store.Heartbeat(r.Context(), ep.ID, req.PolicyVersion, clip(req.Version, 64)); err != nil {
 		s.fail(w, err)
 		return
+	}
+	if k := req.Kernel; k != nil {
+		// stored as reported, but only the known fields
+		k.Sensor = clip(k.Sensor, 32)
+		b, _ := json.Marshal(k)
+		if err := s.Store.SetEndpointKernel(r.Context(), ep.ID, b); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	if len(req.Hooks) > 0 {
 		if err := s.reportHooks(r.Context(), ep, req.Hooks); err != nil {

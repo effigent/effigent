@@ -44,6 +44,12 @@ func bpfLSMEnabled() bool {
 	return err == nil && strings.Contains(","+strings.TrimSpace(string(b))+",", ",bpf,")
 }
 
+// kernelStatus is what the heartbeat says about the kernel layer: without
+// BPF LSM, or with Tetragon unreachable, a Linux machine only observes.
+func kernelStatus(sensor string) map[string]any {
+	return map[string]any{"sensor": sensor, "bpf_lsm": bpfLSMEnabled(), "tetragon_connected": tgConnected.Load()}
+}
+
 func main() {
 	// Shim form (FR Q3): a symlink on `effigentd run`'s PATH, named for a gated
 	// binary, points here. When invoked under any name but "effigentd" we are a
@@ -192,6 +198,7 @@ func daemon() {
 			logger.Fatal(err)
 		}
 		defer tg.Close()
+		tg.OnDisconnect = func() { tgConnected.Store(false) }
 		enf = tg
 	}
 
@@ -257,6 +264,8 @@ func daemon() {
 	if cp != nil {
 		client = &cpclient.Client{
 			State: cp, Dir: *stateDir, Logf: logger.Printf, AgentVersion: version,
+			// whether the kernel layer can enforce, with every heartbeat
+			Kernel: func() any { return kernelStatus(*sensor) },
 			// each agent's hook, reported to the control plane when it changes
 			Hooks: func() any {
 				o := hookstate.Default(*sensor)

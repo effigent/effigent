@@ -377,6 +377,12 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   (claimed with one `update … where offline_alerted_at is null or <= now() - interval returning`,
   never cleared on coming back, so a laptop that wakes and sleeps doesn't re-alert). The audit's
   `channels.email` says why none went out (`off: offline alerts set to never`, `suppressed: …`).
+- **Kernel layer** (migration 023, `cp.endpoints.kernel` / `kernel_reported_at`): every heartbeat carries
+  `kernel: {sensor, bpf_lsm, tetragon_connected}` (`cpclient.Client.Kernel`, `kernelStatus` in `cmd/effigentd/main.go`;
+  `tetragon_connected` goes false when the event stream drops, `tetragon.Client.OnDisconnect`). Machines shows a Linux
+  machine as observe-only (BPF LSM off / Tetragon disconnected) or "not reported" (older build) and doesn't count it
+  as kernel-enforced. Not yet used by Inventory coverage, the posture report or alerts. A kernel policy reload keeps
+  each old document until its replacement loads (`engine.apply`), so a failed reload leaves the previous policy in place.
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
   `offline_alert_interval_minutes`, `email_hooks`, `email_tamper`; people only; audited `endpoint_health.update`
   before/after). `GET /api/v1/endpoints`
@@ -385,7 +391,8 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   Machine health alerts card; Demo Mode data in `lib/fixture-api.ts` (`demoHealth`).
 - Deploy order: control plane (migration 014) → console → effigentd release (endpoints reinstall).
   Offline alert interval: control plane (migration 021) → console; effigentd unchanged.
-  Tamper alerts: control plane (migration 022) → console → effigentd release. Builds without `shutdown`
+  Tamper alerts: control plane (migration 022) → console → effigentd release.
+  Kernel layer status: control plane (migration 023) → console → effigentd release (older builds show "not reported"). Builds without `shutdown`
   never trigger stop / unclean-restart alerts (treated as unknown); policy load alerts work with any build.
 
 ## 2f. Actions (what a tool call does)

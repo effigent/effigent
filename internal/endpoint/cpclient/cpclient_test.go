@@ -178,3 +178,36 @@ func TestHeartbeatCarriesHookReportOnChange(t *testing.T) {
 		t.Fatalf("checked %d times", checks)
 	}
 }
+
+// The kernel layer's state goes out with every heartbeat.
+func TestHeartbeatCarriesKernelStatus(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	var beats []map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ep/v1/policy":
+			w.WriteHeader(http.StatusNoContent)
+		case "/ep/v1/heartbeat":
+			var b map[string]json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			beats = append(beats, b)
+		}
+	}))
+	defer srv.Close()
+	connected := true
+	c := &Client{Dir: t.TempDir(), State: &State{Server: srv.URL, EndpointID: "ep-me", Tenant: "org:t", ServerPublicKey: sign.EncodePublic(pub)},
+		Apply: func(context.Context, []byte) error { return nil },
+		Kernel: func() any {
+			return map[string]any{"sensor": "tetragon", "bpf_lsm": false, "tetragon_connected": connected}
+		}}
+	for range 2 {
+		if err := c.SyncOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		connected = false
+	}
+	if len(beats) != 2 || string(beats[0]["kernel"]) != `{"bpf_lsm":false,"sensor":"tetragon","tetragon_connected":true}` ||
+		string(beats[1]["kernel"]) != `{"bpf_lsm":false,"sensor":"tetragon","tetragon_connected":false}` {
+		t.Fatalf("beats %v", beats)
+	}
+}

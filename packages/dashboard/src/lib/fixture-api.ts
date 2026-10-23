@@ -11,10 +11,19 @@ import { createPeopleFixture } from './people-fixture.ts';
 import { createInventoryFixture } from './inventory-fixture.ts';
 import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAction, type ApiAuditEntry, type ApiBreakGlassCode, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
 
+/** Sample machine health: hooks and offline state (demoHooks), and the Linux kernel layer:
+ *  raj-ws boots without bpf in lsm=, ops-runner-02 lost Tetragon, dan-dev-vm's effigentd
+ *  doesn't report it. */
+function demoHealth(id: string, platform: string, ver: string, iso: (minAgo: number) => string): Partial<ApiEndpoint> {
+  const hooks = demoHooks(id, platform, ver, iso);
+  if (platform !== 'linux' || id === 'ep-dan-vm') return hooks;
+  return { ...hooks, kernel: { sensor: 'tetragon', bpf_lsm: id !== 'ep-raj-ws', tetragon_connected: id !== 'ep-ops-02' }, kernel_reported_at: iso(0.1) };
+}
+
 /** Sample hook reports and offline state: emma-mba's Claude Code hook was removed, a user turned
  *  Gemini CLI's hook off on alex-mbp, noa-mbp was stopped through launchd, ci-runner-03 went
  *  silent, and mike-mbp runs an effigentd from before hook reporting. */
-function demoHealth(id: string, platform: string, ver: string, iso: (minAgo: number) => string): Partial<ApiEndpoint> {
+function demoHooks(id: string, platform: string, ver: string, iso: (minAgo: number) => string): Partial<ApiEndpoint> {
   const ok = (file: string, present = true) => ({ present, state: 'installed' as const, file });
   const mac = (over: Partial<ApiHookReport['agents']> = {}): ApiHookReport => ({
     sensor: 'hooks', expected: ['claude', 'codex', 'gemini', 'cursor'],

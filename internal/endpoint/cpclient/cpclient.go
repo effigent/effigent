@@ -181,6 +181,9 @@ type Client struct {
 	// acknowledged (every restart sends it once).
 	Hooks      func() any
 	HooksEvery time.Duration
+	// Kernel, when set, reports the kernel layer (sensor, bpf_lsm,
+	// tetragon_connected) with every heartbeat.
+	Kernel func() any
 
 	pub       ed25519.PublicKey
 	current   int64
@@ -313,6 +316,9 @@ func (c *Client) syncPolicy(ctx context.Context) error {
 
 func (c *Client) heartbeat(ctx context.Context) error {
 	body := map[string]any{"policy_version": c.current, "version": c.AgentVersion}
+	if c.Kernel != nil {
+		body["kernel"] = c.Kernel()
+	}
 	if c.Hooks != nil {
 		every := c.HooksEvery
 		if every <= 0 {
