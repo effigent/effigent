@@ -91,8 +91,10 @@ func main() {
 			return
 		case "install-gateway":
 			installGatewayCmd(os.Args[2:])
+			return
 		case "cloud-setup":
 			cloudSetupCmd(os.Args[2:])
+			return
 		case "break-glass":
 			breakGlassCmd(os.Args[2:])
 			return
