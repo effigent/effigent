@@ -85,6 +85,17 @@ func extra(s string) string {
 	keep(bearerRE, "bearer")
 	keep(mysqlPassRE, "flag")
 	keep(sqlPassRE, "sql-password")
+	return Masks(s)
+}
+
+// Masks applies only the workspace's own masks and the PII masks (Configure),
+// not the secret rules: for paths (working directories, binaries, transcript
+// files), where a customer or person name is what has to go, and which come
+// with every kernel event.
+func Masks(s string) string {
+	if s == "" {
+		return s
+	}
 	cmu.RLock()
 	rules := custom
 	cmu.RUnlock()

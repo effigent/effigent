@@ -465,7 +465,12 @@ or not; `engine.scrub` redacts their targets.
   `--password`-style flags, `mysql -p…`, `user:pass@` in URLs, bearer tokens, private key
   blocks; then policy `redact: {pii: bool, patterns: [{name, pattern}]}` (RE2, ≤50, ≤300 chars;
   pii = email, phone, card, IBAN), applied by the engine on every policy change. Approval
-  summaries and reasons are redacted before they're sent.
+  summaries and reasons are redacted before they're sent. `engine.scrub` also puts the workspace
+  masks + PII (`redact.Masks`, no secret rules: paths come with every kernel event) on
+  `process.cwd`/`binary`, `transcript_path` and an action's `in`, and the full rules on action
+  `attrs` and `agent_env` values; the approval request's `cwd` gets `redact.Masks`
+  (`approvalRequest` in `cmd/effigentd/hooks.go`). Not masked: `os_user`, `git_email`, `node`,
+  MCP server names (People mapping and mcp_pins match on them).
 - SQL in MCP database tools (`hooks/mcpsql.go`): a call is SQL when the tool name says so
   (`*sql*`: execute_sql, run_sql, apply_migration…) or the server name looks like a database
   (postgres, supabase, neon, mysql, sqlite, snowflake, clickhouse, bigquery, dbhub, `db`…) and the

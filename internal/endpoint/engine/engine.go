@@ -118,29 +118,51 @@ func applyRedaction(p *policy.Policy, logf func(string, ...any)) {
 }
 
 // scrub removes secrets from every free-text field of an event before any
-// sink (stdout, log file, control plane) sees it.
+// sink (stdout, log file, control plane) sees it, and applies the workspace's
+// masks (customer names, PII) to its paths: working directory, binary,
+// transcript file, the script an action was found in. Action attributes
+// (cloud profile, cluster, DB host…) and the agent's environment get both.
+// Identity fields (OS user, git email, hostname) and MCP server names are
+// left as they are: People mapping and mcp_pins match on them.
 func scrub(ev event.Event) event.Event {
 	if ev.Process != nil {
 		p := *ev.Process
 		p.Args = redact.String(p.Args)
+		p.Binary, p.CWD = redact.Masks(p.Binary), redact.Masks(p.CWD)
 		ev.Process = &p
 	}
 	ev.Target = redact.String(ev.Target)
 	ev.Message = redact.String(ev.Message)
+	ev.TranscriptPath = redact.Masks(ev.TranscriptPath)
 	if len(ev.Actions) > 0 {
 		acts := make([]event.Action, len(ev.Actions))
 		for i, a := range ev.Actions {
 			a.Target = redact.String(a.Target)
+			a.In = redact.Masks(a.In)
+			a.Attrs = scrubMap(a.Attrs)
 			acts[i] = a
 		}
 		ev.Actions = acts
 	}
+	ev.AgentEnv = scrubMap(ev.AgentEnv)
 	if ev.Outcome != nil && ev.Outcome.Error != "" {
 		o := *ev.Outcome
 		o.Error = redact.String(o.Error)
 		ev.Outcome = &o
 	}
 	return ev
+}
+
+// scrubMap is a redacted copy of m's values (the caller's map is left alone).
+func scrubMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return m
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = redact.String(v)
+	}
+	return out
 }
 
 // Run consumes raw sensor events until the channel closes.

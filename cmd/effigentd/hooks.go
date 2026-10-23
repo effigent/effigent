@@ -293,13 +293,7 @@ func askApproval(ctx context.Context, eng *engine.Engine, cp *cpclient.Client, c
 	// Leave the hook process time to receive the answer.
 	wait := min(time.Duration(ap.Wait())*time.Second, c.Budget-10*time.Second)
 	wait = max(wait, 0)
-	actx := action.Context{OrgID: cp.State.Tenant, EndpointID: cp.State.EndpointID, SessionID: p.session,
-		AgentType: p.agent, OSUser: callUser(c)}
-	res, err := cp.RequestApproval(ctx, cpclient.ApprovalRequest{
-		Fingerprint: action.Fingerprint(actx, p.action), Agent: p.agent, SessionID: p.session, Tool: p.tool,
-		Summary: redact.String(p.summary), Cwd: p.cwd, Rule: d.Rule, Reason: redact.String(d.Reason), OSUser: callUser(c),
-		TTLMinutes: ap.TTL(), WaitSeconds: int(wait / time.Second),
-	})
+	res, err := cp.RequestApproval(ctx, approvalRequest(cp.State.Tenant, cp.State.EndpointID, callUser(c), p, d, ap.TTL(), wait))
 	if err != nil {
 		if ctx.Err() != nil {
 			return deny(event.ApprovalPending, "medium", "Effigent: the approval wait was cancelled.")
@@ -339,6 +333,18 @@ func askApproval(ctx context.Context, eng *engine.Engine, cp *cpclient.Client, c
 	return deny(event.ApprovalPending, "medium", "Effigent: "+d.Reason+", so it has NOT run yet. Approval request "+res.ID+
 		" is pending. "+sent+". Tell the user it is waiting for approval; once they confirm it was approved, run exactly "+
 		"the same command again (any change makes it a new request).")
+}
+
+// approvalRequest is what leaves the machine for an approval: the summary
+// and reason redacted, the working directory under the workspace's masks
+// (customer names, PII). The fingerprint is computed on the real call.
+func approvalRequest(tenant, endpointID, osUser string, p pausedCall, d hooks.Decision, ttl int, wait time.Duration) cpclient.ApprovalRequest {
+	actx := action.Context{OrgID: tenant, EndpointID: endpointID, SessionID: p.session, AgentType: p.agent, OSUser: osUser}
+	return cpclient.ApprovalRequest{
+		Fingerprint: action.Fingerprint(actx, p.action), Agent: p.agent, SessionID: p.session, Tool: p.tool,
+		Summary: redact.String(p.summary), Cwd: redact.Masks(p.cwd), Rule: d.Rule, Reason: redact.String(d.Reason), OSUser: osUser,
+		TTLMinutes: ttl, WaitSeconds: int(wait / time.Second),
+	}
 }
 
 // approvalSummary is what approvers see: the usual one-line summary, or the

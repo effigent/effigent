@@ -672,14 +672,19 @@ against a 30-day baseline. A new agent learns silently for 7 days first. Optiona
 ### 26. Employee monitoring and privacy: **Partly**
 - **New masking:** policy `redact:` adds workspace patterns (customer ids, internal hostnames)
   and an optional PII set (email, phone, card numbers, IBAN). It runs on the machine before
-  anything leaves it, on top of the secret rules. Applies to commands, paths, messages, approval
-  summaries and reasons.
+  anything leaves it, on top of the secret rules. Applies to commands, targets, messages,
+  approval summaries and reasons, and (new) to working directories, binary and transcript paths,
+  the approval request's working directory, the actions' attributes (cloud profile and account,
+  cluster, project, DB host…) and the agent environment names reported at session start
+  (`engine.scrub`; tests `TestScrubMasksPathsAttrsAndEnv`, `TestApprovalRequestIsMasked` check
+  the JSON that is sent).
 - **DPA:** draft in `docs/compliance/dpa-template.md` (GDPR Art. 28, Israeli data-security
   rules). Marked as needing legal review.
 - **Employee-monitoring guidance:** `docs/compliance/employee-monitoring.md`: exactly what is
   and isn't collected, an employee notice template, EU (DPIA, works councils) and Israel
   sections. Not legal advice; needs review.
-- **Known gaps:** the identity fields (OS user, git email, hostname) can't be masked, and one
+- **Known gaps:** the identity fields (OS user, git email, hostname) and MCP server names can't
+  be masked (People mapping and MCP pins match on them), and one
   person's events can't be erased before retention ends (the event log is append-only).
 - **Data minimisation:** what's collected per user is listed in
   `docs/security/architecture-and-data-flow.md`.
