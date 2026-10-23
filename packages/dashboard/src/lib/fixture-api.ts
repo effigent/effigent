@@ -128,8 +128,8 @@ export function createFixtureApi(): Api {
   endpoints.push({ id: '00000099-dem0-4000-8000-c10udc0de000', hostname: 'acme/web', os: 'cloud', arch: '', version: '', kind: 'cloud',
     vendor: 'copilot', enrolled_at: iso(60 * 24 * 3), last_seen: iso(60 * 5), policy_version: 3, revoked: false });
   const breakGlass: Omit<ApiBreakGlassCode, 'status'>[] = [];
-  let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, offline_alert_interval_minutes: 0, email_hooks: true, default_minutes: 5, min_minutes: 2,
-    tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing'], saved: false };
+  let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, offline_alert_interval_minutes: 0, email_hooks: true, email_tamper: true, default_minutes: 5, min_minutes: 2,
+    tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing', 'endpoint.tamper'], saved: false };
   const epId = new Map(ENDPOINTS.map((e, i) => [e.id, endpoints[i].id]));
   const events: ApiEvent[] = EVENTS.filter((e) => e.type !== 'approval' && e.endpoint && e.agentType).map((e, i) => ({
     id: 1000 - i, endpoint_id: epId.get(e.endpoint!) ?? endpoints[0].id, time: iso(minutesAgo(e.ago)), type: e.type,
@@ -270,7 +270,7 @@ export function createFixtureApi(): Api {
         return delay({ ok: true }) as Promise<T>;
       }
       if (method === 'PUT' && path === '/endpoint-health') {
-        const b = (body ?? {}) as { offline_after_minutes?: number; email_offline?: boolean; offline_alert_interval_minutes?: number; email_hooks?: boolean };
+        const b = (body ?? {}) as { offline_after_minutes?: number; email_offline?: boolean; offline_alert_interval_minutes?: number; email_hooks?: boolean; email_tamper?: boolean };
         if (b.offline_after_minutes !== undefined && !(b.offline_after_minutes >= 2 && b.offline_after_minutes <= 10080)) {
           return Promise.reject(new ApiError(400, 'offline_after_minutes must be 2 to 10080'));
         }

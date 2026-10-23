@@ -222,7 +222,7 @@ function HealthSettings() {
   useEffect(() => {
     api.get<ApiEndpointHealth>('/endpoint-health').then((v) => { setH(v); setMins(String(v.offline_after_minutes)); }).catch((e) => setErr(apiErrorText(e)));
   }, [api]);
-  const save = async (patch: Partial<Pick<ApiEndpointHealth, 'offline_after_minutes' | 'email_offline' | 'offline_alert_interval_minutes' | 'email_hooks'>>) => {
+  const save = async (patch: Partial<Pick<ApiEndpointHealth, 'offline_after_minutes' | 'email_offline' | 'offline_alert_interval_minutes' | 'email_hooks' | 'email_tamper'>>) => {
     setSaving(true); setErr(null);
     try {
       const v = await api.send<ApiEndpointHealth>('PUT', '/endpoint-health', patch);
@@ -238,7 +238,7 @@ function HealthSettings() {
   const offlineEvery = h && h.email_offline ? h.offline_alert_interval_minutes : 0;
   return (
     <Card>
-      <CardHead title="Machine health alerts" sub="When a machine stops checking in, or an agent's hook is removed or turned off." />
+      <CardHead title="Machine health alerts" sub="When a machine stops checking in, effigentd is switched off, or an agent's hook is removed or turned off." />
       {err && <div className="callout bad" style={{ margin: '0 0 10px' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
       {!h ? (!err && <Loading />) : (
         <div style={{ display: 'grid', gap: 10, fontSize: 13 }}>
@@ -268,6 +268,14 @@ function HealthSettings() {
             <input type="checkbox" checked={h.email_hooks} disabled={!canWrite || saving} onChange={(e) => save({ email_hooks: e.target.checked })} />
             Email when an agent&apos;s hook is missing or turned off
           </label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={h.email_tamper} disabled={!canWrite || saving} onChange={(e) => save({ email_tamper: e.target.checked })} />
+            Email when effigentd is stopped while the machine keeps running, is killed or crashes, or a kernel policy fails to load
+          </label>
+          <div className="muted">
+            At most once an hour per machine (kernel policy failures once a day). A machine that sleeps, shuts down or restarts never sends this;
+            a stop is reported once the machine has stayed silent past the offline threshold, so restarts and upgrades don&apos;t either. On macOS effigentd can&apos;t tell a stop from a shutdown, so a stop there is reported only as offline.
+          </div>
           <div className="muted">
             {h.email_available ? (h.emails.length ? `Emails go to ${h.emails.join(', ')} (Settings → Notifications).` : 'No notification emails set (Settings → Notifications).') : 'Email is not configured on this control plane.'}
             {' '}Webhooks: subscribe to {h.webhook_events.join(', ')} (Settings → Integrations). Every change is in the audit trail.

@@ -107,6 +107,8 @@ export interface ApiEndpointHealth {
   /** 0 = never email about a machine going offline (default); N = at most once per machine per N minutes (60…10080). */
   offline_alert_interval_minutes: number;
   email_hooks: boolean;
+  /** Email when effigentd is stopped while the machine keeps running, killed or crashed, or a kernel policy fails to load (default on). */
+  email_tamper: boolean;
   default_minutes: number;
   min_minutes: number;
   tick_seconds: number;

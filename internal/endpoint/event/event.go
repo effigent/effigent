@@ -88,6 +88,11 @@ type Event struct {
 	Container string    `json:"container,omitempty"`
 	Pod       string    `json:"pod,omitempty"` // "namespace/name" (hook calls from a pod, via the hook socket)
 	Message   string    `json:"message,omitempty"`
+	// Shutdown says, on daemon_stop and daemon_unclean_restart, whether
+	// effigentd ended because the whole machine went down: "system"
+	// (shutdown, reboot, power loss), "no" (the OS kept running: someone
+	// stopped or killed effigentd, or it crashed) or "unknown".
+	Shutdown string `json:"shutdown,omitempty"`
 
 	// Who is behind the action (best effort, all optional; older effigentd
 	// builds don't send them). Used by the control plane's people mapping.

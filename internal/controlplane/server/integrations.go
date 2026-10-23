@@ -34,7 +34,7 @@ var webhookEvents = []string{
 	"approval.requested", "approval.decided", "approval.voted", "action.blocked",
 	"endpoint.enrolled", "endpoint.revoked", "policy.published", "policy.proposed",
 	"pricing_leaks.runaway_cost",
-	"endpoint.hooks_missing", "endpoint.offline", "endpoint.online",
+	"endpoint.hooks_missing", "endpoint.offline", "endpoint.online", "endpoint.tamper",
 	"anomaly.first_seen",
 	"break_glass.created", "break_glass.used",
 }

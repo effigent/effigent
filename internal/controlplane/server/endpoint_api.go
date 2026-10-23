@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -171,12 +172,14 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 			if e.Type == "daemon_stop" {
 				// the offline detector tells "stopped" from "went silent" by it
 				var body struct {
-					Target string `json:"target"` // the signal
-					Rule   string `json:"rule"`   // how it was run: systemd, launchd, windows-service, terminal
-					OSUser string `json:"os_user"`
+					Target   string `json:"target"` // the signal
+					Rule     string `json:"rule"`   // how it was run: systemd, launchd, windows-service, terminal
+					OSUser   string `json:"os_user"`
+					Shutdown string `json:"shutdown"` // system | no | unknown (the tamper alert needs "no")
 				}
 				_ = json.Unmarshal(e.Body, &body)
-				b, _ := json.Marshal(stopInfo{Signal: clip(body.Target, 40), Via: clip(body.Rule, 40), OSUser: clip(body.OSUser, 120)})
+				b, _ := json.Marshal(stopInfo{Signal: clip(body.Target, 40), Via: clip(body.Rule, 40), OSUser: clip(body.OSUser, 120),
+					Shutdown: clip(body.Shutdown, 20)})
 				if err := s.Store.RecordEndpointStop(r.Context(), ep.ID, e.Time, b); err != nil {
 					s.Logf("endpoint %s: record stop: %v", ep.ID, err)
 				}
@@ -184,6 +187,10 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 			if e.Type == "break_glass_start" {
 				s.recordBreakGlassUse(r.Context(), ep, e.Time, e.Body)
 			}
+		}
+		// unclean restarts and failed kernel policy loads (the batch answers now)
+		for _, te := range tamperFromBatch(evs) {
+			go s.announceTamperEvent(context.WithoutCancel(r.Context()), ep, te)
 		}
 	}
 	_ = s.Store.Heartbeat(r.Context(), ep.ID, ep.PolicyVersion, "")

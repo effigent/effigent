@@ -219,14 +219,20 @@ func daemon() {
 		if runUser != "" {
 			msg += ", run by " + runUser
 		}
+		// part of a shutdown or reboot? (the control plane alerts only when it isn't)
+		shutdown := stopShutdown(runtime.GOOS, why, systemdState())
+		if shutdown == shutdownSystem {
+			msg += ", the machine is shutting down"
+		}
 		emit(event.Event{Time: time.Now(), Type: event.DaemonStop, Severity: "high", Target: why, Rule: via, OSUser: runUser,
-			Message: msg + ")"})
+			Shutdown: shutdown, Message: msg + ")"})
 		logger.Printf("stopping (%s)", why)
 		stop()
 	}()
 	if cp != nil {
 		if prev := startMarker(*stateDir); prev != nil {
-			emit(event.Event{Time: time.Now(), Type: event.DaemonUncleanRestart, Severity: "high", Rule: via, Message: uncleanMessage(prev)})
+			emit(event.Event{Time: time.Now(), Type: event.DaemonUncleanRestart, Severity: "high", Rule: via,
+				Shutdown: uncleanShutdown(bootTime(), prev), Message: uncleanMessage(prev)})
 		}
 	}
 

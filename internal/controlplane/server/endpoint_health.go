@@ -140,6 +140,10 @@ type stopInfo struct {
 	Signal string `json:"signal,omitempty"`  // SIGTERM, SIGINT, "service stop"
 	OSUser string `json:"os_user,omitempty"` // who ran effigentd in a terminal; a signal's sender isn't known
 	Via    string `json:"via,omitempty"`     // systemd | launchd | windows-service | terminal
+	// Shutdown: "system" (the machine was shutting down or rebooting), "no"
+	// (it kept running: a tamper alert if it doesn't come back), "unknown" or
+	// "" (macOS, no systemd, older builds: treated like a silence).
+	Shutdown string `json:"shutdown,omitempty"`
 }
 
 // stoppedDeliberately reports whether the endpoint's last word was a
@@ -211,7 +215,22 @@ func (s *Server) announceOffline(ctx context.Context, ep store.Endpoint) {
 		m.Fields = append(m.Fields, [2]string{"What happened", "effigentd stopped reporting without saying it was stopping: " +
 			"the machine may be asleep, off or offline, or effigentd was killed."})
 	}
-	res := s.offlineEmail(ctx, ep, set, m)
+	var res map[string]string
+	if stopped && si.Shutdown == shutdownNo {
+		// switched off while the machine kept running: the tamper alert
+		// (on by default, its own cooldown) instead of the offline email
+		tr := s.tamperStopped(ctx, ep, si)
+		res = map[string]string{"email": "see endpoint." + store.TamperStopped + " (" + tr["email"] + ")"}
+	} else {
+		res = s.offlineEmail(ctx, ep, set, m)
+		switch {
+		case !stopped:
+		case si.Shutdown == "system":
+			res["tamper"] = "skipped: the machine was shutting down or restarting"
+		default:
+			res["tamper"] = "skipped: effigentd couldn't tell whether the machine was shutting down"
+		}
+	}
 	s.auditSystem(ctx, ep.Tenant, "endpoint.offline", ep.ID, map[string]any{"hostname": ep.Hostname, "last_seen": ep.LastSeen,
 		"reason": reason, "stop": data["stop"], "offline_after_seconds": set.OfflineAfterSeconds,
 		"offline_alert_interval_minutes": set.OfflineAlertIntervalMinutes, "channels": res})
@@ -494,10 +513,10 @@ func (s *Server) healthView(ctx context.Context, tenant string) (map[string]any,
 		return nil, err
 	}
 	return map[string]any{
-		"offline_after_minutes": set.OfflineAfterSeconds / 60, "email_offline": set.EmailOffline, "email_hooks": set.EmailHooks,
+		"offline_after_minutes": set.OfflineAfterSeconds / 60, "email_offline": set.EmailOffline, "email_hooks": set.EmailHooks, "email_tamper": set.EmailTamper,
 		"default_minutes": int(s.offlineAfter() / time.Minute), "min_minutes": int(offlineAfterMin / time.Minute),
 		"tick_seconds": int(s.healthTick() / time.Second), "offline_alert_interval_minutes": set.OfflineAlertIntervalMinutes, "emails": n.Emails, "email_available": s.Notify != nil && s.Notify.EmailEnabled(),
-		"webhook_events": []string{"endpoint.offline", "endpoint.online", "endpoint.hooks_missing"},
+		"webhook_events": []string{"endpoint.offline", "endpoint.online", "endpoint.hooks_missing", "endpoint.tamper"},
 		"updated_by":     set.UpdatedBy, "updated_at": set.UpdatedAt, "saved": set.Saved,
 	}, nil
 }
@@ -517,6 +536,7 @@ func (s *Server) putEndpointHealth(w http.ResponseWriter, r *http.Request, p Pri
 		EmailOffline                *bool `json:"email_offline"`
 		OfflineAlertIntervalMinutes *int  `json:"offline_alert_interval_minutes"`
 		EmailHooks                  *bool `json:"email_hooks"`
+		EmailTamper                 *bool `json:"email_tamper"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad body")
@@ -550,13 +570,16 @@ func (s *Server) putEndpointHealth(w http.ResponseWriter, r *http.Request, p Pri
 	if req.EmailHooks != nil {
 		after.EmailHooks = *req.EmailHooks
 	}
+	if req.EmailTamper != nil {
+		after.EmailTamper = *req.EmailTamper
+	}
 	if err := s.Store.PutEndpointHealthSettings(r.Context(), p.Tenant, after, p.UserID); err != nil {
 		s.fail(w, err)
 		return
 	}
 	view := func(h store.EndpointHealthSettings) map[string]any {
 		return map[string]any{"offline_after_seconds": h.OfflineAfterSeconds, "email_offline": h.EmailOffline,
-			"offline_alert_interval_minutes": h.OfflineAlertIntervalMinutes, "email_hooks": h.EmailHooks}
+			"offline_alert_interval_minutes": h.OfflineAlertIntervalMinutes, "email_hooks": h.EmailHooks, "email_tamper": h.EmailTamper}
 	}
 	s.audit(r, p, "endpoint_health.update", "", map[string]any{"before": view(before), "after": view(after)})
 	s.getEndpointHealth(w, r, p)

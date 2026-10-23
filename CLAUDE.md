@@ -202,7 +202,7 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   Events: approval.requested, approval.decided, action.blocked (opt-in, 60/min cap,
   `dropped` counter), endpoint.enrolled, endpoint.revoked, policy.published,
   pricing_leaks.runaway_cost (opt-in, see 2d), endpoint.hooks_missing / endpoint.offline /
-  endpoint.online (opt-in, see 2e), anomaly.first_seen (opt-in, 60/min cap like
+  endpoint.online / endpoint.tamper (opt-in, see 2e), anomaly.first_seen (opt-in, 60/min cap like
   action.blocked, see 2h), test.
   `emit()` only enqueues (`cp.webhook_deliveries`); the worker (started by `Handler()`)
   claims due rows with `for update skip locked` + a 60s lease and retries 10s, 1m, 5m,
@@ -347,7 +347,22 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   any teardown; the control-plane sink's last batch gets 3s (`HTTPConfig.CloseTimeout`), then it waits
   in the spool and is sent after the next start. Ingest records the newest stop in `stopped_at`/`stop`.
   Enrolled daemons keep `<state>/running` (pid, start, version); one left at start →
-  `daemon_unclean_restart` (high: kill -9, crash, power loss).
+  `daemon_unclean_restart` (high: kill -9, crash, power loss). Both carry `shutdown` (`cmd/effigentd/stop.go`):
+  `system` = the machine was going down (Linux: `systemctl is-system-running` = `stopping`; Windows: the
+  service's shutdown control; unclean: the OS booted after the previous run started, `bootTime()`), `no` =
+  it kept running (systemd in any other state, SIGINT, Windows service stop; unclean: same boot), else
+  `unknown` (macOS launchd: `bootout` and a shutdown send the same SIGTERM; no systemd).
+- **Tamper alerts** (migration 022, `server/tamper.go`): emailed by default (`email_tamper`, default on),
+  independent of the offline interval, webhook `endpoint.tamper` (`kind`), audit `endpoint.<kind>` always
+  (`channels.email`: sent / suppressed / skipped / off). Kinds: `daemon_stopped` — a `daemon_stop` with
+  `shutdown: no` that is still the machine's last word when the offline detector marks it (so restarts and
+  upgrades, back within the threshold, never alert), announced instead of the offline email;
+  `unclean_restart` — `shutdown: no` at ingest (`system` = power loss, `unknown`/missing = older build:
+  skipped); `policy_load_failed` — a high-severity `policy` event (kernel policy load failure) at ingest,
+  newest per batch with a count. One per machine per kind per cooldown (`daemon_stopped` and
+  `unclean_restart` 1 h, `policy_load_failed` 24 h) via `cp.endpoints.stop_alerted_at` /
+  `unclean_alerted_at` / `policy_fail_alerted_at` (`ClaimTamperAlert`, one update); replays are dropped by
+  `batch_id` first. Sleep, silence, shutdown and `unknown` stops stay with the offline logic.
 - **Offline detector**: `runEndpointHealth` ticks every minute (`HealthTick`) under a session
   advisory lock (`EndpointHealthLock`); `MarkEndpointsOffline` sets `offline_at` once per outage
   (`update … where offline_at is null … for update skip locked`) for unrevoked machines silent
@@ -363,13 +378,15 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   never cleared on coming back, so a laptop that wakes and sleeps doesn't re-alert). The audit's
   `channels.email` says why none went out (`off: offline alerts set to never`, `suppressed: …`).
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
-  `offline_alert_interval_minutes`, `email_hooks`; people only; audited `endpoint_health.update`
+  `offline_alert_interval_minutes`, `email_hooks`, `email_tamper`; people only; audited `endpoint_health.update`
   before/after). `GET /api/v1/endpoints`
   carries the new columns. Console: Machines (`views/Enforcement.tsx`) shows each machine's hooks,
   a warning per problem, offline (detector) and "stopped · SIGTERM" vs "went silent", and the
   Machine health alerts card; Demo Mode data in `lib/fixture-api.ts` (`demoHealth`).
 - Deploy order: control plane (migration 014) → console → effigentd release (endpoints reinstall).
   Offline alert interval: control plane (migration 021) → console; effigentd unchanged.
+  Tamper alerts: control plane (migration 022) → console → effigentd release. Builds without `shutdown`
+  never trigger stop / unclean-restart alerts (treated as unknown); policy load alerts work with any build.
 
 ## 2f. Actions (what a tool call does)
 
@@ -848,7 +865,7 @@ npm run -w @effigent/site build                     # site
   - Not live-tested: Codex (both sign-ins, the ChatGPT-backend route, the zstd bodies, the 426 fallback)
     and Gemini. Only Claude Code with a claude.ai login was run through it.
   - No `model_call` token sums in the console or Pricing Leaks yet: the events carry them, Pricing Leaks
-    uses only the model. Migration 022 is reserved for a rollup (021 is the offline alert interval, 2e).
+    uses only the model. The rollup takes the next free migration number (022 is the tamper alerts, 2e).
   - Fail-closed: a stopped daemon cuts pointed agents off from their model.
   - Rollout: effigentd builds without `models:` refuse a policy that has it (parse error → they stay on
     their current version). Upgrade endpoints, then run `install-gateway`, then publish `models:` /
@@ -925,6 +942,9 @@ npm run -w @effigent/site build                     # site
   offline = threshold + ≤ 1 min; a signal's sender isn't known, only how effigentd was run).
   A sleeping or disconnected laptop looks the same as a killed daemon unless effigentd sent
   `daemon_stop`; kill -9 sends nothing (reported as `daemon_unclean_restart` at the next start).
+  Tamper emails (2e) cover a Linux systemd or Windows stop while the machine runs and a kill on the
+  same boot; on macOS a stop can't be told from a shutdown, so it is only reported as offline, and
+  a daemon killed and never restarted is only a silence.
   - Claude Code: managed-settings.json `PreToolUse`, timeout 120, `onFailure: block`.
     `managedSourcesBehavior: "first-wins"` with a remote/MDM managed source makes Claude Code skip
     the file-based managed settings — and our hook — silently; hookstate can't see that (it reads
