@@ -645,8 +645,18 @@ against a 30-day baseline. A new agent learns silently for 7 days first. Optiona
 
 ### 25. EDR / eBPF coexistence, footprint, MDM: **Partly**
 - **Linux:** uses Tetragon's BPF LSM. Several BPF LSM programs can coexist, and we have no
-  reports of conflicts with Falcon or Wiz sensors, but we haven't tested next to them. A pilot
+  reports of conflicts with Falcon or Wiz sensors, but we haven't tested next to them
+  (`footprint.md` §3.3 now has a Wiz row: an eBPF sensor whose hooks aren't public). A pilot
   machine with your sensor is the honest next step.
+- **Minimum kernel:** 5.12 with BTF and `bpf` in the active LSM list (Ubuntu needs `lsm=…,bpf`
+  and a reboot). The installer refuses older kernels (`EFFIGENT_SKIP_KERNEL_CHECK=1` overrides)
+  and warns but installs observe-only without BPF LSM.
+- **Kernel layer health is visible:** every heartbeat reports `bpf_lsm` and whether Tetragon is
+  connected; Machines flags a Linux machine that is only observing and doesn't count it as
+  kernel-enforced. Inventory, the posture report and alerts don't use it yet.
+- **Failed reload:** a kernel policy that fails to load leaves the previous version loaded
+  instead of removing it. A machine whose first policy never loads still runs unenforced
+  (there is no fail-closed option that kills the agent yet).
 - **macOS:** effigentd ships as an MDM-deployable pkg.
 - **Windows:** effigentd ships as an install.ps1 installer.
 - **Footprint (measured 2026-10-21, `docs/compliance/footprint.md`, script
