@@ -558,8 +558,10 @@ All control plane (no effigentd change); everything is read from rollups, never 
   kind + daily, approvals (`cp.approvals`: requested, approved = approved|used, denied, expired incl.
   pending past expiry, median time to decide, self-approval refusals from the audit trail), exceptions
   (latest source), policy versions + proposals by state, first-seen counts, Pricing Leaks totals (as of
-  now) + episodes found/resolved in the period. `break_glass` is null until a feature registers a
-  `ReportSection` with key `break_glass` (`RegisterReportSection`); other keys go to `sections`.
+  now) + episodes found/resolved in the period, and `break_glass` (the section `server/break_glass.go`
+  registers with `RegisterReportSection`: `store.BreakGlassActivity` = codes issued / revoked / expired
+  unused from `cp.break_glass_codes`, every activation from the audit trail's `break_glass.used`, ≤ 50
+  listed); other registered keys go to `sections`.
 - Report email: `GET|PUT /api/v1/report/schedule` (`{enabled, cadence weekly|monthly, emails ≤ 20}`, PUT
   people only, audited `report.schedule.update` before/after), `POST /api/v1/report/send` (now, audited
   `report.send`). `cp.report_schedules.next_at`: Mondays 08:00 UTC (last 7 days) / the 1st 08:00 UTC
@@ -773,11 +775,11 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
     restores at expiry. The hook handler lets an `Approve` decision through as event `break_glass`;
     deny lists ran before.
   - Single use per machine: `<state>/break-glass.json`, written then renamed. `break_glass_start` is
-    reported on reconnect and marks the code used.
+    reported on reconnect and marks the code used. The same file keeps the open window (`active`: id +
+    end); a restarted daemon restores it until it ends (`bgActiveWindow`, ≤ 8 h from now, no new event).
   - Console: Machines → Break-glass card (`components/BreakGlass.tsx`, anchor `/enforcement#break-glass`,
     the alerts' link): issue (machine or all, 30 min…8 h, reason; the code is shown once), list with
-    status, revoke. Demo Mode in `lib/fixture-api.ts`. The posture report's `break_glass` section isn't
-    registered yet.
+    status, revoke. Demo Mode in `lib/fixture-api.ts`. Posture report: Break-glass card (2h).
 - **Self-protection** (`cmd/effigentd/guard.go`, `tetragon/render.go`, policy top-level
   `self_protection`, default on):
   - Each tracked agent gets `-guard` (file writes / append / create / O_TRUNC via inode_setattr /
@@ -1033,8 +1035,9 @@ npm run -w @effigent/site build                     # site
   - Unmanaged people depend on the People mapping and the connected / imported Pricing Leaks vendors: an
     unmapped work email shows as unmanaged even if that person has an enrolled machine.
   - Migration 016 backfills 35 days; older periods start empty (the report says so). The report's spend
-    numbers are as of now (the latest rollup), not as of the period; `break_glass` is null until a
-    break-glass feature registers its section. Report email needs SMTP or SES (else recorded `off`).
+    numbers are as of now (the latest rollup), not as of the period; break-glass activations are counted
+    when the machine reports them (on reconnect), not when they happened. Report email needs SMTP or SES
+    (else recorded `off`).
   - Not checked in a browser: the print layout (only the `@media print` CSS was written) and a real
     report email.
 

@@ -31,6 +31,14 @@ type bgResult struct {
 // activated on this machine. A used nonce is never honored again.
 type breakGlassState struct {
 	Used map[string]time.Time `json:"used"` // grant id -> its expiry (pruned after expiry)
+	// Active is the window opened last, restored when the daemon restarts
+	// before it ends (a restart must not put the approval lists back early).
+	Active *bgWindow `json:"active,omitempty"`
+}
+
+type bgWindow struct {
+	ID    string    `json:"id"`
+	Until time.Time `json:"until"`
 }
 
 func bgStatePath(dir string) string { return filepath.Join(dir, "break-glass.json") }
@@ -88,8 +96,9 @@ func bgError(why string) []byte {
 	return b
 }
 
-// bgMarkUsed records grant id (single-use) and returns whether it was already
-// used. Expired entries are pruned. Written with write-then-rename.
+// bgMarkUsed records grant id (single-use) as the active window and returns
+// whether it was already used. Expired entries are pruned. Written with
+// write-then-rename.
 func bgMarkUsed(dir, id string, expiry time.Time) (already bool, err error) {
 	var st breakGlassState
 	if b, err := os.ReadFile(bgStatePath(dir)); err == nil {
@@ -108,12 +117,30 @@ func bgMarkUsed(dir, id string, expiry time.Time) (already bool, err error) {
 		return true, nil
 	}
 	st.Used[id] = expiry
+	st.Active = &bgWindow{ID: id, Until: expiry}
 	b, _ := json.MarshalIndent(st, "", "  ")
 	tmp := bgStatePath(dir) + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return false, err
 	}
 	return false, os.Rename(tmp, bgStatePath(dir))
+}
+
+// bgActiveWindow returns the window a previous run opened, if it hasn't
+// ended. The code was verified when it was activated; the file sits in the
+// state dir, which only root (and, on Linux, not the agent tree: 2l) can write.
+func bgActiveWindow(dir string, now time.Time) (id string, until time.Time, ok bool) {
+	var st breakGlassState
+	b, err := os.ReadFile(bgStatePath(dir))
+	if err != nil || json.Unmarshal(b, &st) != nil || st.Active == nil {
+		return "", time.Time{}, false
+	}
+	a := st.Active
+	// never longer than a code can last, whatever the file says
+	if a.ID == "" || !now.Before(a.Until) || a.Until.Sub(now) > sign.BreakGlassMaxDuration {
+		return "", time.Time{}, false
+	}
+	return a.ID, a.Until, true
 }
 
 // breakGlassCmd implements `effigentd break-glass <code>`: it forwards the

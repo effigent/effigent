@@ -198,10 +198,24 @@ export interface ApiPostureReport {
     resolved_in_period: number;
     resolved_savings_cents: number;
   } | null;
-  /** Filled once break-glass sessions exist; null until then. */
-  break_glass: unknown;
+  /** Break-glass codes and activations in the period; null from a control plane before the section. */
+  break_glass: ApiReportBreakGlass | null;
   sections?: Record<string, unknown>;
   notes: string[];
+}
+
+export interface ApiReportBreakGlass {
+  issued: number;
+  issued_all_machines: number;
+  revoked: number;
+  expired_unused: number;
+  /** Activations reported by machines (an all-machines code can be used on several). */
+  activations: number;
+  machines: number;
+  /** Used codes this control plane didn't issue. */
+  unknown_codes: number;
+  /** Newest first, ≤ 50. */
+  uses: { at: string; id: string; endpoint_id: string; hostname: string; os_user: string; reason: string; created_by: string }[];
 }
 
 export interface ApiReportSchedule {

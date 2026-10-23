@@ -237,6 +237,12 @@ func daemon() {
 	}
 
 	eng := engine.New(pol, raw, enf, emit, logger.Printf, *verbose)
+	if cp != nil { // a break-glass window a previous run opened lasts until it ends
+		if id, until, ok := bgActiveWindow(*stateDir, time.Now()); ok {
+			eng.SetBreakGlass(ctx, id, until)
+			logger.Printf("break-glass window %s restored, active until %s", id, until.UTC().Format(time.RFC3339))
+		}
+	}
 	var upstreams []string
 	for _, u := range strings.Split(*dnsServers, ",") {
 		if u = strings.TrimSpace(u); u != "" {
