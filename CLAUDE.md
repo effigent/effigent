@@ -383,6 +383,8 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   machine as observe-only (BPF LSM off / Tetragon disconnected) or "not reported" (older build) and doesn't count it
   as kernel-enforced. Not yet used by Inventory coverage, the posture report or alerts. A kernel policy reload keeps
   each old document until its replacement loads (`engine.apply`), so a failed reload leaves the previous policy in place.
+  Kernel floor 5.12 with BTF and `bpf` in the LSM list (the guard's `inode_setattr`/unlink/rename arguments): `install.sh`
+  refuses older kernels unless `EFFIGENT_SKIP_KERNEL_CHECK=1`, and warns (observe-only) without BPF LSM.
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
   `offline_alert_interval_minutes`, `email_hooks`, `email_tamper`; people only; audited `endpoint_health.update`
   before/after). `GET /api/v1/endpoints`

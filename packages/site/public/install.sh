@@ -143,7 +143,19 @@ esac
 # ---- kernel checks -------------------------------------------------------
 say "Checking the kernel"
 KREL="$(uname -r)"
-[ -e /sys/kernel/btf/vmlinux ] || die "kernel $KREL has no BTF (/sys/kernel/btf/vmlinux). Use a distro kernel 5.8+ (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023)."
+# 5.12+: the self-protection guard hooks inode_setattr, unlink and rename with the
+# argument layout those kernels have. EFFIGENT_SKIP_KERNEL_CHECK=1 installs anyway.
+KMAJ="$(echo "$KREL" | cut -d. -f1)"
+KMIN="$(echo "$KREL" | cut -d. -f2 | sed 's/[^0-9].*//')"
+case "$KMAJ$KMIN" in ''|*[!0-9]*) KMAJ=0; KMIN=0 ;; esac
+if [ "$KMAJ" -lt 5 ] || { [ "$KMAJ" -eq 5 ] && [ "$KMIN" -lt 12 ]; }; then
+  if [ "${EFFIGENT_SKIP_KERNEL_CHECK:-0}" = 1 ]; then
+    warn "kernel $KREL is older than 5.12: kernel enforcement and self-protection may not load (EFFIGENT_SKIP_KERNEL_CHECK=1)."
+  else
+    die "kernel $KREL is older than 5.12, the minimum for kernel enforcement. Use a distro kernel 5.15+ (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023)."
+  fi
+fi
+[ -e /sys/kernel/btf/vmlinux ] || die "kernel $KREL has no BTF (/sys/kernel/btf/vmlinux). Use a distro kernel 5.15+ (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023)."
 # Some minimal images don't mount securityfs; it's where the active LSMs are listed.
 [ -e /sys/kernel/security/lsm ] || mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
 LSM_OK=0

@@ -160,6 +160,12 @@ process, though, and Tetragon's base sensors trace every exec and exit on the ho
   - Tetragon's LSM hooks need kernel ≥ 5.7, `CONFIG_BPF_LSM=y`, and `bpf` in the active LSM
     list; otherwise you add it to `lsm=` on the kernel command line and reboot
     ([Tetragon hooks docs](https://tetragon.io/docs/concepts/tracing-policy/hooks/)).
+  - **Effigent needs ≥ 5.12** with BTF (`/sys/kernel/btf/vmlinux`) and `bpf` in the active
+    LSM list: the self-protection guard reads `inode_setattr`, unlink and rename arguments in
+    the layout those kernels have (`tetragon/render.go`). `install.sh` refuses older kernels
+    (`EFFIGENT_SKIP_KERNEL_CHECK=1` installs anyway) and warns, but continues observe-only,
+    without `bpf` in the LSM list. effigentd reports `bpf_lsm` and whether Tetragon is
+    connected with every heartbeat; the console's Machines view flags observe-only machines.
   - **Ubuntu** builds `CONFIG_BPF_LSM` but does not list `bpf` in `CONFIG_LSM`, so it is off
     by default. An Ubuntu kernel-team proposal to change this was posted in September 2026
     ([thread](https://lists.ubuntu.com/archives/kernel-team/2026-September/171489.html)); its
@@ -185,6 +191,7 @@ process, though, and Tetragon's base sensors trace every exec and exit on the ho
 | CrowdStrike Falcon | Kernel mode and user mode. Falcon's blog says it uses "BPF" on Linux ([blog](https://www.crowdstrike.com/en-us/blog/tech-analysis-kernel-access-security-architecture/), [tech hub](https://crowdstrike.com/tech-hub/endpoint-security/installing-falcon-sensor-for-linux)). Sensor docs need a login | A 2024 RHEL 9.4 kernel panic involved Falcon's eBPF program ([Red Hat KB](https://access.redhat.com/solutions/7068083), [The Register](https://www.theregister.com/2024/07/21/crowdstrike_linux_crashes_restoration_tools/)): a kernel BPF verifier bug, not a conflict with another agent | **No** |
 | Microsoft Defender for Endpoint | eBPF sensor is the default since agent 101.23082.0006, no kernel module ([learn.microsoft.com](https://learn.microsoft.com/en-us/defender-endpoint/linux-support-ebpf)) | Running alongside other **fanotify**-based products "isn't supported" ([prerequisites](https://learn.microsoft.com/en-us/defender-endpoint/mde-linux-prerequisites)). Tetragon/effigentd don't use fanotify. Microsoft's performance guide warns that "multiple security products may conflict" ([perf](https://learn.microsoft.com/en-us/defender-endpoint/linux-support-perf)) | **No** |
 | SentinelOne | Cloud-workload Linux agents run "entirely in user space, making use of eBPF" ([blog](https://www.sentinelone.com/blog/feature-spotlight-announcing-general-availability-ga-of-linux-and-k8s-agents-v22-3-for-cloud-workload-security/)). Unverified for its general endpoint agent | No public statement found | **No** |
+| Wiz Runtime Sensor (Wiz Defend) | A "lightweight eBPF-based agent" for Linux hosts that watches processes, network, files and syscalls; a DaemonSet on Kubernetes ([blog](https://legacy.wiz.io/blog/wiz-runtime-sensor-for-linux), [product](https://www.wiz.io/solutions/runtime-sensor)). Custom rules can respond by blocking. Which hooks it attaches to (kprobes, tracepoints, BPF LSM) and its kernel floor aren't public as far as we found; its docs need a login | No public statement found. The §3.2 considerations apply: if its blocking runs on a BPF LSM hook it shares with Tetragon, whichever denies first decides, and both count against the trampoline cap. Ask Wiz which hooks it uses in blocking mode | **No** |
 
 We found **no public report of two eBPF security agents conflicting on the same LSM hook**.
 That is a search result, not a guarantee. The known risks are:
