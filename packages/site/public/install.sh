@@ -11,6 +11,8 @@
 # Options:
 #   --token TOKEN        enrollment token from the console (Enforcement -> Enroll an endpoint)
 #   --server URL         control plane (default https://api.effigent.ai)
+#   --ca-file PATH       PEM bundle of the private CA that signed a self-hosted control plane's
+#                        certificate (kept as ca.pem in effigentd's state dir; system roots stay trusted)
 #   --version VERSION    effigentd version (default: latest)
 #   --skip-tetragon      Tetragon is already installed and running (Linux)
 #   --skip-hooks         kernel enforcement only: don't add the agent hooks (Linux)
@@ -22,6 +24,7 @@ RELEASES="${EFFIGENT_RELEASES:-https://effigent.ai/releases/effigentd}"
 TETRAGON_VERSION="v1.7.1"
 VERSION="latest"
 TOKEN=""
+CA_FILE=""
 SKIP_TETRAGON=0
 SKIP_HOOKS=0
 UNINSTALL=0
@@ -30,6 +33,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --token) TOKEN="$2"; shift 2 ;;
     --server) SERVER="$2"; shift 2 ;;
+    --ca-file) CA_FILE="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     --skip-tetragon) SKIP_TETRAGON=1; shift ;;
     --skip-hooks) SKIP_HOOKS=1; shift ;;
@@ -44,6 +48,16 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root: curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token ..."
 command -v curl >/dev/null 2>&1 || die "curl is required"
+if [ -n "$CA_FILE" ] && [ "$UNINSTALL" = 0 ]; then
+  [ -r "$CA_FILE" ] && grep -q -- '-----BEGIN CERTIFICATE-----' "$CA_FILE" || die "--ca-file $CA_FILE: not a readable PEM certificate bundle"
+fi
+
+# keep_ca STATE_DIR: the CA bundle goes where effigentd trusts it on every start
+# (<state>/ca.pem, root-only); a rerun with a new bundle replaces it.
+keep_ca() {
+  [ -n "$CA_FILE" ] || return 0
+  install -m 0600 "$CA_FILE" "$1/ca.pem.tmp" && mv -f "$1/ca.pem.tmp" "$1/ca.pem"
+}
 
 # ---- macOS: the .pkg does the work (enroll, agent hooks, launchd) -----
 if [ "$(uname -s)" = Darwin ]; then
@@ -68,6 +82,8 @@ if [ "$(uname -s)" = Darwin ]; then
   curl -fsSL -o "$TMPB/$PKG.sha256" "$RELEASES/$VERSION/$PKG.sha256"
   (cd "$TMPB" && shasum -a 256 -c "$PKG.sha256" >/dev/null) || die "effigentd download failed its checksum"
   install -d -m 0700 "$STATE"
+  # the package's post-install enrolls with --ca-file "$STATE/ca.pem" when it is there
+  keep_ca "$STATE"
   if [ -s "$STATE/endpoint.json" ]; then
     say "Already enrolled; keeping the existing enrollment"
   else
@@ -186,8 +202,13 @@ if [ -s /var/lib/effigent/endpoint.json ]; then
 else
   [ -n "$TOKEN" ] || die "--token is required for the first install (console: Enforcement -> Enroll an endpoint)"
   say "Enrolling this machine with $SERVER"
-  /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --state-dir /var/lib/effigent
+  if [ -n "$CA_FILE" ]; then
+    /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --ca-file "$CA_FILE" --state-dir /var/lib/effigent
+  else
+    /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --state-dir /var/lib/effigent
+  fi
 fi
+keep_ca /var/lib/effigent
 
 # ---- Tetragon ------------------------------------------------------------
 

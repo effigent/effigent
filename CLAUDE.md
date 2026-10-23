@@ -762,7 +762,9 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
   (`Dockerfile.console`); the Vercel build is unchanged.
 - effigentd: `enroll --ca-file` (or `EFFIGENT_CA_FILE`) trusts a private CA in addition to the
   system roots and saves it as `<state>/ca.pem`, trusted on every start (`cmd/effigentd/cafile.go`).
-  `install.sh` and the macOS pkg don't pass it yet.
+  `install.sh --ca-file` / `install.ps1 -CaFile` copy it to `<state>/ca.pem` (reruns replace it) and
+  enroll with it; on macOS the pkg's postinstall enrolls with `<state>/ca.pem` when present (needs a
+  pkg built with that postinstall).
 - Archive on S3-compatible stores: `EFFIGENT_ARCHIVE_ENDPOINT`, `_PATH_STYLE=1`, `_SSE=none`,
   `_REGION`.
 - Packaging: `deploy/helm/effigent-cp` (cp + console Deployments, keys Secret generated once via

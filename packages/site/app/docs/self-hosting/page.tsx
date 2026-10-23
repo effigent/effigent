@@ -122,7 +122,10 @@ docker compose logs cp | grep 'signing public key'`}</CodeBlock>
         <CodeBlock title="sh">{`sudo effigentd enroll --server https://effigent-api.example.com --token eft_…
 
 # certificate from your own CA: trust it once, kept for every start
-sudo effigentd enroll --ca-file /path/ca.pem --server https://effigent-api.example.com --token eft_…`}</CodeBlock>
+sudo effigentd enroll --ca-file /path/ca.pem --server https://effigent-api.example.com --token eft_…
+
+# or with the installer (Windows: install.ps1 -Server … -Token … -CaFile C:\\path\\ca.pem)
+curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --server https://effigent-api.example.com --token eft_… --ca-file /path/ca.pem`}</CodeBlock>
         <p className="doc-p" style={{ marginTop: 14 }}>
           The node chart for Kubernetes takes <code>server=https://effigent-api.example.com</code>.
         </p>

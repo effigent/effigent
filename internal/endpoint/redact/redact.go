@@ -1,8 +1,9 @@
 // Package redact removes secrets from event text before it leaves the
 // machine (PRD FR-12). Detection uses gitleaks' maintained default rule set,
 // then rules gitleaks misses on command lines (NAME_TOKEN=…, --password …,
-// user:pass@ in URLs, bearer tokens, private key blocks), then the
-// workspace's own masks and optional PII masks from the policy (Configure).
+// user:pass@ in URLs, bearer tokens, private key blocks, SQL PASSWORD '…'),
+// then the workspace's own masks and optional PII masks from the policy
+// (Configure).
 // Each value is replaced with "[REDACTED:<rule>]".
 package redact
 
@@ -61,6 +62,9 @@ var (
 	bearerRE = regexp.MustCompile(`(?i)(\b(?:bearer|basic|token)\s+)([A-Za-z0-9._~+/-]{12,}=*)`)
 	// mysql -pSECRET
 	mysqlPassRE = regexp.MustCompile(`(\b(?:mysql|mariadb|mysqldump|mysqladmin)\b[^|;&\n]*\s-p)([^\s"']{2,})`)
+	// SQL: CREATE/ALTER USER … PASSWORD '…', IDENTIFIED BY '…' (heredocs and
+	// here-strings fed to a database client are part of the command text)
+	sqlPassRE = regexp.MustCompile(`(?i)(\b(?:password|identified\s+by)\s+)('[^']*'|"[^"]*")`)
 )
 
 func extra(s string) string {
@@ -80,6 +84,7 @@ func extra(s string) string {
 	keep(flagRE, "flag")
 	keep(bearerRE, "bearer")
 	keep(mysqlPassRE, "flag")
+	keep(sqlPassRE, "sql-password")
 	cmu.RLock()
 	rules := custom
 	cmu.RUnlock()

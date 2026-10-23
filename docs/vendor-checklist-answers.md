@@ -710,13 +710,14 @@ doesn't reach files people already downloaded or data webhook receivers hold.
   - **Sign-in:** your OIDC provider (Okta, Entra ID, Keycloak, …) instead of Clerk.
     - Roles come from your groups, or from listed admin emails.
     - Only verified emails are used.
-  - **Private CA:** effigentd accepts one (`enroll --ca-file`).
+  - **Private CA:** effigentd accepts one: `install.sh --ca-file ca.pem` (Linux, macOS),
+    `install.ps1 -CaFile ca.pem` (Windows) or `effigentd enroll --ca-file`.
   - **Archive:** any S3-compatible store.
   - **Limits:**
     - One workspace per install.
     - No SCIM: the member list is the people who signed in during the last 30 days.
-    - The installer doesn't pass the CA file yet, so enrollment with a private CA is a manual
-      step for now.
+    - macOS: the installer's CA file is used by the package's post-install from the next
+      `.pkg` release on; until then enroll by hand with `effigentd enroll --ca-file`.
   - **Verified:** on kind with Dex standing in for the IdP (19 checks). The checks cover:
     - sign-in through the console
     - the role read from the token
@@ -733,9 +734,11 @@ doesn't reach files people already downloaded or data webhook receivers hold.
   - `user:pass@` in URLs
   - bearer and basic tokens
   - private-key blocks
+  - SQL `PASSWORD '…'` / `IDENTIFIED BY '…'`
 
-  Heredoc bodies are part of the command text, so they're covered. Plus the workspace masks
-  from 26.
+  Heredoc and here-string bodies are part of the command text, so they're covered
+  (`TestRedactsHeredocBodies`: tokens, passwords, a private key and a workspace mask inside
+  heredocs). Plus the workspace masks from 26.
 
 ---
 

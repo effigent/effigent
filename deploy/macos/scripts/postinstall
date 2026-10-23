@@ -5,6 +5,9 @@
 # Enrollment token, first one found wins:
 #   1. MDM managed preference  ai.effigent  EnrollmentToken  (+ optional Server)
 #   2. /Library/Application Support/Effigent/enroll.token  (+ optional enroll.server)
+# A self-hosted control plane with a private CA: put its PEM bundle in
+# /Library/Application Support/Effigent/ca.pem first (install.sh --ca-file does);
+# enroll trusts it and the daemon trusts it on every start.
 # Use a multi-use token from the console for a whole fleet.
 set -u
 LOG=/Library/Logs/Effigent/install.log
@@ -26,7 +29,11 @@ SERVER="$(defaults read "$MP" Server 2>/dev/null || true)"
 if [ -s "$STATE/endpoint.json" ]; then
   echo "already enrolled; keeping it"
 elif [ -n "$TOKEN" ]; then
-  "$BIN" enroll --server "$SERVER" --token "$TOKEN" --state-dir "$STATE" || echo "enroll failed; will run with the local default policy until enrolled"
+  if [ -s "$STATE/ca.pem" ]; then
+    "$BIN" enroll --server "$SERVER" --token "$TOKEN" --ca-file "$STATE/ca.pem" --state-dir "$STATE" || echo "enroll failed; will run with the local default policy until enrolled"
+  else
+    "$BIN" enroll --server "$SERVER" --token "$TOKEN" --state-dir "$STATE" || echo "enroll failed; will run with the local default policy until enrolled"
+  fi
   rm -f "$STATE/enroll.token"
 else
   echo "no enrollment token found (set ai.effigent EnrollmentToken in your MDM); running unenrolled"
