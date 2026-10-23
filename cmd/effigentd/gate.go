@@ -192,19 +192,28 @@ func gateAllowed(agent string, cmd []string) bool {
 
 // resolveReal finds the real binary for a shimmed name, skipping the shim dir
 // so the gate doesn't re-enter itself. An explicit path is used as given.
+// Anything that is effigentd itself is skipped too: the shim dir spelled
+// differently on PATH, or an outer `effigentd run`'s shim dir, would otherwise
+// exec the gate again, forever.
 func resolveReal(name string) (string, error) {
 	if strings.Contains(name, "/") {
 		return name, nil
 	}
 	shim := os.Getenv("EFFIGENT_SHIM_DIR")
+	var self os.FileInfo
+	if exe, err := os.Executable(); err == nil {
+		self, _ = os.Stat(exe)
+	}
 	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
-		if d == "" || d == shim {
+		if d == "" || shim != "" && filepath.Clean(d) == filepath.Clean(shim) {
 			continue
 		}
 		p := filepath.Join(d, name)
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
-			return p, nil
+		fi, err := os.Stat(p)
+		if err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 || self != nil && os.SameFile(fi, self) {
+			continue
 		}
+		return p, nil
 	}
 	return "", fmt.Errorf("%q not found on PATH outside the shim dir", name)
 }

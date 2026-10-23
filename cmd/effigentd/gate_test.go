@@ -177,10 +177,24 @@ func TestResolveReal(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeExe(t, filepath.Join(real, "gtool"), "echo real")
+	// an outer `effigentd run`'s shim dir: a symlink to effigentd (here the test binary)
+	outer := filepath.Join(root, "outer")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outer, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(self, filepath.Join(outer, "gtool")); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("EFFIGENT_SHIM_DIR", shim)
 	for _, path := range []string{
 		strings.Join([]string{shim, "", notExe, isDir, real}, string(os.PathListSeparator)),
+		strings.Join([]string{shim + "/", real}, string(os.PathListSeparator)), // the same dir spelled differently
+		strings.Join([]string{shim, outer, real}, string(os.PathListSeparator)),
 	} {
 		t.Setenv("PATH", path)
 		got, err := resolveReal("gtool")

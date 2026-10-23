@@ -822,6 +822,10 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
 - Tests:
   - `sign/breakglass_test.go`, `server/break_glass_test.go` (DB), `tetragon/render_test.go`
     (guard + gated), compile `TestGatedExecSurvivesCompile`.
+  - `cmd/effigentd/gate_test.go`: the handler's decisions, `effigentd gate` end to end in a child process
+    against a fake daemon (allowed → the real binary runs with its argv; every failure refuses), shims,
+    `quoteArgs` round trip through sh. `resolveReal` skips anything that is effigentd itself (another
+    spelling of the shim dir, an outer run's shims), which would otherwise re-exec the gate forever.
   - e2e §7 (self-protection, verified on Tetragon v1.7.1 / kernel 6.11) and §8 (direct exec blocked,
     non-agent allowed, gate fails closed, nested run refused).
   - Not live: the gate's allow path and the shims (unit tests only), break-glass end to end.
