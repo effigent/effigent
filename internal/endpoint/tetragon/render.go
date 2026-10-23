@@ -245,7 +245,7 @@ func Render(name string, rootPID uint32, r policy.Rule) ([]engine.Doc, error) {
 		if err != nil {
 			return nil, err
 		}
-		docs = append(docs, engine.Doc{Name: one.Metadata.Name, YAML: y})
+		docs = append(docs, engine.Doc{Name: one.Metadata.Name, YAML: y, LSM: len(part.lsm) > 0})
 	}
 	return docs, nil // empty: nothing to load; exec/exit events still flow
 }

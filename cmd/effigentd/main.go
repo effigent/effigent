@@ -260,7 +260,7 @@ func daemon() {
 	}
 
 	eng := engine.New(pol, raw, enf, emit, logger.Printf, *verbose)
-	eng.SetObserveOnly(observeOnly != "")
+	eng.SetObserveOnly(observeOnly, bpfLSMEnabled())
 	if cp != nil { // a break-glass window a previous run opened lasts until it ends
 		if id, until, ok := bgActiveWindow(*stateDir, time.Now()); ok {
 			eng.SetBreakGlass(ctx, id, until)

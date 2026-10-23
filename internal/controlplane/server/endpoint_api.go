@@ -125,10 +125,12 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endp
 		// stored as reported, but only the known fields
 		k.Sensor, k.Release, k.ObserveOnly = clip(k.Sensor, 32), clip(k.Release, 128), clip(k.ObserveOnly, 300)
 		b, _ := json.Marshal(k)
-		if err := s.Store.SetEndpointKernel(r.Context(), ep.ID, b); err != nil {
+		prev, err := s.Store.SetEndpointKernel(r.Context(), ep.ID, b)
+		if err != nil {
 			s.fail(w, err)
 			return
 		}
+		s.kernelReported(r.Context(), ep, prev, b)
 	}
 	if len(req.Hooks) > 0 {
 		if err := s.reportHooks(r.Context(), ep, req.Hooks); err != nil {
@@ -206,7 +208,11 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 			}
 		}
 		// unclean restarts and failed kernel policy loads (the batch answers now)
+		observeOnly := observeOnlyOf(ep.Kernel) != ""
 		for _, te := range tamperFromBatch(evs) {
+			if observeOnly && te.Kind == store.TamperPolicyFailure {
+				continue // expected on a kernel that can't block (observe_only.go)
+			}
 			go s.announceTamperEvent(context.WithoutCancel(r.Context()), ep, te)
 		}
 	}

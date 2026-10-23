@@ -239,10 +239,25 @@ func (s *Store) Heartbeat(ctx context.Context, id string, policyVersion int64, v
 	return err
 }
 
-// SetEndpointKernel records the kernel layer an endpoint reported.
-func (s *Store) SetEndpointKernel(ctx context.Context, id string, kernel json.RawMessage) error {
-	_, err := s.db.Exec(ctx, `update cp.endpoints set kernel = $2, kernel_reported_at = now() where id = $1`, id, kernel)
-	return err
+// SetEndpointKernel records the kernel layer an endpoint reported and returns
+// the previous report (nil the first time). The row is locked for the swap
+// (the SetEndpointHooks pattern), so of two concurrent heartbeats only one sees
+// a change.
+func (s *Store) SetEndpointKernel(ctx context.Context, id string, kernel json.RawMessage) (prev json.RawMessage, err error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err := tx.QueryRow(ctx, `select kernel from cp.endpoints where id = $1 for update`, id).Scan(&prev); errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `update cp.endpoints set kernel = $2, kernel_reported_at = now() where id = $1`, id, kernel); err != nil {
+		return nil, err
+	}
+	return prev, tx.Commit(ctx)
 }
 
 func (s *Store) ListEndpoints(ctx context.Context, tenant string) ([]Endpoint, error) {

@@ -77,12 +77,12 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
     fleet: 'Fleet (Jamf, Kandji, Intune): deploy the Effigent .pkg with a configuration profile for the ai.effigent domain that sets EnrollmentToken to a multi-use token.',
   },
   linux: {
-    run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). Without systemd (containers, sandboxes) both run as background processes.',
+    run: 'Run as a user with sudo. Without systemd (containers, sandboxes) both run as background processes. Kernel enforcement needs a 5.12+ kernel with BTF and BPF LSM (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023); without them the machine still installs, its kernel layer only observes and the agent hooks still enforce.',
     does: 'Installs Tetragon and effigentd as services, enrolls the machine and adds the Claude Code, Codex, Gemini CLI and Cursor hooks (--skip-hooks leaves them out). Agents are blocked in the kernel (BPF LSM): programs, files and network; the hooks add commands, MCP tools and approvals.',
     fleet: 'Fleet: run the same command from Ansible, cloud-init or your image build with a multi-use token.',
   },
   grokbot: {
-    run: 'Paste into Grok Bot (or run it in its terminal). Its computer is a Linux VM without systemd, so Tetragon and effigentd run as background processes; after the computer restarts, run the same command again (the machine stays enrolled). Needs a kernel with BTF.',
+    run: 'Paste into Grok Bot (or run it in its terminal). Its computer is a Linux VM without systemd, so Tetragon and effigentd run as background processes; after the computer restarts, run the same command again (the machine stays enrolled). Blocking needs a 5.12+ kernel with BTF and BPF LSM; without BPF LSM the Bot’s commands are only reported, without BTF they aren’t seen.',
     does: 'Installs Tetragon and effigentd and enrolls the computer. Commands the Bot starts through effigentd run --agent grok-bot -- <command> are blocked in the kernel, including every process they start: programs, files and network.',
     fleet: 'All of an account’s Bots share one computer, so it enrolls once and every Bot is covered by the same policy.',
   },
@@ -92,12 +92,12 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
     fleet: 'Fleet (Intune Win32 app): powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token <multi-use token>.',
   },
   kubernetes: {
-    run: 'Run with kubectl and helm pointed at the cluster. Set Machines to at least the number of nodes: each node enrolls once. Nodes need a kernel with BTF and BPF LSM, and privileged pods allowed. Already running Tetragon? Set the same two values on it instead of reinstalling.',
+    run: 'Run with kubectl and helm pointed at the cluster. Set Machines to at least the number of nodes: each node enrolls once. Privileged pods must be allowed. Kernel enforcement needs nodes with a 5.12+ kernel, BTF and BPF LSM: without BPF LSM a node only observes in the kernel; without BTF Tetragon can’t start and only agent hooks apply (pods that mount the hook socket). Already running Tetragon? Set the same two values on it instead of reinstalling.',
     does: 'Installs Tetragon from its official chart and effigentd as a DaemonSet on every node. Each node shows up here under its node name, and agents in any pod on it are blocked in the kernel: programs, files and network. A restarted pod stays the same machine.',
     fleet: 'GitOps (Argo CD, Flux): chart effigent/effigent from https://effigent.ai/charts; keep the token in your secret store as the effigent-enrollment Secret (key: token).',
   },
   docker: {
-    run: 'Run on the Docker host: Linux with a BTF + BPF LSM kernel, no systemd needed. A Compose file with the same settings is in the Kubernetes & containers docs.',
+    run: 'Run on the Docker host: Linux, no systemd needed. Kernel enforcement needs a 5.12+ kernel with BTF and BPF LSM: without BPF LSM the host only observes in the kernel; without BTF Tetragon can’t start and only agent hooks apply (containers that mount the hook socket). A Compose file with the same settings is in the Kubernetes & containers docs.',
     does: 'Starts Tetragon and effigentd as two privileged containers on the host’s network and process view and enrolls the host. Agents in any container on it, or on the host itself, are blocked in the kernel. The credentials stay in /var/lib/effigent, so a restart keeps the same machine.',
     fleet: 'Fleet: run the same two containers from your provisioning tool with a multi-use token; each host enrolls once.',
   },

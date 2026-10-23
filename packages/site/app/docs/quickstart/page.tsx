@@ -22,8 +22,7 @@ export default function Quickstart() {
         <H2>Before you start</H2>
         <ul className="doc-list">
           <li><b>Linux with systemd</b>, x86_64 or arm64. Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+ and Amazon Linux 2023 all work. Kubernetes or a Docker host without systemd: see <Link href="/docs/kubernetes">Kubernetes &amp; containers</Link>.</li>
-          <li><b>A kernel with BTF</b> (5.12 or newer; every distro above ships one). Check: <code>ls /sys/kernel/btf/vmlinux</code>.</li>
-          <li><b>BPF LSM</b> for kernel blocking. Check: <code>cat /sys/kernel/security/lsm</code> includes <code>bpf</code>. Step 4 shows how to turn it on.</li>
+          <li><b>For kernel enforcement:</b> a 5.12+ kernel with BTF (every distro above ships one) and BPF LSM. Check: <code>ls /sys/kernel/btf/vmlinux</code>, and <code>cat /sys/kernel/security/lsm</code> includes <code>bpf</code> (step 4 turns it on). Without them the machine still installs: the kernel layer only observes and reports, and the agent hooks still enforce.</li>
           <li><b>Root</b> (<code>sudo</code>) to install.</li>
           <li><b>Outbound HTTPS</b> to <code>{API_URL}</code> (policy and events), <code>effigent.ai</code> and <code>github.com</code> (downloads).</li>
           <li><b>macOS or Windows?</b> The same token works. On a Mac, run the same command as step 2: the installer sets up effigentd and the Claude Code, Codex and Gemini CLI hooks. On Windows, run <code>.\install.ps1 -Token eft_…</code> from <code>https://effigent.ai/install.ps1</code> in an elevated PowerShell (Intune-ready). Then continue at step 5.</li>
@@ -51,8 +50,8 @@ export default function Quickstart() {
         <CodeBlock title="sh — on the machine">{`curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token eft_5c1e…`}</CodeBlock>
         <p className="doc-p" style={{ marginTop: 14 }}>The installer:</p>
         <ol className="doc-list">
-          <li>checks the kernel (BTF, BPF LSM) and tells you exactly what&apos;s missing;</li>
-          <li>installs Tetragon v1.7.1 as the <code>tetragon</code> service, checksum-verified, listening only on a root-owned local socket;</li>
+          <li>checks the kernel (5.12+, BTF, BPF LSM) and tells you exactly what&apos;s missing for kernel enforcement; it installs either way;</li>
+          <li>installs Tetragon v1.7.1 as the <code>tetragon</code> service, checksum-verified, listening only on a root-owned local socket (skipped without BTF, which Tetragon needs: effigentd then runs with the agent hooks only);</li>
           <li>installs <code>effigentd</code> (checksum-verified) and enrolls the machine with your token;</li>
           <li>starts the <code>effigentd</code> service, which keeps enforcing across restarts and while the control plane is unreachable;</li>
           <li>prints <code>effigentd status</code>.</li>

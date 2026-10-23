@@ -23,6 +23,8 @@ export interface ApiInventoryAgent {
   enforced_by: string[] | null; // hooks | kernel
   note?: string;
   hook_state?: string;
+  /** Why the machine's kernel layer only observes (old kernel, no BTF, BPF LSM off). */
+  observe_only?: string;
 }
 
 export interface ApiMCPMachineUse {
@@ -81,6 +83,8 @@ export interface ApiInventory {
   since: string;
   generated_at: string;
   machines: number;
+  /** Enrolled machines whose kernel layer only observes (old kernel, no BTF, BPF LSM off). */
+  observe_only_machines?: number;
   agents: ApiInventoryAgent[];
   mcp_servers: ApiMCPServer[];
   unmanaged_people: ApiUnmanagedPerson[];
@@ -161,6 +165,8 @@ export interface ApiPostureReport {
     hooks_healthy: number;
     hook_problems: { endpoint_id: string; hostname: string; agents: string[] }[];
     by_os: Record<string, number>;
+    observe_only?: number;
+    observe_only_machines?: { endpoint_id: string; hostname: string; reason: string }[];
   };
   agents: {
     in_use: { agent: string; machines: number; people: number; events: number }[];

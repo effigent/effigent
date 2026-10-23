@@ -394,7 +394,9 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   `kernel: {sensor, bpf_lsm, tetragon_connected}` (`cpclient.Client.Kernel`, `kernelStatus` in `cmd/effigentd/main.go`;
   `tetragon_connected` goes false when the event stream drops, `tetragon.Client.OnDisconnect`). Machines shows a Linux
   machine as observe-only (BPF LSM off / Tetragon disconnected) or "not reported" (older build) and doesn't count it
-  as kernel-enforced. Not yet used by Inventory coverage, the posture report or alerts. A kernel policy reload keeps
+  as kernel-enforced. Inventory coverage doesn't use it (a kernel sensor still counts as `kernel`), but Inventory shows each
+  row's `observe_only` reason and `observe_only_machines`, and the posture report counts `machines.observe_only` (+ a list
+  with reasons, and a line in the report email). A kernel policy reload keeps
   each old document until its replacement loads (`engine.apply`), so a failed reload leaves the previous policy in place.
   Kernel enforcement needs 5.12 with BTF and `bpf` in the LSM list (the guard's `inode_setattr`/unlink/rename arguments).
   Short of that nothing refuses: `install.sh` warns and installs (no BTF and no Tetragon running → Tetragon skipped,
@@ -402,7 +404,13 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   layer observe-only (`engine.SetObserveOnly`: enforcing modes render as monitor, no self-protection guard; hooks unchanged)
   and the heartbeat's `kernel` adds `release` + `observe_only` (the reason, e.g. `kernel 5.4.0 older than 5.12; no BTF`),
   which Machines shows as "observe-only: <reason>" (also for a hooks-only Linux machine). `EFFIGENT_SKIP_KERNEL_CHECK` is
-  retired (accepted, ignored).
+  retired (accepted, ignored). Observe-only is a known state, not a tamper signal (`server/observe_only.go`): effigentd
+  skips the LSM documents when BPF LSM is off (`engine.Doc.LSM`) and reports observe-only load failures as `info`
+  (`observe-only: <reason>; …`), never high; the control plane raises no `policy_load_failed` for a machine whose stored
+  `kernel.observe_only` is set (older builds still send high), and audits `endpoint.observe_only` (actor via `system`,
+  no email, no webhook) once when a heartbeat enters the state (previous report swapped under a row lock in
+  `SetEndpointKernel`; first report included, leaving and re-entering audits again). A failure batch that lands before
+  an older build's first kernel heartbeat can still alert once.
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
   `offline_alert_interval_minutes`, `email_hooks`, `email_tamper`; people only; audited `endpoint_health.update`
   before/after). `GET /api/v1/endpoints`

@@ -22,6 +22,24 @@ func lsm(t *testing.T, r policy.Rule) string {
 	return ""
 }
 
+// TestDocsFlagLSM: the engine skips LSM documents on a kernel without BPF LSM,
+// so every document with lsmhooks must say so and the kprobe one must not.
+func TestDocsFlagLSM(t *testing.T) {
+	docs, err := Render("eff-t-1-g1", 1, policy.Rule{Mode: policy.Denylist, ExecDeny: []string{"/usr/bin/curl"},
+		SelfProtect: &policy.SelfProtect{Paths: []string{"/var/lib/effigent"}, KillPIDs: []uint32{1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range docs {
+		if has := strings.Contains(string(d.YAML), "lsmhooks:"); d.LSM != has {
+			t.Errorf("%s: LSM %v, lsmhooks in the YAML %v", d.Name, d.LSM, has)
+		}
+	}
+	if len(docs) < 3 {
+		t.Fatalf("%d docs", len(docs))
+	}
+}
+
 func TestDNSGuardRendersPortSelectors(t *testing.T) {
 	y := lsm(t, policy.Rule{Mode: policy.Denylist, NetDeny: []string{"93.184.215.14"}, DNSGuard: []string{"8.8.8.8"}})
 	for _, want := range []string{"93.184.215.14/32", "operator: SPort", "- \"853\"", "8.8.8.8/32", "- \"443\""} {
