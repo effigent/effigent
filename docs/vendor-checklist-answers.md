@@ -42,7 +42,8 @@ Where it finds the SQL:
 - **Inline:** `-c` / `-e` / `--eval` / `-q` flags. Clients covered: psql, pgcli, mysql, mariadb,
   sqlite3, duckdb, mongosh, redis-cli, sqlcmd, clickhouse, cockroach, snowsql, bq, cqlsh.
 - **Fed on stdin:** heredocs and here-strings, `< file.sql`, and `echo …` / `cat file` piped in.
-- **Files:** `-f file.sql`. An unreadable file counts as a write.
+- **Files:** `-f file.sql`. A file effigentd can't read (the agent's user can't, or it is over 512 KB) counts
+  as a write marked `unread`, and `destructive_sql` rules match it too.
 - **Inside other commands:** `docker exec … psql`, shell scripts, and package.json scripts
   (e.g. `npm run db:reset`).
 - **Migration tools:** Prisma, Rails/rake, Django, Alembic, Knex, Sequelize, Flyway,
@@ -99,7 +100,8 @@ How effigentd works out each target:
 - **AWS:** `--profile`, `AWS_PROFILE` (on the command or in the agent's environment), or the
   default profile. The account comes from `~/.aws/config` (`sso_account_id` or `role_arn`,
   following `source_profile`).
-- **Kubernetes:** `--context`, or the kubeconfig's `current-context`.
+- **Kubernetes:** `--context`, or the kubeconfig's `current-context` (with a `KUBECONFIG` list, the first
+  file that sets one, as kubectl merges them).
 - **gcloud:** `--project`, `CLOUDSDK_CORE_PROJECT`, or the active configuration.
 - **Azure:** `--subscription`, or the default subscription in `azureProfile.json`.
 - **Terraform:** the workspace, from `.terraform/environment` or `TF_WORKSPACE`.

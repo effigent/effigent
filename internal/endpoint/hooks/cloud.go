@@ -3,6 +3,7 @@ package hooks
 import (
 	"bufio"
 	"encoding/json"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -268,15 +269,26 @@ func (x *actx) kubeIdentity(args []string, env map[string]string, attrs map[stri
 	if c, ok := flagValue(args, flag); ok {
 		attrs["kube_context"] = c
 	} else {
-		cfg, _ := flagValue(args, "--kubeconfig")
-		if cfg == "" {
-			cfg, _, _ = strings.Cut(x.getenv(env, "KUBECONFIG"), ":")
+		var cfgs []string
+		if cfg, _ := flagValue(args, "--kubeconfig"); cfg != "" {
+			cfgs = []string{cfg}
+		} else {
+			// KUBECONFIG is a list merged in order: the first file that sets
+			// current-context wins, as in kubectl.
+			for _, c := range strings.Split(x.getenv(env, "KUBECONFIG"), string(os.PathListSeparator)) {
+				if c != "" && len(cfgs) < 16 {
+					cfgs = append(cfgs, c)
+				}
+			}
 		}
-		if cfg == "" {
-			cfg = x.home + "/.kube/config"
+		if len(cfgs) == 0 {
+			cfgs = []string{x.home + "/.kube/config"}
 		}
-		if m := currentContextRE.FindStringSubmatch(readUserText(x.in, resolveIn(cfg, x.cwd, x.home))); m != nil {
-			attrs["kube_context"] = m[1]
+		for _, cfg := range cfgs {
+			if m := currentContextRE.FindStringSubmatch(readUserText(x.in, resolveIn(cfg, x.cwd, x.home))); m != nil {
+				attrs["kube_context"] = m[1]
+				break
+			}
 		}
 	}
 	if ns, ok := flagValue(args, "-n", "--namespace"); ok {

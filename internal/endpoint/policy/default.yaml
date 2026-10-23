@@ -129,7 +129,7 @@ mcp_servers:
 #     pulumi_stacks: ["*/prod"]
 #     hosts: ["*.prod.internal", 10.20.0.0/16]   # databases, hosts named in commands
 #     mcp_servers: [prod-db]
-#     match_unknown: false              # true: a cloud/database action with no known target counts as prod
+#     match_unknown: true               # a cloud/database action with no known target counts as prod (false: only named targets)
 
 # Pin MCP servers to their definition in the agents' MCP configs: sha256 of
 # command, args, cwd, URL and env/header names (never values), reported per

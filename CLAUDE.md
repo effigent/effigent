@@ -402,7 +402,8 @@ rules exfil_sequence / untrusted_then_risky). Every hook event carries them (`ac
 or not; `engine.scrub` redacts their targets.
 - Read from the command line, the scripts it runs (`bash x.sh`, `./x.sh`, `source`, package.json
   scripts incl. pre/post, `yarn <script>`; depth 2; `in` names the script), heredocs / here-strings
-  / `< file` / piped `echo`/`cat` feeding a DB client, `.sql` files, `docker exec` inner commands.
+  / `< file` / piped `echo`/`cat` feeding a DB client, `.sql` files (one it can't read, or > 512 KB, is
+  `sql_write` with `unread`, matched by `destructive_sql` rules too), `docker exec` inner commands.
   Script commands also go through exec/file/command deny and approve lists.
 - Targets: AWS profile (`--profile`, `AWS_PROFILE`, `~/.aws/config` → account via `sso_account_id`
   / `role_arn`, `source_profile` followed), kube context (`--context` / kubeconfig
@@ -411,7 +412,8 @@ or not; `engine.scrub` redacts their targets.
   `TF_WORKSPACE`), Pulumi stack, DB host (flags, URLs, `PGHOST`…, client default localhost),
   pushed branch (refspec, else `.git/HEAD`). Policy top-level `environments: {prod: {aws_profiles,
   aws_accounts, kube_contexts, gcloud_projects, azure_subscriptions, terraform_workspaces,
-  pulumi_stacks, hosts, mcp_servers, match_unknown}}`; an entry `kind@prod` matches only actions
+  pulumi_stacks, hosts, mcp_servers, match_unknown}}` (templates and docs set `match_unknown: true`; the
+  field itself defaults to false); an entry `kind@prod` matches only actions
   whose target is in it. `access` covers every action on a target and must name an environment.
   Console: Audit → Agent events shows the actions' environments and identity attrs (AWS profile /
   account, kube context, gcloud project, Azure subscription, Terraform workspace, Pulumi stack, DB host;

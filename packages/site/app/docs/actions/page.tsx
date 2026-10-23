@@ -71,6 +71,7 @@ export default function Actions() {
     terraform_workspaces: [prod]
     hosts: [db.prod.internal]
     mcp_servers: [supabase-prod]
+    match_unknown: true   # no profile, context or host worked out: counts as prod
 
 defaults:
   mode: denylist
