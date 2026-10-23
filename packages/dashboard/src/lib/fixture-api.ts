@@ -9,12 +9,21 @@ import { ENDPOINTS, EVENTS } from '@/data.ts';
 import { createPricingLeaksFixture } from './pricing-leaks-fixture.ts';
 import { createPeopleFixture } from './people-fixture.ts';
 import { createInventoryFixture } from './inventory-fixture.ts';
-import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAuditEntry, type ApiBreakGlassCode, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
+import { API_BASE, ApiError, type Api, type ApiApprovalRules, type ApiAction, type ApiAuditEntry, type ApiBreakGlassCode, type ApiEndpoint, type ApiEndpointHealth, type ApiEvent, type ApiEventRetention, type ApiHookReport, type ApiMe, type ApiNotifications, type ApiPolicyVersion, type ApiProposal } from './api.ts';
+
+/** Sample machine health: hooks and offline state (demoHooks), and the Linux kernel layer:
+ *  raj-ws boots without bpf in lsm=, ops-runner-02 lost Tetragon, dan-dev-vm's effigentd
+ *  doesn't report it. */
+function demoHealth(id: string, platform: string, ver: string, iso: (minAgo: number) => string): Partial<ApiEndpoint> {
+  const hooks = demoHooks(id, platform, ver, iso);
+  if (platform !== 'linux' || id === 'ep-dan-vm') return hooks;
+  return { ...hooks, kernel: { sensor: 'tetragon', bpf_lsm: id !== 'ep-raj-ws', tetragon_connected: id !== 'ep-ops-02' }, kernel_reported_at: iso(0.1) };
+}
 
 /** Sample hook reports and offline state: emma-mba's Claude Code hook was removed, a user turned
  *  Gemini CLI's hook off on alex-mbp, noa-mbp was stopped through launchd, ci-runner-03 went
  *  silent, and mike-mbp runs an effigentd from before hook reporting. */
-function demoHealth(id: string, platform: string, ver: string, iso: (minAgo: number) => string): Partial<ApiEndpoint> {
+function demoHooks(id: string, platform: string, ver: string, iso: (minAgo: number) => string): Partial<ApiEndpoint> {
   const ok = (file: string, present = true) => ({ present, state: 'installed' as const, file });
   const mac = (over: Partial<ApiHookReport['agents']> = {}): ApiHookReport => ({
     sensor: 'hooks', expected: ['claude', 'codex', 'gemini', 'cursor'],
@@ -64,6 +73,14 @@ agents:
   - name: codex
     binary_names: [codex]
 `;
+
+/** What effigentd's hooks would read from a demo command (cloud/DB targets, as in hooks/cloud.go, sql.go). */
+function demoActions(target: string | undefined): ApiAction[] | undefined {
+  if (target?.startsWith('kubectl delete')) {
+    return [{ kind: 'cloud_destroy', target: 'kubectl delete ns', attrs: { kube_context: 'arn:aws:eks:us-east-1:412398765012:cluster/prod-payments', kube_namespace: 'payments-canary' }, envs: ['prod'] }];
+  }
+  return undefined;
+}
 
 const AGO_MIN: Record<string, number> = {};
 function minutesAgo(label: string): number {
@@ -128,13 +145,13 @@ export function createFixtureApi(): Api {
   endpoints.push({ id: '00000099-dem0-4000-8000-c10udc0de000', hostname: 'acme/web', os: 'cloud', arch: '', version: '', kind: 'cloud',
     vendor: 'copilot', enrolled_at: iso(60 * 24 * 3), last_seen: iso(60 * 5), policy_version: 3, revoked: false });
   const breakGlass: Omit<ApiBreakGlassCode, 'status'>[] = [];
-  let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, offline_alert_interval_minutes: 0, email_hooks: true, default_minutes: 5, min_minutes: 2,
-    tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing'], saved: false };
+  let endpointHealth: ApiEndpointHealth = { offline_after_minutes: 5, email_offline: true, offline_alert_interval_minutes: 0, email_hooks: true, email_tamper: true, default_minutes: 5, min_minutes: 2,
+    tick_seconds: 60, emails: notifications.emails, email_available: true, webhook_events: ['endpoint.offline', 'endpoint.online', 'endpoint.hooks_missing', 'endpoint.tamper'], saved: false };
   const epId = new Map(ENDPOINTS.map((e, i) => [e.id, endpoints[i].id]));
   const events: ApiEvent[] = EVENTS.filter((e) => e.type !== 'approval' && e.endpoint && e.agentType).map((e, i) => ({
     id: 1000 - i, endpoint_id: epId.get(e.endpoint!) ?? endpoints[0].id, time: iso(minutesAgo(e.ago)), type: e.type,
     severity: e.severity, agent: e.agentType!,
-    body: { type: e.type, severity: e.severity, agent: e.agentType!, target: e.target, rule: e.rule, via: e.via, mode: e.mode },
+    body: { type: e.type, severity: e.severity, agent: e.agentType!, target: e.target, rule: e.rule, via: e.via, mode: e.mode, actions: demoActions(e.target) },
   }));
   const audit: ApiAuditEntry[] = history.slice().reverse().map((h, i) => ({
     seq: i + 1, at: h.created_at, actor: h.created_by, actor_via: 'clerk', actor_role: 'admin', action: 'policy.publish', target: `v${h.version}`,
@@ -270,7 +287,7 @@ export function createFixtureApi(): Api {
         return delay({ ok: true }) as Promise<T>;
       }
       if (method === 'PUT' && path === '/endpoint-health') {
-        const b = (body ?? {}) as { offline_after_minutes?: number; email_offline?: boolean; offline_alert_interval_minutes?: number; email_hooks?: boolean };
+        const b = (body ?? {}) as { offline_after_minutes?: number; email_offline?: boolean; offline_alert_interval_minutes?: number; email_hooks?: boolean; email_tamper?: boolean };
         if (b.offline_after_minutes !== undefined && !(b.offline_after_minutes >= 2 && b.offline_after_minutes <= 10080)) {
           return Promise.reject(new ApiError(400, 'offline_after_minutes must be 2 to 10080'));
         }

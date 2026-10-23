@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -106,11 +107,28 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endp
 		Version       string `json:"version"`
 		// effigentd's hook state, sent when it changed (older builds never send it)
 		Hooks json.RawMessage `json:"hooks"`
+		// the kernel layer, with every heartbeat (older builds never send it)
+		Kernel *struct {
+			Sensor            string `json:"sensor"`
+			BPFLSM            *bool  `json:"bpf_lsm"`
+			TetragonConnected *bool  `json:"tetragon_connected"`
+			Release           string `json:"release,omitempty"`      // uname -r
+			ObserveOnly       string `json:"observe_only,omitempty"` // why the kernel can't block (old kernel, no BTF, BPF LSM off)
+		} `json:"kernel"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req)
 	if err := s.Store.Heartbeat(r.Context(), ep.ID, req.PolicyVersion, clip(req.Version, 64)); err != nil {
 		s.fail(w, err)
 		return
+	}
+	if k := req.Kernel; k != nil {
+		// stored as reported, but only the known fields
+		k.Sensor, k.Release, k.ObserveOnly = clip(k.Sensor, 32), clip(k.Release, 128), clip(k.ObserveOnly, 300)
+		b, _ := json.Marshal(k)
+		if err := s.Store.SetEndpointKernel(r.Context(), ep.ID, b); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	if len(req.Hooks) > 0 {
 		if err := s.reportHooks(r.Context(), ep, req.Hooks); err != nil {
@@ -171,12 +189,14 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 			if e.Type == "daemon_stop" {
 				// the offline detector tells "stopped" from "went silent" by it
 				var body struct {
-					Target string `json:"target"` // the signal
-					Rule   string `json:"rule"`   // how it was run: systemd, launchd, windows-service, terminal
-					OSUser string `json:"os_user"`
+					Target   string `json:"target"` // the signal
+					Rule     string `json:"rule"`   // how it was run: systemd, launchd, windows-service, terminal
+					OSUser   string `json:"os_user"`
+					Shutdown string `json:"shutdown"` // system | no | unknown (the tamper alert needs "no")
 				}
 				_ = json.Unmarshal(e.Body, &body)
-				b, _ := json.Marshal(stopInfo{Signal: clip(body.Target, 40), Via: clip(body.Rule, 40), OSUser: clip(body.OSUser, 120)})
+				b, _ := json.Marshal(stopInfo{Signal: clip(body.Target, 40), Via: clip(body.Rule, 40), OSUser: clip(body.OSUser, 120),
+					Shutdown: clip(body.Shutdown, 20)})
 				if err := s.Store.RecordEndpointStop(r.Context(), ep.ID, e.Time, b); err != nil {
 					s.Logf("endpoint %s: record stop: %v", ep.ID, err)
 				}
@@ -184,6 +204,10 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request, ep store.Endpoin
 			if e.Type == "break_glass_start" {
 				s.recordBreakGlassUse(r.Context(), ep, e.Time, e.Body)
 			}
+		}
+		// unclean restarts and failed kernel policy loads (the batch answers now)
+		for _, te := range tamperFromBatch(evs) {
+			go s.announceTamperEvent(context.WithoutCancel(r.Context()), ep, te)
 		}
 	}
 	_ = s.Store.Heartbeat(r.Context(), ep.ID, ep.PolicyVersion, "")

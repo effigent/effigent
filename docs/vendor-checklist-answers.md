@@ -42,7 +42,8 @@ Where it finds the SQL:
 - **Inline:** `-c` / `-e` / `--eval` / `-q` flags. Clients covered: psql, pgcli, mysql, mariadb,
   sqlite3, duckdb, mongosh, redis-cli, sqlcmd, clickhouse, cockroach, snowsql, bq, cqlsh.
 - **Fed on stdin:** heredocs and here-strings, `< file.sql`, and `echo …` / `cat file` piped in.
-- **Files:** `-f file.sql`. An unreadable file counts as a write.
+- **Files:** `-f file.sql`. A file effigentd can't read (the agent's user can't, or it is over 512 KB) counts
+  as a write marked `unread`, and `destructive_sql` rules match it too.
 - **Inside other commands:** `docker exec … psql`, shell scripts, and package.json scripts
   (e.g. `npm run db:reset`).
 - **Migration tools:** Prisma, Rails/rake, Django, Alembic, Knex, Sequelize, Flyway,
@@ -99,7 +100,8 @@ How effigentd works out each target:
 - **AWS:** `--profile`, `AWS_PROFILE` (on the command or in the agent's environment), or the
   default profile. The account comes from `~/.aws/config` (`sso_account_id` or `role_arn`,
   following `source_profile`).
-- **Kubernetes:** `--context`, or the kubeconfig's `current-context`.
+- **Kubernetes:** `--context`, or the kubeconfig's `current-context` (with a `KUBECONFIG` list, the first
+  file that sets one, as kubectl merges them).
 - **gcloud:** `--project`, `CLOUDSDK_CORE_PROJECT`, or the active configuration.
 - **Azure:** `--subscription`, or the default subscription in `azureProfile.json`.
 - **Terraform:** the workspace, from `.terraform/environment` or `TF_WORKSPACE`.
@@ -128,7 +130,9 @@ SDK calls from code aren't seen.
   git dependencies in package.json. Every `--extra-index-url` counts, because an extra index is
   how dependency confusion works.
 - `package_scripts`: npm/yarn installs without `--ignore-scripts`. pnpm ≥ 10 and bun already
-  block dependency scripts by default.
+  block dependency scripts by default. Python installs (pip, uv, uvx, pipx, poetry/pdm/rye add)
+  unless wheels only (`--only-binary=:all:`, uv `--no-build`, `PIP_ONLY_BINARY`, `UV_NO_BUILD`):
+  building an sdist runs its `setup.py` / build backend.
 - `package_install`: any install by name.
 
 Package managers covered:
@@ -162,7 +166,8 @@ Package managers covered:
 **New:** pushes are read refspec by refspec:
 - `protected_push`: a push to a branch in `protected_branches` (default main, master, trunk,
   prod, production, release*). Covers `HEAD:main`, a bare `git push` (branch read from
-  `.git/HEAD`), `--all` and `--mirror`, and `gh pr merge` (noting `--admin`).
+  `.git/HEAD`, sent where `push.default` says: `upstream` follows `branch.<name>.merge`, `matching`
+  counts as protected), `--all` and `--mirror`, and `gh pr merge` (noting `--admin`).
 - `force_push`: `-f`, `--force-with-lease`, `+refspec`, `--mirror`, in any position.
 - `branch_delete`: `--delete`, `:branch`, `branch -D`.
 - `history_rewrite`: `reset --hard`, `clean -f`, `filter-branch` / `filter-repo`,
@@ -176,8 +181,9 @@ These are also found inside scripts and npm scripts. Example policy:
 
 **Limits:**
 - git aliases and git run from other programs aren't followed.
-- The branch for a bare push is read from `.git/HEAD`, so the push's upstream configuration
-  isn't consulted.
+- For a bare push, `push.default` and `branch.<name>.merge` are read from `git -c`, the
+  repository's config and `~/.gitconfig` / `~/.config/git/config`; `remote.<name>.push` refspecs
+  and config includes aren't.
 - Server-side branch protection remains the backstop.
 
 **Where:** `hooks/git.go`.
@@ -209,10 +215,23 @@ Cursor's docs. Open questions:
   in the last 30 days.
 - **Self-approval is refused by default, admins included.** A refused attempt is audited as
   `approval.self_approval_refused`. Each routing rule has this as a setting, on by default.
+- **No benefit of the doubt (new):** where a rule keeps the requester out, an approval is
+  refused when Effigent can't prove the approver isn't the requester:
+  - nobody is known behind the request (no machine owner, nothing mapped in People):
+    `requester_unknown`, with a message naming the machine and OS user and what to fix;
+  - the requester is known by email and the approver's email isn't known (or by console
+    account and the approver's isn't): `requester_unverified`.
+  The routing test (Team & Approvers) warns about a machine whose requester is unknown.
+- **Only people approve (new):** API keys and the admin token can deny a request, never
+  approve one (`not_a_person`). People approve in the console, with the approval email's
+  signed buttons (the recipient's address, which must be in the routed group), or with the
+  workspace's Effigent Slack app (Slack's verified profile email, checked against the console's
+  admins or the group). An automation that posts its own Slack/Teams buttons (the Windmill
+  flow) can relay a deny, but approvals go through one of those three.
 - **Two approvers:** a routing rule (e.g. one matching prod) can require two different people.
   - Any single deny denies the request.
   - An admin stepping in counts as one vote, never a bypass.
-  - API keys and the admin token never count toward a two-person quorum.
+  - API keys and the admin token never approve at all.
   - One person can't vote twice through two channels (console, email, Slack).
   - The agent is let through only at quorum. The console (and Slack, where enabled) shows
     "1 of 2 approved" meanwhile.
@@ -220,9 +239,13 @@ Cursor's docs. Open questions:
 
 **Limits:**
 - The OS user and git emails are what the machine reports, not verified.
-- Matching the requester against a console user's emails needs Clerk's backend key; without it
-  only user ids and the email/Slack address match.
-- When one approver is enough, API keys aren't checked as the requester.
+- Matching the requester against a console user's emails needs Clerk's backend key (or, self
+  hosted, the console users' sign-ins); without it an approver known only by console account is
+  refused on requests whose requester is known by email, until they're added with their email
+  to an approver group.
+- **Rollout:** with the requester excluded by default, a workspace whose machines have no owner
+  and no People mapping can't approve anything until owners are set (or a rule lets requesters
+  approve their own requests).
 
 **Where:** `internal/controlplane/server` (`castVote`), migration 012. DB test
 `TestTwoPersonApproval`.
@@ -234,7 +257,9 @@ Cursor's docs. Open questions:
   exception, or changing a machine's owner or teams. Each is validated first; a policy also
   gets a dry-run compile.
 - **Approving:** another admin or security admin must approve. The author can't approve their
-  own proposal, nor can the person who created the API key it came from. API keys never approve.
+  own proposal, nor can the person who created the API key it came from. API keys and the admin
+  token never approve or reject (new for the admin token): a second admin signed in to the
+  console must.
 - **Stale proposals:** a policy proposal written against an older version is marked
   superseded instead of overwriting a newer policy.
 - **Turning it off** is itself a proposal. There is no emergency bypass.
@@ -473,11 +498,15 @@ audited.
 - **Commands that print secrets:** `gh auth token`, `aws configure get` / `export-credentials` /
   `secretsmanager get-secret-value`, `gcloud auth print-access-token`, `az account get-access-token`,
   `security find-*-password`, vault, op, doppler, bw, pass, and `kubectl get secret -o`.
+- **Credential helpers:** `git credential fill`, `git credential-<helper> get` (osxkeychain,
+  libsecret, manager, store…), and `docker-credential-* get` / `list`.
 - **Reading the whole environment:** `env`, `printenv`, `export -p`.
 - **Secret variables on the command line:** `$GITHUB_TOKEN`-style.
 
 **Secrets in environment variables:** the hook forwards which key variables are set
-(`ANTHROPIC_API_KEY: set`), never their values. Redaction now strips `NAME_TOKEN=…`-style values
+(`ANTHROPIC_API_KEY: set`), and so is any variable named like a secret (`DB_PASSWORD`,
+`STRIPE_API_KEY`…: TOKEN, SECRET, PASSWORD, PASSWD, API_KEY, PRIVATE_KEY, CREDENTIAL; up to 64),
+by name only, never their values. Redaction now strips `NAME_TOKEN=…`-style values
 from everything sent (see 28).
 
 ### 18. Break-glass during an outage: **Yes** (new)
@@ -635,8 +664,21 @@ against a 30-day baseline. A new agent learns silently for 7 days first. Optiona
 
 ### 25. EDR / eBPF coexistence, footprint, MDM: **Partly**
 - **Linux:** uses Tetragon's BPF LSM. Several BPF LSM programs can coexist, and we have no
-  reports of conflicts with Falcon or Wiz sensors, but we haven't tested next to them. A pilot
+  reports of conflicts with Falcon or Wiz sensors, but we haven't tested next to them
+  (`footprint.md` §3.3 now has a Wiz row: an eBPF sensor whose hooks aren't public). A pilot
   machine with your sensor is the honest next step.
+- **Kernel enforcement needs:** 5.12 with BTF and `bpf` in the active LSM list (Ubuntu needs
+  `lsm=…,bpf` and a reboot). On anything older, without BTF or without BPF LSM the installer
+  warns and installs anyway: the kernel layer runs observe-only (alerts, no blocking, no
+  self-protection) and the agent hooks still enforce. Without BTF Tetragon isn't installed and
+  effigentd runs with the hooks only.
+- **Kernel layer health is visible:** every heartbeat reports `bpf_lsm`, whether Tetragon is
+  connected, the kernel release and why the kernel layer is observe-only; Machines flags such a
+  machine with that reason and doesn't count it as kernel-enforced. Inventory, the posture
+  report and alerts don't use it yet.
+- **Failed reload:** a kernel policy that fails to load leaves the previous version loaded
+  instead of removing it. A machine whose first policy never loads still runs unenforced
+  (there is no fail-closed option that kills the agent yet).
 - **macOS:** effigentd ships as an MDM-deployable pkg.
 - **Windows:** effigentd ships as an install.ps1 installer.
 - **Footprint (measured 2026-10-21, `docs/compliance/footprint.md`, script
@@ -652,14 +694,19 @@ against a 30-day baseline. A new agent learns silently for 7 days first. Optiona
 ### 26. Employee monitoring and privacy: **Partly**
 - **New masking:** policy `redact:` adds workspace patterns (customer ids, internal hostnames)
   and an optional PII set (email, phone, card numbers, IBAN). It runs on the machine before
-  anything leaves it, on top of the secret rules. Applies to commands, paths, messages, approval
-  summaries and reasons.
+  anything leaves it, on top of the secret rules. Applies to commands, targets, messages,
+  approval summaries and reasons, and (new) to working directories, binary and transcript paths,
+  the approval request's working directory, the actions' attributes (cloud profile and account,
+  cluster, project, DB host…) and the agent environment names reported at session start
+  (`engine.scrub`; tests `TestScrubMasksPathsAttrsAndEnv`, `TestApprovalRequestIsMasked` check
+  the JSON that is sent).
 - **DPA:** draft in `docs/compliance/dpa-template.md` (GDPR Art. 28, Israeli data-security
   rules). Marked as needing legal review.
 - **Employee-monitoring guidance:** `docs/compliance/employee-monitoring.md`: exactly what is
   and isn't collected, an employee notice template, EU (DPIA, works councils) and Israel
   sections. Not legal advice; needs review.
-- **Known gaps:** the identity fields (OS user, git email, hostname) can't be masked, and one
+- **Known gaps:** the identity fields (OS user, git email, hostname) and MCP server names can't
+  be masked (People mapping and MCP pins match on them), and one
   person's events can't be erased before retention ends (the event log is append-only).
 - **Data minimisation:** what's collected per user is listed in
   `docs/security/architecture-and-data-flow.md`.
@@ -690,13 +737,14 @@ doesn't reach files people already downloaded or data webhook receivers hold.
   - **Sign-in:** your OIDC provider (Okta, Entra ID, Keycloak, …) instead of Clerk.
     - Roles come from your groups, or from listed admin emails.
     - Only verified emails are used.
-  - **Private CA:** effigentd accepts one (`enroll --ca-file`).
+  - **Private CA:** effigentd accepts one: `install.sh --ca-file ca.pem` (Linux, macOS),
+    `install.ps1 -CaFile ca.pem` (Windows) or `effigentd enroll --ca-file`.
   - **Archive:** any S3-compatible store.
   - **Limits:**
     - One workspace per install.
     - No SCIM: the member list is the people who signed in during the last 30 days.
-    - The installer doesn't pass the CA file yet, so enrollment with a private CA is a manual
-      step for now.
+    - macOS: the installer's CA file is used by the package's post-install from the next
+      `.pkg` release on; until then enroll by hand with `effigentd enroll --ca-file`.
   - **Verified:** on kind with Dex standing in for the IdP (19 checks). The checks cover:
     - sign-in through the console
     - the role read from the token
@@ -713,9 +761,11 @@ doesn't reach files people already downloaded or data webhook receivers hold.
   - `user:pass@` in URLs
   - bearer and basic tokens
   - private-key blocks
+  - SQL `PASSWORD '…'` / `IDENTIFIED BY '…'`
 
-  Heredoc bodies are part of the command text, so they're covered. Plus the workspace masks
-  from 26.
+  Heredoc and here-string bodies are part of the command text, so they're covered
+  (`TestRedactsHeredocBodies`: tokens, passwords, a private key and a workspace mask inside
+  heredocs). Plus the workspace masks from 26.
 
 ---
 

@@ -198,7 +198,12 @@ export function createInventoryFixture(now: number) {
         by_kind: anomalies.filter((a) => Date.parse(a.seen_at) >= from.getTime()).reduce<Record<string, number>>((m, a) => ({ ...m, [a.kind]: (m[a.kind] ?? 0) + 1 }), {}) },
       spend: { connected: ['anthropic', 'copilot', 'cursor'], monthly_cents: 1_284_000, potential_savings_cents: 214_500, at_risk_cents: 96_000,
         open_leaks: { unused_seat: 6, duplicate_tool: 2, shadow_spend: 3, runaway_cost: 2 }, found_in_period: n(5), resolved_in_period: n(3), resolved_savings_cents: n(61_000) },
-      break_glass: null,
+      break_glass: {
+        issued: days >= 30 ? 2 : 1, issued_all_machines: days >= 30 ? 1 : 0, revoked: 0, expired_unused: days >= 30 ? 1 : 0,
+        activations: 1, machines: 1, unknown_codes: 0,
+        uses: [{ at: new Date(new Date(now).getTime() - 4 * day * 60_000).toISOString(), id: '9f3c2a71d0b84e15', endpoint_id: 'ep-alex-mbp',
+          hostname: 'alex-mbp', os_user: 'alex', reason: 'Control plane unreachable during the VPN outage; release hotfix', created_by: 'Lena Kim' }],
+      },
       notes: [],
     };
   };

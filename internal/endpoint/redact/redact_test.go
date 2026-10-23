@@ -33,6 +33,7 @@ func TestRedactsWhatGitleaksMisses(t *testing.T) {
 		`tool --password hunter22 --user x`:                    "--password [REDACTED:",
 		`curl -H "Authorization: Bearer abcdefghijklmnop1234"`: "Bearer [REDACTED:",
 		"key: -----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END": "[REDACTED:private-key]",
+		`mysql -e "CREATE USER app IDENTIFIED BY 'pw-12345'"`:  "IDENTIFIED BY [REDACTED:sql-password]",
 	}
 	for in, want := range cases {
 		if out := String(in); !strings.Contains(out, want) {
@@ -63,5 +64,48 @@ func TestConfigure(t *testing.T) {
 	}
 	if err := Configure([]Rule{{"empty", `x*`}}, false); err == nil {
 		t.Error("pattern matching empty text accepted")
+	}
+}
+
+// A heredoc body is part of the command text the hook and the kernel report,
+// so the same rules mask it: tokens, passwords, keys and the workspace's masks.
+func TestRedactsHeredocBodies(t *testing.T) {
+	defer Configure(nil, false)
+	if err := Configure([]Rule{{"customer", `(?i)acme-?corp`}}, false); err != nil {
+		t.Fatal(err)
+	}
+	ghp := "ghp_" + "Zq8RkT3vW1yX6bN0mP4sL7dF2gH5jK9cV3xQ"
+	stripe := "sk_" + "live_" + "51Hx9aQ2eZvKYlo2C8r7Tq3bN" // split so secret scanners skip this fake key
+	cmd := "cat > .env <<EOF\n" +
+		"GITHUB_TOKEN=" + ghp + "\n" +
+		"DB_PASSWORD=Tr0ub4dor-horse-staple\n" +
+		"STRIPE_SECRET_KEY=" + stripe + "\n" +
+		"LOG_LEVEL=debug\n" +
+		"EOF\n" +
+		"cat > config.yml <<-'YAML'\n" +
+		"\tdatabase:\n" +
+		"\t  password: hunter2-prod-db\n" +
+		"\t  client: acme-corp\n" +
+		"\tYAML\n" +
+		"cat > deploy.pem <<KEY\n" +
+		"-----BEGIN RSA PRIVATE KEY-----\n" +
+		"MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n" +
+		"VTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u+qKhbwKfBstIs+bMY2Zkp18gnTxK\n" +
+		"-----END RSA PRIVATE KEY-----\n" +
+		"KEY\n" +
+		"psql \"$URL\" <<<\"ALTER USER app WITH PASSWORD 'n0t-in-the-logs'\"\n"
+	out := String(cmd)
+	for _, secret := range []string{ghp, "Tr0ub4dor-horse-staple", stripe, "hunter2-prod-db",
+		"acme-corp", "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun", "n0t-in-the-logs"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("%q left in:\n%s", secret, out)
+		}
+	}
+	// targeted, not blanket: the commands, delimiters and harmless lines stay
+	for _, keep := range []string{"cat > .env <<EOF", "LOG_LEVEL=debug", "cat > config.yml <<-'YAML'", "\tYAML\n",
+		"cat > deploy.pem <<KEY", "\nKEY\n", "[REDACTED:customer]", "[REDACTED:private-key]"} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("%q missing from:\n%s", keep, out)
+		}
 	}
 }

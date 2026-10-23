@@ -44,6 +44,20 @@ func bpfLSMEnabled() bool {
 	return err == nil && strings.Contains(","+strings.TrimSpace(string(b))+",", ",bpf,")
 }
 
+// kernelStatus is what the heartbeat says about the kernel layer: without
+// BPF LSM, or with Tetragon unreachable, a Linux machine only observes;
+// observeOnly says why the kernel can't block (kernelfloor.go), "" when it can.
+func kernelStatus(sensor, observeOnly string) map[string]any {
+	k := map[string]any{"sensor": sensor, "bpf_lsm": bpfLSMEnabled(), "tetragon_connected": tgConnected.Load()}
+	if rel := kernelRelease(); rel != "" {
+		k["release"] = rel
+	}
+	if observeOnly != "" {
+		k["observe_only"] = observeOnly
+	}
+	return k
+}
+
 func main() {
 	// Shim form (FR Q3): a symlink on `effigentd run`'s PATH, named for a gated
 	// binary, points here. When invoked under any name but "effigentd" we are a
@@ -77,8 +91,10 @@ func main() {
 			return
 		case "install-gateway":
 			installGatewayCmd(os.Args[2:])
+			return
 		case "cloud-setup":
 			cloudSetupCmd(os.Args[2:])
+			return
 		case "break-glass":
 			breakGlassCmd(os.Args[2:])
 			return
@@ -184,6 +200,12 @@ func daemon() {
 	}
 
 	hooksOnly := *sensor == "hooks"
+	// An old kernel (< 5.12), no BTF or no BPF LSM: the kernel layer only
+	// observes (nothing that overrides a syscall is loaded); hooks still decide.
+	observeOnly := kernelObserveOnly()
+	if observeOnly != "" {
+		logger.Printf("kernel layer observe-only (kernel enforcement off): %s; agent hooks still enforce", observeOnly)
+	}
 	var tg *tetragon.Client
 	var enf engine.Enforcer // stays nil in hooks mode: nothing to load into a kernel
 	if !hooksOnly {
@@ -192,6 +214,7 @@ func daemon() {
 			logger.Fatal(err)
 		}
 		defer tg.Close()
+		tg.OnDisconnect = func() { tgConnected.Store(false) }
 		enf = tg
 	}
 
@@ -219,18 +242,31 @@ func daemon() {
 		if runUser != "" {
 			msg += ", run by " + runUser
 		}
+		// part of a shutdown or reboot? (the control plane alerts only when it isn't)
+		shutdown := stopShutdown(runtime.GOOS, why, systemdState())
+		if shutdown == shutdownSystem {
+			msg += ", the machine is shutting down"
+		}
 		emit(event.Event{Time: time.Now(), Type: event.DaemonStop, Severity: "high", Target: why, Rule: via, OSUser: runUser,
-			Message: msg + ")"})
+			Shutdown: shutdown, Message: msg + ")"})
 		logger.Printf("stopping (%s)", why)
 		stop()
 	}()
 	if cp != nil {
 		if prev := startMarker(*stateDir); prev != nil {
-			emit(event.Event{Time: time.Now(), Type: event.DaemonUncleanRestart, Severity: "high", Rule: via, Message: uncleanMessage(prev)})
+			emit(event.Event{Time: time.Now(), Type: event.DaemonUncleanRestart, Severity: "high", Rule: via,
+				Shutdown: uncleanShutdown(bootTime(), prev), Message: uncleanMessage(prev)})
 		}
 	}
 
 	eng := engine.New(pol, raw, enf, emit, logger.Printf, *verbose)
+	eng.SetObserveOnly(observeOnly != "")
+	if cp != nil { // a break-glass window a previous run opened lasts until it ends
+		if id, until, ok := bgActiveWindow(*stateDir, time.Now()); ok {
+			eng.SetBreakGlass(ctx, id, until)
+			logger.Printf("break-glass window %s restored, active until %s", id, until.UTC().Format(time.RFC3339))
+		}
+	}
 	var upstreams []string
 	for _, u := range strings.Split(*dnsServers, ",") {
 		if u = strings.TrimSpace(u); u != "" {
@@ -245,6 +281,8 @@ func daemon() {
 	if cp != nil {
 		client = &cpclient.Client{
 			State: cp, Dir: *stateDir, Logf: logger.Printf, AgentVersion: version,
+			// whether the kernel layer can enforce, with every heartbeat
+			Kernel: func() any { return kernelStatus(*sensor, observeOnly) },
 			// each agent's hook, reported to the control plane when it changes
 			Hooks: func() any {
 				o := hookstate.Default(*sensor)
@@ -328,6 +366,7 @@ func daemon() {
 					"tetragon_connected": tgConnected.Load(),
 					"sensor":             *sensor,
 					"bpf_lsm":            bpfLSMEnabled(),
+					"observe_only":       observeOnly,
 					"policy_version":     policyVersion.Load(),
 					"version":            version,
 				}

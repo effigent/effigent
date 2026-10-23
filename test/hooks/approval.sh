@@ -3,24 +3,40 @@
 # (`effigentd hook claude`, fed Claude Code's PreToolUse JSON) -> effigentd in
 # hooks mode, enrolled in a local control plane -> an approver deciding
 # through the console API. No Tetragon, no Docker, no sudo.
+# Approvals need a person (checklist #12): the approver, Sam Sec, signs in through a
+# stand-in OIDC issuer (test/hooks/fakeidp) as a workspace admin, and the machine has
+# an owner (grok-bot@example.test) so the requester is known. The admin token
+# (automation) only denies.
 # Needs local Postgres (docker compose up -d postgres).
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-W=$(mktemp -d); CP=127.0.0.1:${CP_PORT:-8090}; EP=127.0.0.1:${EP_PORT:-7797}
+W=$(mktemp -d); CP=127.0.0.1:${CP_PORT:-8090}; EP=127.0.0.1:${EP_PORT:-7797}; IDP=127.0.0.1:${IDP_PORT:-8098}
 T=org:hook-test-$$; A=(-H "Authorization: Bearer devadmin" -H "X-Effigent-Tenant: $T")
 pass=0; fail=0
 ok()  { echo "  PASS  $*"; pass=$((pass+1)); }
 bad() { echo "  FAIL  $*"; fail=$((fail+1)); }
 
-go build -o bin/effigent-cp ./cmd/effigent-cp && go build -o bin/effigentd ./cmd/effigentd || exit 1
+go build -o bin/effigent-cp ./cmd/effigent-cp && go build -o bin/effigentd ./cmd/effigentd && go build -o bin/fakeidp ./test/hooks/fakeidp || exit 1
+./bin/fakeidp -listen $IDP -audience effigent-test 2>"$W/idp.log" & IDPID=$!; disown $IDPID
+for i in $(seq 1 50); do curl -s "http://$IDP/.well-known/jwks.json" >/dev/null && break; sleep 0.2; done
 DATABASE_URL=${DATABASE_URL:-postgres://effigent:effigent@localhost:5433/effigent} EFFIGENT_ADMIN_TOKEN=devadmin \
   EFFIGENT_ADMIN_TENANTS=$T EFFIGENT_CONSOLE_ORIGIN=http://console.test \
+  EFFIGENT_OIDC_ISSUER=http://$IDP EFFIGENT_OIDC_AUDIENCE=effigent-test EFFIGENT_OIDC_TENANT=$T EFFIGENT_OIDC_ADMIN_EMAILS=sam@example.test \
   ./bin/effigent-cp -listen $CP -key-file "$W/signing.key" >"$W/cp.log" 2>&1 & CPID=$!
-trap 'kill $CPID ${EPID:-} 2>/dev/null; rm -rf "$W"' EXIT
+trap 'kill $CPID $IDPID ${EPID:-} 2>/dev/null; rm -rf "$W"' EXIT
 for i in $(seq 1 50); do curl -s "http://$CP/healthz" >/dev/null && break; sleep 0.2; done
+
+# Sam Sec, the approver: an ID token from the IdP, then one sign-in (the console records the email)
+SAM=$(curl -s "http://$IDP/token?sub=u-sam-sec&email=sam@example.test&name=Sam%20Sec")
+S=(-H "Authorization: Bearer $SAM")
+curl -s "${S[@]}" "http://$CP/api/v1/me" | grep -q '"role": *"admin"' && ok "Sam Sec signs in (OIDC, workspace admin)" || bad "OIDC sign-in: $(curl -s "${S[@]}" "http://$CP/api/v1/me")"
 
 TOK=$(curl -s "${A[@]}" -X POST "http://$CP/api/v1/enrollment-tokens" -d '{}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"]["token"])')
 ./bin/effigentd enroll --server "http://$CP" --token "$TOK" --state-dir "$W/ep" >/dev/null || exit 1
+# the machine's owner is who asks for approvals (the requester), so Sam can tell them apart
+EPID_=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint_id"])' "$W/ep/endpoint.json")
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X PATCH "http://$CP/api/v1/endpoints/$EPID_" -d '{"owner":"grok-bot@example.test"}')" = 200 ] &&
+  ok "machine owner set (grok-bot@example.test)" || bad "owner not set"
 ./bin/effigentd -sensor hooks --state-dir "$W/ep" --listen $EP --output none --log-file "$W/events.jsonl" \
   -sync-interval 1s 2>"$W/ep.err" & EPID=$!
 
@@ -43,8 +59,10 @@ hook() { # tool, input-json -> the hook's stdout
 }
 bash_hook() { hook Bash "{\"command\":\"$1\"}"; }
 pending() { curl -s "${A[@]}" "http://$CP/api/v1/approvals?state=pending"; }
-decide() { curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X POST "http://$CP/api/v1/approvals/$1/decision" \
-  -d "{\"decision\":\"$2\",\"note\":\"$3\",\"name\":\"Sam Sec\"}"; }
+decide() { # id, approve|deny, note -> HTTP status. Sam approves; the admin token denies (it can't approve: #12)
+  local who=("${S[@]}"); [ "$2" = deny ] && who=("${A[@]}")
+  curl -s -o /dev/null -w '%{http_code}' "${who[@]}" -X POST "http://$CP/api/v1/approvals/$1/decision" \
+    -d "{\"decision\":\"$2\",\"note\":\"$3\",\"name\":\"Sam Sec\"}"; }
 first_id() { python3 -c 'import json,sys; a=json.load(sys.stdin); print(a[0]["id"] if a else "")'; }
 
 echo "== allow / deny unchanged"
@@ -61,6 +79,8 @@ out=$(bash_hook 'git push origin main')
 [ "$(pending | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" = 1 ] && ok "retry reuses the request" || bad "retry made a new request"
 
 echo "== approved"
+curl -s "${A[@]}" -X POST "http://$CP/api/v1/approvals/$ID/decision" -d '{"decision":"approve","note":"x"}' | grep -q '"code": *"not_a_person"' &&
+  ok "the admin token can't approve (not a person)" || bad "admin token approved"
 [ "$(decide "$ID" approve 'release day')" = 200 ] && ok "approver approved" || bad "approve failed"
 t0=$(date +%s); out=$(bash_hook 'git push origin main')
 [ "$out" = "{}" ] && [ $(( $(date +%s) - t0 )) -le 2 ] && ok "the same command now runs" || bad "after approval: $out"

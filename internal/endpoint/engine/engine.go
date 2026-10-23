@@ -76,6 +76,7 @@ type Engine struct {
 	bgTimer    *time.Timer
 	guard      *policy.SelfProtect // FR Q20 self-protection, injected into every tracked agent's kernel rule when SelfProtectionOn
 	gateExempt []string            // FR Q3 effigentd's own binary paths, injected into any rule that gates binaries
+	observe    bool                // the kernel can't block here (old kernel, no BTF, no BPF LSM): kernel rules only observe
 }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
@@ -118,29 +119,51 @@ func applyRedaction(p *policy.Policy, logf func(string, ...any)) {
 }
 
 // scrub removes secrets from every free-text field of an event before any
-// sink (stdout, log file, control plane) sees it.
+// sink (stdout, log file, control plane) sees it, and applies the workspace's
+// masks (customer names, PII) to its paths: working directory, binary,
+// transcript file, the script an action was found in. Action attributes
+// (cloud profile, cluster, DB host…) and the agent's environment get both.
+// Identity fields (OS user, git email, hostname) and MCP server names are
+// left as they are: People mapping and mcp_pins match on them.
 func scrub(ev event.Event) event.Event {
 	if ev.Process != nil {
 		p := *ev.Process
 		p.Args = redact.String(p.Args)
+		p.Binary, p.CWD = redact.Masks(p.Binary), redact.Masks(p.CWD)
 		ev.Process = &p
 	}
 	ev.Target = redact.String(ev.Target)
 	ev.Message = redact.String(ev.Message)
+	ev.TranscriptPath = redact.Masks(ev.TranscriptPath)
 	if len(ev.Actions) > 0 {
 		acts := make([]event.Action, len(ev.Actions))
 		for i, a := range ev.Actions {
 			a.Target = redact.String(a.Target)
+			a.In = redact.Masks(a.In)
+			a.Attrs = scrubMap(a.Attrs)
 			acts[i] = a
 		}
 		ev.Actions = acts
 	}
+	ev.AgentEnv = scrubMap(ev.AgentEnv)
 	if ev.Outcome != nil && ev.Outcome.Error != "" {
 		o := *ev.Outcome
 		o.Error = redact.String(o.Error)
 		ev.Outcome = &o
 	}
 	return ev
+}
+
+// scrubMap is a redacted copy of m's values (the caller's map is left alone).
+func scrubMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return m
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = redact.String(v)
+	}
+	return out
 }
 
 // Run consumes raw sensor events until the channel closes.
@@ -316,7 +339,33 @@ func (e *Engine) ruleFor(root *Root) policy.Rule {
 	if len(k.GatedExec) > 0 {
 		k.GateExempt = e.gateExempt
 	}
+	// A kernel that can't block (SetObserveOnly): matches are reported as
+	// would_block and the guard, whose hooks need 5.12's argument layout, isn't
+	// loaded. Last, so nothing above puts an override back. Hooks don't use
+	// this rule: they still decide.
+	if e.observe {
+		if k.Mode == policy.Denylist || k.Mode == policy.Allowlist {
+			k.Mode = policy.Monitor
+		}
+		k.SelfProtect = nil
+	}
 	return k
+}
+
+// SetObserveOnly makes every kernel rule observe-only (monitor, no
+// self-protection): for kernels older than 5.12, without BTF or without BPF
+// LSM. Call before any agent is tracked; it also re-applies live roots.
+func (e *Engine) SetObserveOnly(on bool) {
+	e.mu.Lock()
+	changed := e.observe != on
+	e.observe = on
+	pids := e.livePIDsLocked()
+	e.mu.Unlock()
+	if changed {
+		for _, pid := range pids {
+			e.reapply(context.Background(), pid)
+		}
+	}
 }
 
 // bgActiveLocked reports whether a break-glass window is currently open.
@@ -371,12 +420,21 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 	}
 	loadPhase(guardFirst)
 	loadPhase(rest)
+	e.mu.Lock()
+	old := slices.Clone(root.Policies)
+	e.mu.Unlock()
 	var loaded []string
+	failed := map[string]bool{} // doc suffixes (-lsm, -net, -guard…) whose new version didn't load
 	for i, d := range docs {
 		if err := errs[i]; err != nil {
+			failed[docSuffix(d.Name)] = true
+			msg := "failed to load kernel policy: " + err.Error()
+			if slices.ContainsFunc(old, func(n string) bool { return docSuffix(n) == docSuffix(d.Name) }) {
+				msg += "; the previous version stays loaded"
+			}
 			e.logf("load policy %s: %v", d.Name, err)
 			e.emit(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "high", Agent: root.Agent,
-				AgentPID: root.PID, Rule: d.Name, Message: "failed to load kernel policy: " + err.Error()})
+				AgentPID: root.PID, Rule: d.Name, Message: msg})
 			continue
 		}
 		loaded = append(loaded, d.Name)
@@ -386,21 +444,43 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 			AgentPID: root.PID, Mode: string(rule.Mode), Rule: strings.Join(loaded, ","),
 			Message: fmt.Sprintf("%d kernel policies loaded in %dms", len(loaded), time.Since(start).Milliseconds())})
 	}
+	// Make-before-break per document: an old policy is removed only once its
+	// replacement is in, so a reload that fails never leaves the agent with
+	// less than it had.
 	e.mu.Lock()
-	old := root.Policies
-	for _, n := range old {
+	var keep, drop []string
+	for _, n := range root.Policies {
+		if failed[docSuffix(n)] {
+			keep = append(keep, n)
+		} else {
+			drop = append(drop, n)
+		}
+	}
+	for _, n := range drop {
 		delete(e.byPolicy, n)
 	}
-	root.Policies = loaded
-	for _, n := range loaded {
+	root.Policies = append(keep, loaded...)
+	for _, n := range root.Policies {
 		e.byPolicy[n] = root
 	}
 	e.mu.Unlock()
-	for _, n := range old {
+	for _, n := range drop {
 		if err := e.enf.Delete(ctx, n); err != nil {
 			e.logf("delete policy %s: %v", n, err)
 		}
 	}
+}
+
+var docGenRE = regexp.MustCompile(`-g\d+`)
+
+// docSuffix is the part of a kernel policy's name after its generation
+// (eff-claude-42-g3-lsm → -lsm): the same document across reloads.
+func docSuffix(name string) string {
+	locs := docGenRE.FindAllStringIndex(name, -1)
+	if len(locs) == 0 {
+		return name
+	}
+	return name[locs[len(locs)-1][1]:]
 }
 
 func (e *Engine) onExit(ctx context.Context, r event.Raw) {

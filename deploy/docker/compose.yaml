@@ -5,7 +5,9 @@
 #   echo "EFFIGENT_ENROLL_TOKEN=eft_…" > .env      # from the console: Machines → Enroll → Docker
 #   docker compose up -d
 #
-# Needs a Linux kernel with BTF and BPF LSM (`cat /sys/kernel/security/lsm` lists bpf).
+# Needs a Linux kernel with BTF (Tetragon). Kernel blocking also needs 5.12+ and BPF LSM
+# (`cat /sys/kernel/security/lsm` lists bpf); short of that effigentd only observes there and
+# reports why (Machines: "observe-only: …"); the agent hooks still enforce.
 # Guide: https://effigent.ai/docs/kubernetes
 services:
   tetragon:

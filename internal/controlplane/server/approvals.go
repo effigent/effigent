@@ -317,9 +317,10 @@ func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request, p Princip
 				x := s.consoleApprover(r.Context(), p, cfg, "")
 				who = &x
 			}
-			v.ApproveRefusal, v.ApproveRefusalMessage = voteRefusal(a, a.Requester, *who, true, "-")
+			q := s.requesterNow(r.Context(), a)
+			v.ApproveRefusal, v.ApproveRefusalMessage = voteRefusal(a, q, *who, true, "-")
 			v.CanApprove = v.ApproveRefusal == ""
-			v.QuorumWarning = quorumWarning(g, a.Requester, store.ApprovalRules{ApprovalsRequired: a.ApprovalsRequired, ExcludeRequester: &a.ExcludeRequester})
+			v.QuorumWarning = quorumWarning(g, q, store.ApprovalRules{ApprovalsRequired: a.ApprovalsRequired, ExcludeRequester: &a.ExcludeRequester})
 		}
 		out = append(out, v)
 	}

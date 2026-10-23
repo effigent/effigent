@@ -487,12 +487,20 @@ func matchActions(list []string, acts []event.Action) (string, event.Action, boo
 	for _, e := range list {
 		kind, env, _ := strings.Cut(e, "@")
 		for _, a := range acts {
-			if policy.KindCovers(kind, a.Kind) && (env == "" || slices.Contains(a.Envs, env)) {
+			if kindMatches(kind, a) && (env == "" || slices.Contains(a.Envs, env)) {
 				return e, a, true
 			}
 		}
 	}
 	return "", event.Action{}, false
+}
+
+// kindMatches: a policy kind covers the action's kind; a SQL file that couldn't
+// be read (unreadable, too large) may hold anything, so destructive_sql rules
+// match it too.
+func kindMatches(kind string, a event.Action) bool {
+	return policy.KindCovers(kind, a.Kind) ||
+		kind == "destructive_sql" && a.Kind == "sql_write" && a.Attrs["unread"] == "true"
 }
 
 // listsName reports whether any actions list names one of kinds.

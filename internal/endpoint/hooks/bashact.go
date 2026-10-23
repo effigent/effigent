@@ -315,6 +315,10 @@ var credentialCommands = []*regexp.Regexp{
 	regexp.MustCompile(`^security (find-generic-password|find-internet-password|dump-keychain)`),
 	regexp.MustCompile(`^(vault (read|kv get)|op (read|item get)|doppler secrets|bw get|pass show)\b`),
 	regexp.MustCompile(`^kubectl get secrets?\b.*(-o|--output)`),
+	// credential helpers: git's (fill asks every configured helper) and Docker's
+	regexp.MustCompile(`^git (?:-[cC] \S+ |--[\w-]+(?:=\S+)? )*credential(?: fill|-[\w.-]+ get)\b`),
+	regexp.MustCompile(`^git-credential-[\w.-]+ get\b`),
+	regexp.MustCompile(`^docker-credential-[\w.-]+ (get|list)\b`),
 }
 
 // remoteScripts: a downloaded script run straight away.

@@ -204,7 +204,8 @@ The work shipped in three rounds:
 - **Limits:**
   - One workspace per install.
   - No SCIM: members are whoever signed in within 30 days.
-  - The installer doesn't pass `--ca-file` yet.
+  - The installers take the CA (`install.sh --ca-file`, `install.ps1 -CaFile`); on macOS from the
+    next `.pkg` release on.
 - **Release:**
   - Run `release-selfhost.yml` by hand.
   - Make `ghcr.io/effigent/effigent-cp` and `effigent-console` public.

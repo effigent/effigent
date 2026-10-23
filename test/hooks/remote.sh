@@ -7,30 +7,44 @@
 # setup step (`effigentd cloud-setup`), and what happens when the control
 # plane is gone (cached policy still enforces; nothing cached -> deny, or
 # the built-in policy with EFFIGENT_REMOTE_FAIL_OPEN=1).
+# Approvals need a person (checklist #12): the approver, Sam Sec, signs in through a
+# stand-in OIDC issuer (test/hooks/fakeidp) as a workspace admin, and the environment
+# has an owner (grok-bot@example.test) so the requester is known.
 # Needs local Postgres (docker compose up -d postgres). No Docker, no sudo.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-W=$(mktemp -d); CP=127.0.0.1:${CP_PORT:-8091}
+W=$(mktemp -d); CP=127.0.0.1:${CP_PORT:-8091}; IDP=127.0.0.1:${IDP_PORT:-8099}
 T=org:remote-test-$$; A=(-H "Authorization: Bearer devadmin" -H "X-Effigent-Tenant: $T")
 pass=0; fail=0
 ok()  { echo "  PASS  $*"; pass=$((pass+1)); }
 bad() { echo "  FAIL  $*"; fail=$((fail+1)); }
 
-go build -o bin/effigent-cp ./cmd/effigent-cp && go build -o bin/effigentd ./cmd/effigentd || exit 1
+go build -o bin/effigent-cp ./cmd/effigent-cp && go build -o bin/effigentd ./cmd/effigentd && go build -o bin/fakeidp ./test/hooks/fakeidp || exit 1
+./bin/fakeidp -listen $IDP -audience effigent-test 2>"$W/idp.log" & IDPID=$!; disown $IDPID
+for i in $(seq 1 50); do curl -s "http://$IDP/.well-known/jwks.json" >/dev/null && break; sleep 0.2; done
 start_cp() {
   DATABASE_URL=${DATABASE_URL:-postgres://effigent:effigent@localhost:5433/effigent} EFFIGENT_ADMIN_TOKEN=devadmin \
     EFFIGENT_ADMIN_TENANTS=$T EFFIGENT_CONSOLE_ORIGIN=http://console.test \
+    EFFIGENT_OIDC_ISSUER=http://$IDP EFFIGENT_OIDC_AUDIENCE=effigent-test EFFIGENT_OIDC_TENANT=$T EFFIGENT_OIDC_ADMIN_EMAILS=sam@example.test \
     ./bin/effigent-cp -listen $CP -key-file "$W/signing.key" >>"$W/cp.log" 2>&1 & CPID=$!
   for i in $(seq 1 50); do curl -s "http://$CP/healthz" >/dev/null && return; sleep 0.2; done
 }
 start_cp
-trap 'kill ${CPID:-} 2>/dev/null; rm -rf "$W"' EXIT
+trap 'kill ${CPID:-} $IDPID 2>/dev/null; rm -rf "$W"' EXIT
+
+# Sam Sec, the approver: an ID token from the IdP, then one sign-in (the console records the email)
+SAM=$(curl -s "http://$IDP/token?sub=u-sam-sec&email=sam@example.test&name=Sam%20Sec")
+S=(-H "Authorization: Bearer $SAM")
+curl -s "${S[@]}" "http://$CP/api/v1/me" | grep -q '"role": *"admin"' && ok "Sam Sec signs in (OIDC, workspace admin)" || bad "OIDC sign-in: $(curl -s "${S[@]}" "http://$CP/api/v1/me")"
 
 echo "== cloud environment"
 curl -s "${A[@]}" -X POST "http://$CP/api/v1/cloud-environments" -d '{"name":"acme/web","vendor":"claude-code-web"}' >"$W/env.json"
 TOKEN=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["token"])' "$W/env.json")
 EPID_=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"]["id"])' "$W/env.json")
 case "$TOKEN" in efc_*) ok "created, token shown once" ;; *) bad "create: $(cat "$W/env.json")"; exit 1 ;; esac
+# the environment's owner is who asks for approvals (the requester), so Sam can tell them apart
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X PATCH "http://$CP/api/v1/endpoints/$EPID_" -d '{"owner":"grok-bot@example.test"}')" = 200 ] &&
+  ok "environment owner set (grok-bot@example.test)" || bad "owner not set"
 
 sed -e 's|^  mode: denylist$|  mode: denylist\n  command_approve: ["git push*"]|' internal/endpoint/policy/default.yaml > "$W/policy.yaml"
 printf 'approvals:\n  wait_seconds: 4\n  ttl_minutes: 10\n' >> "$W/policy.yaml"
@@ -46,8 +60,10 @@ hook() { # agent, tool, input-json [env...] -> the hook's stdout
 }
 bash_hook() { local c=$1; shift; hook claude Bash "{\"command\":\"$c\"}" "$@"; }
 pending() { curl -s "${A[@]}" "http://$CP/api/v1/approvals?state=pending"; }
-decide() { curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X POST "http://$CP/api/v1/approvals/$1/decision" \
-  -d "{\"decision\":\"$2\",\"note\":\"$3\",\"name\":\"Sam Sec\"}"; }
+decide() { # id, approve|deny, note -> HTTP status. Sam approves; the admin token denies (it can't approve: #12)
+  local who=("${S[@]}"); [ "$2" = deny ] && who=("${A[@]}")
+  curl -s -o /dev/null -w '%{http_code}' "${who[@]}" -X POST "http://$CP/api/v1/approvals/$1/decision" \
+    -d "{\"decision\":\"$2\",\"note\":\"$3\",\"name\":\"Sam Sec\"}"; }
 first_id() { python3 -c 'import json,sys; a=json.load(sys.stdin); print(a[0]["id"] if a else "")'; }
 
 echo "== decisions in the hook process"
@@ -62,7 +78,10 @@ echo "$out" | grep -q 'pending' && ok "git push paused: pending" || bad "pending
 ID=$(pending | first_id)
 [ -n "$ID" ] && ok "request $ID listed for approvers" || bad "no pending request"
 pending | grep -q "\"endpoint_id\": *\"$EPID_\"" && ok "filed under the cloud environment" || bad "approval endpoint: $(pending)"
+curl -s "${A[@]}" -X POST "http://$CP/api/v1/approvals/$ID/decision" -d '{"decision":"approve","note":"x"}' | grep -q '"code": *"not_a_person"' &&
+  ok "the admin token can't approve (not a person)" || bad "admin token approved"
 [ "$(decide "$ID" approve 'ok')" = 200 ] && ok "approved" || bad "approve failed"
+curl -s "${A[@]}" "http://$CP/api/v1/approvals/$ID" | grep -q 'Sam Sec' && ok "Sam Sec recorded as the approver" || bad "approver name: $(curl -s "${A[@]}" "http://$CP/api/v1/approvals/$ID")"
 [ "$(bash_hook 'git push origin main')" = "{}" ] && ok "the same command now runs" || bad "after approval"
 bash_hook 'git push origin main' | grep -q 'pending' && ok "single-use" || bad "approval reused"
 

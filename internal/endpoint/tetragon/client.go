@@ -18,6 +18,9 @@ import (
 type Client struct {
 	conn *grpc.ClientConn
 	api  tg.FineGuidanceSensorsClient
+	// OnDisconnect, when set, is called each time the event stream drops
+	// (Run then retries and calls onConnect again once it is back).
+	OnDisconnect func()
 }
 
 func Dial(addr string) (*Client, error) {
@@ -87,6 +90,9 @@ func (c *Client) Run(ctx context.Context, out chan<- event.Raw, onConnect func()
 		err := c.Events(ctx, out, onConnect)
 		if ctx.Err() != nil {
 			return
+		}
+		if c.OnDisconnect != nil {
+			c.OnDisconnect()
 		}
 		logf("tetragon stream: %v (retrying in %s)", err, backoff)
 		select {

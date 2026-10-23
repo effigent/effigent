@@ -202,4 +202,46 @@ func TestBreakGlass(t *testing.T) {
 	if code := call("DELETE", "/api/v1/break-glass/"+created.ID, "", nil, nil); code != 200 {
 		t.Fatalf("revoke: %d", code)
 	}
+
+	// The posture report's break_glass section: an all-machines code left
+	// unused, and a code this control plane never issued.
+	if code := call("POST", "/api/v1/break-glass", "", map[string]any{"reason": "dns outage", "duration_minutes": 30}, nil); code != 200 {
+		t.Fatalf("create all-machines: %d", code)
+	}
+	ev = map[string]any{"time": time.Now(), "type": "break_glass_start", "severity": "high", "rule": "0123456789abcdef", "os_user": "grok-bot"}
+	if code := call("POST", "/ep/v1/events", er.Secret, map[string]any{"batch_id": "b2", "events": []any{ev}}, nil); code != 200 {
+		t.Fatalf("ingest: %d", code)
+	}
+	var rep struct {
+		BreakGlass *store.BreakGlassActivity `json:"break_glass"`
+	}
+	for i := 0; i < 40; i++ { // the unknown code is audited by ingest's notifier
+		if code := call("GET", "/api/v1/report?days=7", "", nil, &rep); code != 200 {
+			t.Fatalf("report: %d", code)
+		}
+		if rep.BreakGlass != nil && rep.BreakGlass.Activations == 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	bg := rep.BreakGlass
+	if bg == nil {
+		t.Fatal("report has no break_glass section")
+	}
+	if bg.Issued != 2 || bg.IssuedAllMachines != 1 || bg.Revoked != 1 || bg.ExpiredUnused != 0 ||
+		bg.Activations != 2 || bg.Machines != 1 || bg.UnknownCodes != 1 || len(bg.Uses) != 2 {
+		t.Fatalf("break_glass section %+v", bg)
+	}
+	if u := bg.Uses[1]; u.ID != created.ID || u.Hostname != "laptop" || u.EndpointID != er.EndpointID ||
+		u.OSUser != "alice" || u.Reason != "prod incident" {
+		t.Fatalf("oldest use %+v", u)
+	}
+	if u := bg.Uses[0]; u.ID != "0123456789abcdef" || u.OSUser != "grok-bot" {
+		t.Fatalf("newest use %+v", u)
+	}
+	// a period before any of it: zeros, not null
+	a, err := st.BreakGlassActivity(ctx, tenant, time.Now().Add(-48*time.Hour), time.Now().Add(-24*time.Hour))
+	if err != nil || a.Issued != 0 || a.Activations != 0 || a.Uses == nil {
+		t.Fatalf("empty period %+v %v", a, err)
+	}
 }

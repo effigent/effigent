@@ -225,6 +225,10 @@ func TestSlackApprover(t *testing.T) {
 	call("POST", "/api/v1/enrollment-tokens", "", map[string]any{}, &tok)
 	var er EnrollResponse
 	call("POST", "/ep/v1/enroll", "-", map[string]any{"token": tok.Token.Token, "info": map[string]string{"hostname": "dana-mbp"}}, &er)
+	// a known requester: a request that keeps them out can't be approved otherwise
+	if code := call("PATCH", "/api/v1/endpoints/"+er.EndpointID, "", map[string]any{"owner": "dana@acme.io"}, nil); code != 200 {
+		t.Fatalf("owner: %d", code)
+	}
 	ask := func(n int) endpointApprovalResp {
 		var r endpointApprovalResp
 		call("POST", "/ep/v1/approvals", er.Secret, map[string]any{"fingerprint": "fp1:" + strings.Repeat(fmt.Sprintf("%02x", n), 32), "agent": "claude-code",

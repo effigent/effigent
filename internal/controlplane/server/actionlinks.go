@@ -204,7 +204,7 @@ func (s *Server) approvalLink(w http.ResponseWriter, r *http.Request) {
 	}
 	approveBtn := `<button name="decision" value="approve" style="` + approveStyle + `">Approve once</button>`
 	why := ""
-	if code, msg := voteRefusal(a, a.Requester, voter, true, "-"); code != "" {
+	if code, msg := voteRefusal(a, s.requesterNow(r.Context(), a), voter, true, "-"); code != "" {
 		approveBtn, why = "", `<p style="color:#b45309;font-size:13px;margin:0 0 14px">You can't approve this: `+e(msg)+`.</p>`
 	} else if a.RequireTicket {
 		approveBtn, why = "", `<p style="color:#b45309;font-size:13px;margin:0 0 14px">Approving needs a ticket reference: approve it in the console.`+console+`</p>`

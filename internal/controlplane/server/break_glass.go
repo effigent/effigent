@@ -28,6 +28,16 @@ import (
 // lists), lasts at most 8h, needs a written reason, and both its creation and
 // its use alert every notification email and webhook and show in the console.
 
+// The posture report's break_glass section: codes issued, revoked and left
+// unused, and every activation in the period (always present, zeros included:
+// "no break-glass this period" is part of the posture).
+func init() {
+	RegisterReportSection(ReportSection{Key: "break_glass",
+		Build: func(ctx context.Context, s *Server, tenant string, from, to time.Time) (any, error) {
+			return s.Store.BreakGlassActivity(ctx, tenant, from, to)
+		}})
+}
+
 func (s *Server) createBreakGlass(w http.ResponseWriter, r *http.Request, p Principal) {
 	var req struct {
 		EndpointID      string `json:"endpoint_id"` // "" / "*" = all machines

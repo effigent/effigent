@@ -144,7 +144,7 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   default, else workspace admins as before). Only the group's members are emailed; decisions
   (`POST /approvals/{id}/decision`, now gated in the handler, not the route) by members (any
   role), or admins/security_admins as an override (name + audit `admin_override`), or API keys
-  with `approvals`. Email links re-check membership at decision time. Console: Team & Approvers
+  with `approvals` (deny only, see below). Email links re-check membership at decision time. Console: Team & Approvers
   (`/team`). `GET|PUT /api/v1/approval-routing` (audited before/after),
   `POST /api/v1/approval-routing/test` (also takes an unsaved `config`).
 
@@ -171,6 +171,18 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   a vote short of the quorum; the Slack message is updated with "1 of 2" (`chat.update`).
   The requester check needs `CLERK_SECRET_KEY` to know a console user's emails
   (`UserEmails`, 2 min cache); without it only user ids and the Slack/email address match.
+  Only people approve: API keys and the admin token may deny but every approve is
+  `not_a_person` (403), whatever the quorum. Where `exclude_requester` holds, a person's approve is
+  refused unless the voter can be told apart from the requester: `requester_unknown` (no owner, no
+  People mapping: the requester has no user id or email) or `requester_unverified` (requester known
+  by email and the voter has none, or by user id only and the voter has no user id; `comparable` in
+  `votes.go`). `resolveRequester` adds an owner user id's emails from the directory. `/approval-routing/test`
+  warns when the requester would be unknown. Rollout: a workspace with ownerless, unmapped machines
+  can't approve until owners are set. The shell e2e scripts `test/hooks/approval.sh` / `remote.sh`
+  approve as a person: "Sam Sec" signs in through a stand-in OIDC issuer (`test/hooks/fakeidp`,
+  loopback, `EFFIGENT_OIDC_*` with `EFFIGENT_OIDC_ADMIN_EMAILS`), the machine's owner is set first
+  (`grok-bot@example.test`) so the requester is known, and the admin token only denies (they check
+  that its approve is `not_a_person`).
 
 - **Policy change approval** (migration 013, `server/proposals.go`): per tenant
   `cp.policy_settings.policy_change_approval`. On, every change that publishes a version —
@@ -179,8 +191,9 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   `{pending_approval, proposal, message}`; audit `policy.propose`, webhook `policy.proposed`,
   email to the notification emails). `GET /api/v1/policy/proposals` (with `stale`,
   `can_decide`/`why`, `base` for the diff), `POST /policy/proposals/{id}/decision`
-  (`approve` | `reject`; people only: an admin/security_admin who isn't the author nor, for
-  a key-made proposal, the key's creator; refusals audited `policy.self_approval_refused`),
+  (`approve` | `reject`; people only — never an API key or the admin token — an admin/security_admin
+  who isn't the author nor, for a key-made proposal, the key's creator; refusals audited
+  `policy.self_approval_refused`),
   `DELETE /policy/proposals/{id}` (author withdraws). Approving claims the proposal first, then
   applies it exactly as the direct call (re-opened if applying fails on a 5xx, superseded on a
   4xx). A policy proposal written on an older version is superseded on approval (re-propose);
@@ -192,7 +205,7 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
 ## 2c. Integrations (API keys, webhooks)
 
 - **API keys** (`efk_…`, sha256 in `cp.api_keys`): scopes `read` (every GET; always
-  added), `approvals` (decide), `endpoints` (enroll tokens, revoke, owner), `policy`
+  added), `approvals` (deny only: approving needs a person), `endpoints` (enroll tokens, revoke, owner), `policy`
   (publish). Routes opt in with `s.scoped("<scope>", write, h)`; `s.console(write, h)`
   stays people-only (keys, webhooks, notifications). Principal `apikey:<id>`, via `api-key`.
 - **Webhooks** (`cp.webhooks`, migration 005): https only; private/loopback/link-local/
@@ -202,7 +215,7 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   Events: approval.requested, approval.decided, action.blocked (opt-in, 60/min cap,
   `dropped` counter), endpoint.enrolled, endpoint.revoked, policy.published,
   pricing_leaks.runaway_cost (opt-in, see 2d), endpoint.hooks_missing / endpoint.offline /
-  endpoint.online (opt-in, see 2e), anomaly.first_seen (opt-in, 60/min cap like
+  endpoint.online / endpoint.tamper (opt-in, see 2e), anomaly.first_seen (opt-in, 60/min cap like
   action.blocked, see 2h), test.
   `emit()` only enqueues (`cp.webhook_deliveries`); the worker (started by `Handler()`)
   claims due rows with `for update skip locked` + a 60s lease and retries 10s, 1m, 5m,
@@ -347,7 +360,22 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   any teardown; the control-plane sink's last batch gets 3s (`HTTPConfig.CloseTimeout`), then it waits
   in the spool and is sent after the next start. Ingest records the newest stop in `stopped_at`/`stop`.
   Enrolled daemons keep `<state>/running` (pid, start, version); one left at start →
-  `daemon_unclean_restart` (high: kill -9, crash, power loss).
+  `daemon_unclean_restart` (high: kill -9, crash, power loss). Both carry `shutdown` (`cmd/effigentd/stop.go`):
+  `system` = the machine was going down (Linux: `systemctl is-system-running` = `stopping`; Windows: the
+  service's shutdown control; unclean: the OS booted after the previous run started, `bootTime()`), `no` =
+  it kept running (systemd in any other state, SIGINT, Windows service stop; unclean: same boot), else
+  `unknown` (macOS launchd: `bootout` and a shutdown send the same SIGTERM; no systemd).
+- **Tamper alerts** (migration 022, `server/tamper.go`): emailed by default (`email_tamper`, default on),
+  independent of the offline interval, webhook `endpoint.tamper` (`kind`), audit `endpoint.<kind>` always
+  (`channels.email`: sent / suppressed / skipped / off). Kinds: `daemon_stopped` — a `daemon_stop` with
+  `shutdown: no` that is still the machine's last word when the offline detector marks it (so restarts and
+  upgrades, back within the threshold, never alert), announced instead of the offline email;
+  `unclean_restart` — `shutdown: no` at ingest (`system` = power loss, `unknown`/missing = older build:
+  skipped); `policy_load_failed` — a high-severity `policy` event (kernel policy load failure) at ingest,
+  newest per batch with a count. One per machine per kind per cooldown (`daemon_stopped` and
+  `unclean_restart` 1 h, `policy_load_failed` 24 h) via `cp.endpoints.stop_alerted_at` /
+  `unclean_alerted_at` / `policy_fail_alerted_at` (`ClaimTamperAlert`, one update); replays are dropped by
+  `batch_id` first. Sleep, silence, shutdown and `unknown` stops stay with the offline logic.
 - **Offline detector**: `runEndpointHealth` ticks every minute (`HealthTick`) under a session
   advisory lock (`EndpointHealthLock`); `MarkEndpointsOffline` sets `offline_at` once per outage
   (`update … where offline_at is null … for update skip locked`) for unrevoked machines silent
@@ -362,14 +390,30 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   (claimed with one `update … where offline_alerted_at is null or <= now() - interval returning`,
   never cleared on coming back, so a laptop that wakes and sleeps doesn't re-alert). The audit's
   `channels.email` says why none went out (`off: offline alerts set to never`, `suppressed: …`).
+- **Kernel layer** (migration 023, `cp.endpoints.kernel` / `kernel_reported_at`): every heartbeat carries
+  `kernel: {sensor, bpf_lsm, tetragon_connected}` (`cpclient.Client.Kernel`, `kernelStatus` in `cmd/effigentd/main.go`;
+  `tetragon_connected` goes false when the event stream drops, `tetragon.Client.OnDisconnect`). Machines shows a Linux
+  machine as observe-only (BPF LSM off / Tetragon disconnected) or "not reported" (older build) and doesn't count it
+  as kernel-enforced. Not yet used by Inventory coverage, the posture report or alerts. A kernel policy reload keeps
+  each old document until its replacement loads (`engine.apply`), so a failed reload leaves the previous policy in place.
+  Kernel enforcement needs 5.12 with BTF and `bpf` in the LSM list (the guard's `inode_setattr`/unlink/rename arguments).
+  Short of that nothing refuses: `install.sh` warns and installs (no BTF and no Tetragon running → Tetragon skipped,
+  effigentd `--sensor hooks`, no `Requires=tetragon.service`); effigentd (`cmd/effigentd/kernelfloor.go`) runs the kernel
+  layer observe-only (`engine.SetObserveOnly`: enforcing modes render as monitor, no self-protection guard; hooks unchanged)
+  and the heartbeat's `kernel` adds `release` + `observe_only` (the reason, e.g. `kernel 5.4.0 older than 5.12; no BTF`),
+  which Machines shows as "observe-only: <reason>" (also for a hooks-only Linux machine). `EFFIGENT_SKIP_KERNEL_CHECK` is
+  retired (accepted, ignored).
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
-  `offline_alert_interval_minutes`, `email_hooks`; people only; audited `endpoint_health.update`
+  `offline_alert_interval_minutes`, `email_hooks`, `email_tamper`; people only; audited `endpoint_health.update`
   before/after). `GET /api/v1/endpoints`
   carries the new columns. Console: Machines (`views/Enforcement.tsx`) shows each machine's hooks,
   a warning per problem, offline (detector) and "stopped · SIGTERM" vs "went silent", and the
   Machine health alerts card; Demo Mode data in `lib/fixture-api.ts` (`demoHealth`).
 - Deploy order: control plane (migration 014) → console → effigentd release (endpoints reinstall).
   Offline alert interval: control plane (migration 021) → console; effigentd unchanged.
+  Tamper alerts: control plane (migration 022) → console → effigentd release.
+  Kernel layer status: control plane (migration 023) → console → effigentd release (older builds show "not reported"). Builds without `shutdown`
+  never trigger stop / unclean-restart alerts (treated as unknown); policy load alerts work with any build.
 
 ## 2f. Actions (what a tool call does)
 
@@ -379,23 +423,30 @@ Agent hooks only (Claude Code, Codex, Gemini CLI, Cursor; the kernel sees none o
 URL, `mcp__server__tool`) and returns `event.Action{kind, target, attrs, envs, in}`. Kinds:
 `policy.ActionKinds` (git: protected_push / force_push / branch_delete / history_rewrite /
 hook_bypass; destructive_sql / sql_write; cloud_change / cloud_destroy / access; package_install
-/ _unlisted / _registry / _scripts / _malicious / _vulnerable; guardrail_edit; credential_read;
+/ _unlisted / _registry / _scripts [npm/yarn without --ignore-scripts; Python installs that may build an sdist] / _malicious / _vulnerable; guardrail_edit; credential_read;
 remote_script; fs_destroy; mcp_unlisted; mcp_changed; model_endpoint / model_api_key; session
 rules exfil_sequence / untrusted_then_risky). Every hook event carries them (`actions`), matched
 or not; `engine.scrub` redacts their targets.
 - Read from the command line, the scripts it runs (`bash x.sh`, `./x.sh`, `source`, package.json
   scripts incl. pre/post, `yarn <script>`; depth 2; `in` names the script), heredocs / here-strings
-  / `< file` / piped `echo`/`cat` feeding a DB client, `.sql` files, `docker exec` inner commands.
+  / `< file` / piped `echo`/`cat` feeding a DB client, `.sql` files (one it can't read, or > 512 KB, is
+  `sql_write` with `unread`, matched by `destructive_sql` rules too), `docker exec` inner commands.
   Script commands also go through exec/file/command deny and approve lists.
 - Targets: AWS profile (`--profile`, `AWS_PROFILE`, `~/.aws/config` → account via `sso_account_id`
   / `role_arn`, `source_profile` followed), kube context (`--context` / kubeconfig
   `current-context`), gcloud project (flag, env, active configuration), Azure default
   subscription (`azureProfile.json`), Terraform workspace (`.terraform/environment`,
   `TF_WORKSPACE`), Pulumi stack, DB host (flags, URLs, `PGHOST`…, client default localhost),
-  pushed branch (refspec, else `.git/HEAD`). Policy top-level `environments: {prod: {aws_profiles,
+  pushed branch (refspec, else `.git/HEAD` sent by `push.default`: `upstream`/`tracking` → `branch.<x>.merge`,
+  `matching` = protected; read from `git -c`, repo config, `~/.gitconfig`). Policy top-level `environments: {prod: {aws_profiles,
   aws_accounts, kube_contexts, gcloud_projects, azure_subscriptions, terraform_workspaces,
-  pulumi_stacks, hosts, mcp_servers, match_unknown}}`; an entry `kind@prod` matches only actions
+  pulumi_stacks, hosts, mcp_servers, match_unknown}}` (templates and docs set `match_unknown: true`; the
+  field itself defaults to false); an entry `kind@prod` matches only actions
   whose target is in it. `access` covers every action on a target and must name an environment.
+  Console: Audit → Agent events shows the actions' environments and identity attrs (AWS profile /
+  account, kube context, gcloud project, Azure subscription, Terraform workspace, Pulumi stack, DB host;
+  `IDENTITY_ATTRS` in `lib/live-map.ts`) under the target; the CSV export has a column per attr plus
+  `environments`.
 - Lists (per rule, merged like the others, compile `overrides`/`sameRule` carry them):
   `actions_deny` / `actions_approve` (kind or kind@env; `sql_write` ⊇ `destructive_sql`,
   `cloud_change` ⊇ `cloud_destroy`), `command_deny` (like `command_approve`; `*` anywhere in
@@ -415,7 +466,10 @@ or not; `engine.scrub` redacts their targets.
   vulnerabilities only for pinned versions. Fails open: the error is `osv_error` on the installs.
 - Agent environment: `effigentd hook` sends `X-Effigent-Agent-Env` (base64 JSON;
   `hooks.AgentEnv`): cloud profile/project/subscription names, DB hosts, model base URLs,
-  registries, git-hook switches; API keys only as `set`; URLs without credentials. The daemon
+  registries, git-hook switches; API keys only as `set`, and so is any other variable named like a
+  secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `*PRIVATE_KEY*`, `*CREDENTIAL*`…; ≤ 64, names
+  only, never values); URLs without credentials. `credential_read` also covers credential helpers
+  (`git credential fill`, `git credential-<helper> get`, `docker-credential-* get|list`). The daemon
   keeps only those names (`CleanAgentEnv`), records them on the session's `agent_start`
   (`agent_env`), and uses them for targets, model_endpoint and model_api_key.
 - Files are read as the agent's OS user (`perm_unix.go`: owner/group/other bits, groups via
@@ -429,7 +483,12 @@ or not; `engine.scrub` redacts their targets.
   `--password`-style flags, `mysql -p…`, `user:pass@` in URLs, bearer tokens, private key
   blocks; then policy `redact: {pii: bool, patterns: [{name, pattern}]}` (RE2, ≤50, ≤300 chars;
   pii = email, phone, card, IBAN), applied by the engine on every policy change. Approval
-  summaries and reasons are redacted before they're sent.
+  summaries and reasons are redacted before they're sent. `engine.scrub` also puts the workspace
+  masks + PII (`redact.Masks`, no secret rules: paths come with every kernel event) on
+  `process.cwd`/`binary`, `transcript_path` and an action's `in`, and the full rules on action
+  `attrs` and `agent_env` values; the approval request's `cwd` gets `redact.Masks`
+  (`approvalRequest` in `cmd/effigentd/hooks.go`). Not masked: `os_user`, `git_email`, `node`,
+  MCP server names (People mapping and mcp_pins match on them).
 - SQL in MCP database tools (`hooks/mcpsql.go`): a call is SQL when the tool name says so
   (`*sql*`: execute_sql, run_sql, apply_migration…) or the server name looks like a database
   (postgres, supabase, neon, mysql, sqlite, snowflake, clickhouse, bigquery, dbhub, `db`…) and the
@@ -491,7 +550,7 @@ or not; `engine.scrub` redacts their targets.
   `hooks/session_test.go`, `hooks/mcppin_test.go`, `hooks/result_test.go` (each agent's
   documented post-tool payload), `cmd/effigentd/installhooks_test.go`, `osv/osv_test.go`,
   `compile/actions_test.go` (round trip incl. mcp_pins), `redact_test.go`; `test/hooks/approval.sh`
-  (53 checks) runs force_push / curl|sh / workflow writes / DROP TABLE approval / prod AWS_PROFILE
+  (56 checks) runs force_push / curl|sh / workflow writes / DROP TABLE approval / prod AWS_PROFILE
   via the hook env / exfil_sequence / a changed pinned `.mcp.json` / a PostToolUseFailure outcome
   through a real hook process, daemon and local control plane. OSV's response shape was
   checked against the live API (2026-10-21); the live lookup isn't in an automated test. The
@@ -541,8 +600,10 @@ All control plane (no effigentd change); everything is read from rollups, never 
   kind + daily, approvals (`cp.approvals`: requested, approved = approved|used, denied, expired incl.
   pending past expiry, median time to decide, self-approval refusals from the audit trail), exceptions
   (latest source), policy versions + proposals by state, first-seen counts, Pricing Leaks totals (as of
-  now) + episodes found/resolved in the period. `break_glass` is null until a feature registers a
-  `ReportSection` with key `break_glass` (`RegisterReportSection`); other keys go to `sections`.
+  now) + episodes found/resolved in the period, and `break_glass` (the section `server/break_glass.go`
+  registers with `RegisterReportSection`: `store.BreakGlassActivity` = codes issued / revoked / expired
+  unused from `cp.break_glass_codes`, every activation from the audit trail's `break_glass.used`, ≤ 50
+  listed); other registered keys go to `sections`.
 - Report email: `GET|PUT /api/v1/report/schedule` (`{enabled, cadence weekly|monthly, emails ≤ 20}`, PUT
   people only, audited `report.schedule.update` before/after), `POST /api/v1/report/send` (now, audited
   `report.send`). `cp.report_schedules.next_at`: Mondays 08:00 UTC (last 7 days) / the 1st 08:00 UTC
@@ -610,7 +671,7 @@ Full write-up, vendor research with links: `docs/cloud-agents.md`.
   - `cloud_envs_test.go` (DB)
   - `cloudtoken_test.go`, `hooks/copilot_test.go`, `cmd/effigentd/remote_test.go`
   - `peer_test.go`, `cred_linux_test.go`, `socket_linux_test.go` (Linux)
-  - `test/hooks/remote.sh` (32 checks: real hook binary, local control plane)
+  - `test/hooks/remote.sh` (36 checks: real hook binary, local control plane)
   - `test/hooks/cloudsetup.sh` (10 checks: setup script + wrapper in a Linux container, root setup,
     non-root agent)
   - `test/containers/hooksock.sh` (kind without Tetragon: socket deny / approval / kernel identity;
@@ -724,7 +785,9 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
   (`Dockerfile.console`); the Vercel build is unchanged.
 - effigentd: `enroll --ca-file` (or `EFFIGENT_CA_FILE`) trusts a private CA in addition to the
   system roots and saves it as `<state>/ca.pem`, trusted on every start (`cmd/effigentd/cafile.go`).
-  `install.sh` and the macOS pkg don't pass it yet.
+  `install.sh --ca-file` / `install.ps1 -CaFile` copy it to `<state>/ca.pem` (reruns replace it) and
+  enroll with it; on macOS the pkg's postinstall enrolls with `<state>/ca.pem` when present (needs a
+  pkg built with that postinstall).
 - Archive on S3-compatible stores: `EFFIGENT_ARCHIVE_ENDPOINT`, `_PATH_STYLE=1`, `_SSE=none`,
   `_REGION`.
 - Packaging: `deploy/helm/effigent-cp` (cp + console Deployments, keys Secret generated once via
@@ -756,11 +819,11 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
     restores at expiry. The hook handler lets an `Approve` decision through as event `break_glass`;
     deny lists ran before.
   - Single use per machine: `<state>/break-glass.json`, written then renamed. `break_glass_start` is
-    reported on reconnect and marks the code used.
+    reported on reconnect and marks the code used. The same file keeps the open window (`active`: id +
+    end); a restarted daemon restores it until it ends (`bgActiveWindow`, ≤ 8 h from now, no new event).
   - Console: Machines → Break-glass card (`components/BreakGlass.tsx`, anchor `/enforcement#break-glass`,
     the alerts' link): issue (machine or all, 30 min…8 h, reason; the code is shown once), list with
-    status, revoke. Demo Mode in `lib/fixture-api.ts`. The posture report's `break_glass` section isn't
-    registered yet.
+    status, revoke. Demo Mode in `lib/fixture-api.ts`. Posture report: Break-glass card (2h).
 - **Self-protection** (`cmd/effigentd/guard.go`, `tetragon/render.go`, policy top-level
   `self_protection`, default on):
   - Each tracked agent gets `-guard` (file writes / append / create / O_TRUNC via inode_setattr /
@@ -784,6 +847,10 @@ Guide: `docs/self-hosting.md`. One install = one workspace (`EFFIGENT_OIDC_TENAN
 - Tests:
   - `sign/breakglass_test.go`, `server/break_glass_test.go` (DB), `tetragon/render_test.go`
     (guard + gated), compile `TestGatedExecSurvivesCompile`.
+  - `cmd/effigentd/gate_test.go`: the handler's decisions, `effigentd gate` end to end in a child process
+    against a fake daemon (allowed → the real binary runs with its argv; every failure refuses), shims,
+    `quoteArgs` round trip through sh. `resolveReal` skips anything that is effigentd itself (another
+    spelling of the shim dir, an outer run's shims), which would otherwise re-exec the gate forever.
   - e2e §7 (self-protection, verified on Tetragon v1.7.1 / kernel 6.11) and §8 (direct exec blocked,
     non-agent allowed, gate fails closed, nested run refused).
   - Not live: the gate's allow path and the shims (unit tests only), break-glass end to end.
@@ -826,6 +893,7 @@ go test ./internal/controlplane/server/ -args -effigent.db=postgres://effigent:e
 # console against a local control plane (dev only): add to the dev command
 #   NEXT_PUBLIC_EFFIGENT_API_URL=http://127.0.0.1:8080 NEXT_PUBLIC_EFFIGENT_DEV_ADMIN_TOKEN=devadmin NEXT_PUBLIC_EFFIGENT_DEV_TENANT=org:dev
 #   (control plane: EFFIGENT_ADMIN_TENANTS=org:dev EFFIGENT_CONSOLE_ORIGIN=http://localhost:3000)
+#   the admin token isn't a person: this console can deny approvals but not approve them or decide policy proposals
 npm run -w @effigent/dashboard dev                  # console (with the dev bypass vars)
 npm run -w @effigent/site build                     # site
 ```
@@ -848,7 +916,7 @@ npm run -w @effigent/site build                     # site
   - Not live-tested: Codex (both sign-ins, the ChatGPT-backend route, the zstd bodies, the 426 fallback)
     and Gemini. Only Claude Code with a claude.ai login was run through it.
   - No `model_call` token sums in the console or Pricing Leaks yet: the events carry them, Pricing Leaks
-    uses only the model. Migration 022 is reserved for a rollup (021 is the offline alert interval, 2e).
+    uses only the model. The rollup takes the next free migration number (022 is the tamper alerts, 2e).
   - Fail-closed: a stopped daemon cuts pointed agents off from their model.
   - Rollout: effigentd builds without `models:` refuse a policy that has it (parse error → they stay on
     their current version). Upgrade endpoints, then run `install-gateway`, then publish `models:` /
@@ -878,12 +946,12 @@ npm run -w @effigent/site build                     # site
   in Slack via the workspace's Slack app (identity checked, see 2b), or from the signed
   email buttons; a rule can need two different people, keep the requester out and need a
   ticket. Limits: the requester comes from the machine owner, the hook's OS user (mapped in
-  People) and git emails — the last two are what the machine reports, not verified; API keys
-  and the admin token can't count toward two-person approval and aren't checked as the
-  requester when one approver suffices; the agent's message says only "pending" until the
+  People) and git emails — the last two are what the machine reports, not verified (an
+  unknown requester means nobody can approve where the requester is kept out); API keys and
+  the admin token can deny but never approve; the agent's message says only "pending" until the
   quorum (the "1 of 2" wording would be in effigentd).
-- Break-glass / self-protection / gated binaries (2l): break-glass: the user who ran it is self-asserted, a revoked code still works on a machine that stays offline, and
-  use is known only on reconnect. Self-protection covers the agent tree only: `systemctl stop effigentd`
+- Break-glass / self-protection / gated binaries (2l): break-glass: the user who ran it is self-asserted, a revoked code still works on a machine that stays offline,
+  use is known only on reconnect, and an open window can't be ended early on the machine (a restart restores it). Self-protection covers the agent tree only: `systemctl stop effigentd`
   (systemd sends the signal), Tetragon's local gRPC API (127.0.0.1:54321) and root outside the agent tree
   aren't blocked; path prefixes also cover same-prefixed siblings; Linux only. Gated binaries match exact
   paths (a copy elsewhere escapes in denylist mode), shims exist only under `effigentd run`, the gate
@@ -913,7 +981,8 @@ npm run -w @effigent/site build                     # site
   Claude Code gives no exit code for a successful command; durations measured by effigentd are
   approximate; a post hook that times out or a daemon that is down loses the outcome (never the
   call). Post-tool payloads were checked against docs and Codex's tests, not live agents.
-- Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
+- Agents with hooks (`effigentd install-hooks`, run by the macOS pkg, install.ps1 and, on Linux,
+  install.sh after the daemon answers (`--skip-hooks` = kernel only; `--uninstall` removes them first);
   `--agents claude,codex,gemini,cursor` (default), `--remove`, `--exclusive`): each agent's calls are
   translated to Claude Code's canonical tools (`internal/endpoint/hooks/agents.go`), so
   one policy (deny + approval lists, `mcp__<server>__<tool>` names) covers all four.
@@ -924,6 +993,9 @@ npm run -w @effigent/site build                     # site
   offline = threshold + ≤ 1 min; a signal's sender isn't known, only how effigentd was run).
   A sleeping or disconnected laptop looks the same as a killed daemon unless effigentd sent
   `daemon_stop`; kill -9 sends nothing (reported as `daemon_unclean_restart` at the next start).
+  Tamper emails (2e) cover a Linux systemd or Windows stop while the machine runs and a kill on the
+  same boot; on macOS a stop can't be told from a shutdown, so it is only reported as offline, and
+  a daemon killed and never restarted is only a silence.
   - Claude Code: managed-settings.json `PreToolUse`, timeout 120, `onFailure: block`.
     `managedSourcesBehavior: "first-wins"` with a remote/MDM managed source makes Claude Code skip
     the file-based managed settings — and our hook — silently; hookstate can't see that (it reads
@@ -1012,8 +1084,9 @@ npm run -w @effigent/site build                     # site
   - Unmanaged people depend on the People mapping and the connected / imported Pricing Leaks vendors: an
     unmapped work email shows as unmanaged even if that person has an enrolled machine.
   - Migration 016 backfills 35 days; older periods start empty (the report says so). The report's spend
-    numbers are as of now (the latest rollup), not as of the period; `break_glass` is null until a
-    break-glass feature registers its section. Report email needs SMTP or SES (else recorded `off`).
+    numbers are as of now (the latest rollup), not as of the period; break-glass activations are counted
+    when the machine reports them (on reconnect), not when they happened. Report email needs SMTP or SES
+    (else recorded `off`).
   - Not checked in a browser: the print layout (only the `@media print` CSS was written) and a real
     report email.
 

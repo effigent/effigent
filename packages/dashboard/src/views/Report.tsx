@@ -141,9 +141,29 @@ export function Report({ initialDays }: { initialDays?: string }) {
             </Card>
           </div>
 
-          {rep.break_glass != null && (
-            <Card><CardHead title="Break-glass" /><div className="card-body"><pre className="mono-sm" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(rep.break_glass, null, 2)}</pre></div></Card>
-          )}
+          {rep.break_glass != null && (() => {
+            const bg = rep.break_glass;
+            return (
+              <Card>
+                <CardHead title="Break-glass" sub="Offline codes that lift approval lists (never deny rules) while the control plane can’t be reached." href="/enforcement#break-glass" />
+                <div className="card-body"><KV rows={[
+                  ['Codes issued', `${num(bg.issued)}${bg.issued_all_machines ? ` (${bg.issued_all_machines} for all machines)` : ''}`],
+                  ['Activations', bg.activations === 0 ? 'none' : `${num(bg.activations)} on ${bg.machines} machine${bg.machines === 1 ? '' : 's'}`],
+                  ['Revoked / expired unused', `${bg.revoked} / ${bg.expired_unused}`],
+                  ...(bg.unknown_codes ? [['Codes not issued here', num(bg.unknown_codes)] as [string, string]] : []),
+                ]} /></div>
+                {bg.uses.length > 0 && (
+                  <div className="tbl-wrap"><table className="tbl">
+                    <thead><tr><th>When</th><th>Machine</th><th>Run by</th><th>Reason</th><th>Issued by</th></tr></thead>
+                    <tbody>{bg.uses.map((u) => (
+                      <tr key={`${u.id}-${u.endpoint_id}-${u.at}`}><td className="tnum">{fmtDay(u.at)}</td><td className="mono-name">{u.hostname || u.endpoint_id}</td>
+                        <td className="mono-sm">{u.os_user || '—'}</td><td>{u.reason || (u.created_by ? '—' : 'not issued by this control plane')}</td><td>{u.created_by || '—'}</td></tr>
+                    ))}</tbody>
+                  </table></div>
+                )}
+              </Card>
+            );
+          })()}
 
           <Card>
             <CardHead title="AI tool spend" sub="Pricing Leaks as of today, and what changed in the period." href="/pricing-leaks" />

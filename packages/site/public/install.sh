@@ -1,19 +1,22 @@
 #!/bin/sh
 # Effigent endpoint installer (Linux and macOS). Installs effigentd as a
 # service, enrolls this machine with your organization, and starts enforcing.
-# Linux: also installs Tetragon (kernel enforcement); without systemd (containers,
-# sandboxes) both run as background processes until the next reboot. macOS: installs the
-# release .pkg (checksum-verified), which adds the Claude Code, Codex and Gemini CLI
-# hooks to their machine-wide settings.
+# Linux: also installs Tetragon (kernel enforcement) and adds the Claude Code, Codex,
+# Gemini CLI and Cursor hooks to their machine-wide settings; without systemd (containers,
+# sandboxes) both daemons run as background processes until the next reboot. macOS: installs
+# the release .pkg (checksum-verified), which adds the same agent hooks.
 #
 #   curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token eft_...
 #
 # Options:
 #   --token TOKEN        enrollment token from the console (Enforcement -> Enroll an endpoint)
 #   --server URL         control plane (default https://api.effigent.ai)
+#   --ca-file PATH       PEM bundle of the private CA that signed a self-hosted control plane's
+#                        certificate (kept as ca.pem in effigentd's state dir; system roots stay trusted)
 #   --version VERSION    effigentd version (default: latest)
 #   --skip-tetragon      Tetragon is already installed and running (Linux)
-#   --uninstall          stop and remove effigentd (leaves Tetragon)
+#   --skip-hooks         kernel enforcement only: don't add the agent hooks (Linux)
+#   --uninstall          stop and remove effigentd and its agent hooks (leaves Tetragon)
 set -eu
 
 SERVER="https://api.effigent.ai"
@@ -21,15 +24,19 @@ RELEASES="${EFFIGENT_RELEASES:-https://effigent.ai/releases/effigentd}"
 TETRAGON_VERSION="v1.7.1"
 VERSION="latest"
 TOKEN=""
+CA_FILE=""
 SKIP_TETRAGON=0
+SKIP_HOOKS=0
 UNINSTALL=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --token) TOKEN="$2"; shift 2 ;;
     --server) SERVER="$2"; shift 2 ;;
+    --ca-file) CA_FILE="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     --skip-tetragon) SKIP_TETRAGON=1; shift ;;
+    --skip-hooks) SKIP_HOOKS=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -41,6 +48,16 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root: curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token ..."
 command -v curl >/dev/null 2>&1 || die "curl is required"
+if [ -n "$CA_FILE" ] && [ "$UNINSTALL" = 0 ]; then
+  [ -r "$CA_FILE" ] && grep -q -- '-----BEGIN CERTIFICATE-----' "$CA_FILE" || die "--ca-file $CA_FILE: not a readable PEM certificate bundle"
+fi
+
+# keep_ca STATE_DIR: the CA bundle goes where effigentd trusts it on every start
+# (<state>/ca.pem, root-only); a rerun with a new bundle replaces it.
+keep_ca() {
+  [ -n "$CA_FILE" ] || return 0
+  install -m 0600 "$CA_FILE" "$1/ca.pem.tmp" && mv -f "$1/ca.pem.tmp" "$1/ca.pem"
+}
 
 # ---- macOS: the .pkg does the work (enroll, agent hooks, launchd) -----
 if [ "$(uname -s)" = Darwin ]; then
@@ -65,6 +82,8 @@ if [ "$(uname -s)" = Darwin ]; then
   curl -fsSL -o "$TMPB/$PKG.sha256" "$RELEASES/$VERSION/$PKG.sha256"
   (cd "$TMPB" && shasum -a 256 -c "$PKG.sha256" >/dev/null) || die "effigentd download failed its checksum"
   install -d -m 0700 "$STATE"
+  # the package's post-install enrolls with --ca-file "$STATE/ca.pem" when it is there
+  keep_ca "$STATE"
   if [ -s "$STATE/endpoint.json" ]; then
     say "Already enrolled; keeping the existing enrollment"
   else
@@ -80,7 +99,7 @@ if [ "$(uname -s)" = Darwin ]; then
   [ -s "$STATE/endpoint.json" ] || die "enrollment failed (token expired, used up or mistyped?): see /Library/Logs/Effigent/install.log, then rerun with a new token"
   echo
   echo "Done. This machine now appears in the console under Enforcement."
-  echo "macOS has no kernel enforcement: Claude Code, Codex and Gemini CLI tool calls are checked through their hooks."
+  echo "macOS has no kernel enforcement: Claude Code, Codex, Gemini CLI and Cursor tool calls are checked through their hooks."
   exit 0
 fi
 
@@ -90,8 +109,19 @@ fi
 SYSTEMD=0
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then SYSTEMD=1; fi
 
+# has_cmd SUBCOMMAND: the installed effigentd knows it. An older build would take an
+# unknown subcommand for a daemon start, so look for its name in the binary first.
+has_cmd() {
+  { grep -a -q "$1" /usr/local/bin/effigentd || grep -q "$1" /usr/local/bin/effigentd; } 2>/dev/null
+}
+
 if [ "$UNINSTALL" = 1 ]; then
   say "Removing effigentd"
+  # The hooks go first: they refuse every tool call once the daemon is gone.
+  if has_cmd install-hooks; then
+    /usr/local/bin/effigentd install-hooks --remove >/dev/null 2>&1 ||
+      warn "could not remove every agent hook (Claude Code, Codex, Gemini CLI, Cursor managed settings); their tool calls are refused until the effigentd entries are removed"
+  fi
   if [ "$SYSTEMD" = 1 ]; then
     systemctl disable --now effigentd 2>/dev/null || true
     rm -f /etc/systemd/system/effigentd.service
@@ -99,7 +129,7 @@ if [ "$UNINSTALL" = 1 ]; then
   fi
   pkill -x effigentd 2>/dev/null || true # a daemon started by hand
   # agents pointed at the model gateway would lose their model without the daemon
-  { grep -a -q install-gateway /usr/local/bin/effigentd || grep -q install-gateway /usr/local/bin/effigentd; } 2>/dev/null && { /usr/local/bin/effigentd install-gateway --remove --agents claude,codex 2>/dev/null || true; }
+  has_cmd install-gateway && { /usr/local/bin/effigentd install-gateway --remove --agents claude,codex 2>/dev/null || true; }
   rm -f /usr/local/bin/effigentd
   if [ "$SYSTEMD" = 0 ] && pkill -x tetragon 2>/dev/null; then # nothing else manages it here
     sleep 1; umount /run/tetragon/cgroup2 2>/dev/null || true
@@ -127,16 +157,39 @@ case "$(uname -m)" in
 esac
 
 # ---- kernel checks -------------------------------------------------------
+# Kernel enforcement needs 5.12+ (the self-protection guard hooks inode_setattr, unlink
+# and rename with the argument layout those kernels have), BTF (Tetragon needs it) and
+# bpf in the active LSM list. Short of that the install goes on: effigentd runs the
+# kernel layer observe-only (it finds out on its own and reports why) and the agent
+# hooks still enforce. EFFIGENT_SKIP_KERNEL_CHECK is retired: nothing refuses a kernel
+# any more, so it is accepted and ignored.
 say "Checking the kernel"
 KREL="$(uname -r)"
-[ -e /sys/kernel/btf/vmlinux ] || die "kernel $KREL has no BTF (/sys/kernel/btf/vmlinux). Use a distro kernel 5.8+ (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023)."
+OBSERVE="" # why the kernel layer only observes ("" = it can block)
+observe() { OBSERVE="${OBSERVE:+$OBSERVE; }$1"; }
+KMAJ="$(echo "$KREL" | cut -d. -f1)"
+KMIN="$(echo "$KREL" | cut -d. -f2 | sed 's/[^0-9].*//')"
+case "$KMAJ$KMIN" in ''|*[!0-9]*) KMAJ=0; KMIN=0 ;; esac
+if [ "$KMAJ" -lt 5 ] || { [ "$KMAJ" -eq 5 ] && [ "$KMIN" -lt 12 ]; }; then
+  observe "kernel $KREL older than 5.12"
+  warn "kernel $KREL is older than 5.12 (or unrecognised): the kernel layer can't block or protect effigentd here."
+fi
+BTF=1
+if [ ! -e /sys/kernel/btf/vmlinux ]; then
+  BTF=0
+  observe "no BTF"
+  warn "kernel $KREL has no BTF (/sys/kernel/btf/vmlinux), which Tetragon needs: unless Tetragon is already running, it isn't installed and effigentd runs with the agent hooks only."
+fi
 # Some minimal images don't mount securityfs; it's where the active LSMs are listed.
 [ -e /sys/kernel/security/lsm ] || mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
-LSM_OK=0
-if grep -qw bpf /sys/kernel/security/lsm 2>/dev/null; then LSM_OK=1; fi
-if [ "$LSM_OK" = 0 ]; then
-  warn "BPF LSM is not enabled, so effigentd can watch agents but cannot block them yet."
+if ! grep -qw bpf /sys/kernel/security/lsm 2>/dev/null; then
+  observe "BPF LSM off"
+  warn "BPF LSM is not enabled, so the kernel layer can watch agents but cannot block them."
   warn "Enable it: add 'lsm=$(cat /sys/kernel/security/lsm 2>/dev/null),bpf' to GRUB_CMDLINE_LINUX in /etc/default/grub, run update-grub (or grub2-mkconfig), reboot."
+fi
+if [ -n "$OBSERVE" ]; then
+  warn "installing anyway: the kernel layer runs observe-only (kernel enforcement off: blocks become alerts, no self-protection); the agent hooks still enforce."
+  warn "For kernel enforcement use a distro kernel 5.12+ with BTF and bpf in the LSM list (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023), then rerun this installer."
 fi
 
 # ---- effigentd ------------------------------------------------------------
@@ -160,8 +213,13 @@ if [ -s /var/lib/effigent/endpoint.json ]; then
 else
   [ -n "$TOKEN" ] || die "--token is required for the first install (console: Enforcement -> Enroll an endpoint)"
   say "Enrolling this machine with $SERVER"
-  /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --state-dir /var/lib/effigent
+  if [ -n "$CA_FILE" ]; then
+    /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --ca-file "$CA_FILE" --state-dir /var/lib/effigent
+  else
+    /usr/local/bin/effigentd enroll --server "$SERVER" --token "$TOKEN" --state-dir /var/lib/effigent
+  fi
 fi
+keep_ca /var/lib/effigent
 
 # ---- Tetragon ------------------------------------------------------------
 
@@ -181,7 +239,14 @@ tetragon_running() {
   if [ "$SYSTEMD" = 1 ]; then systemctl is-active --quiet tetragon; else pgrep -x tetragon >/dev/null 2>&1; fi
 }
 
-if [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
+# No BTF: Tetragon can't start, so effigentd runs with the agent hooks only (one already
+# running, e.g. with its own --btf file, or --skip-tetragon, is used as usual).
+HOOKS_ONLY=0
+if [ "$BTF" = 0 ] && [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
+  HOOKS_ONLY=1
+  say "Skipping Tetragon (no BTF): effigentd runs with the agent hooks only"
+  [ "$SKIP_HOOKS" = 0 ] || warn "--skip-hooks on a kernel without BTF: nothing will block agents here, effigentd only reports them."
+elif [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
   say "Installing Tetragon $TETRAGON_VERSION"
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
   TGZ="tetragon-$TETRAGON_VERSION-$ARCH.tar.gz"
@@ -234,14 +299,19 @@ fi
 
 # ---- start effigentd ------------------------------------------------------
 EFFIGENTD_ARGS="--tetragon $TETRAGON_ADDR --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl --keep-policies-on-exit"
+TG_AFTER=" tetragon.service"; TG_REQUIRES="Requires=tetragon.service"
+if [ "$HOOKS_ONLY" = 1 ]; then
+  EFFIGENTD_ARGS="--sensor hooks --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl"
+  TG_AFTER=""; TG_REQUIRES=""
+fi
 if [ "$SYSTEMD" = 1 ]; then
 cat > /etc/systemd/system/effigentd.service <<UNIT
 [Unit]
 Description=Effigent endpoint agent (AI agent monitoring and enforcement)
 Documentation=https://effigent.ai/docs/quickstart
-After=network-online.target tetragon.service
+After=network-online.target$TG_AFTER
 Wants=network-online.target
-Requires=tetragon.service
+$TG_REQUIRES
 
 [Service]
 ExecStart=/usr/local/bin/effigentd $EFFIGENTD_ARGS
@@ -257,7 +327,7 @@ systemctl restart effigentd
 LOGHINT="journalctl -u effigentd"
 else
   SOCK="${TETRAGON_ADDR#unix://}"
-  if [ "$SOCK" != "$TETRAGON_ADDR" ]; then
+  if [ "$HOOKS_ONLY" = 0 ] && [ "$SOCK" != "$TETRAGON_ADDR" ]; then
     i=0 # effigentd retries Tetragon on its own, but don't race its first start
     until [ -S "$SOCK" ] || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
     [ -S "$SOCK" ] || warn "Tetragon has not opened $SOCK yet: see /var/log/tetragon/tetragon.out"
@@ -273,7 +343,35 @@ say "Waiting for effigentd"
 i=0
 until /usr/local/bin/effigentd status >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
 /usr/local/bin/effigentd status || die "effigentd did not come up: $LOGHINT"
+
+# ---- agent hooks ----------------------------------------------------------
+# Added once the daemon answers: the hooks fail closed, so an agent's tool calls are
+# refused while effigentd is down. They're written whether or not an agent is installed
+# yet (one picks them up when it is), and a failure here doesn't undo the install.
+HOOKS=0
+if [ "$SKIP_HOOKS" = 1 ]; then
+  :
+elif ! has_cmd install-hooks; then
+  warn "effigentd $VERSION can't add agent hooks; install a newer version for command, MCP and approval rules"
+else
+  say "Adding the agent hooks (Claude Code, Codex, Gemini CLI, Cursor)"
+  if /usr/local/bin/effigentd install-hooks >/dev/null; then
+    HOOKS=1
+  else
+    warn "could not update every agent's machine-wide settings (see above); rerun: sudo effigentd install-hooks"
+  fi
+fi
+
 echo
 echo "Done. This machine now appears in the console under Machines."
+[ "$HOOKS" = 0 ] || echo "Claude Code, Codex, Gemini CLI and Cursor tool calls are also checked through their hooks (commands, MCP tools, approvals)."
 [ "$SYSTEMD" = 1 ] || echo "No systemd: Tetragon and effigentd stop at the next reboot; rerun this installer to start them again."
-[ "$LSM_OK" = 1 ] || echo "Blocking turns on after you enable BPF LSM and reboot (see the warning above)."
+[ "$SYSTEMD" = 1 ] || [ "$HOOKS" = 0 ] || echo "Until then the agent hooks refuse every tool call (they fail closed); 'sudo effigentd install-hooks --remove' takes them out."
+if [ -n "$OBSERVE" ]; then
+  if [ "$HOOKS" = 1 ]; then
+    echo "Kernel layer: observe-only (kernel enforcement off): $OBSERVE; hooks still enforce."
+  else
+    echo "Kernel layer: observe-only (kernel enforcement off): $OBSERVE; the agent hooks aren't installed, so nothing blocks agents here."
+  fi
+  echo "Kernel enforcement needs a distro kernel 5.12+ with BTF and bpf in the LSM list (see the warnings above); rerun this installer after the change."
+fi

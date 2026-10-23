@@ -50,6 +50,9 @@ export interface ApiEndpoint {
   /** The last daemon_stop effigentd sent: when, and the signal / service manager / user. */
   stopped_at?: string | null;
   stop?: { signal?: string; via?: string; os_user?: string } | null;
+  /** The kernel layer effigentd reports with each heartbeat (migration 023; null from older builds). */
+  kernel?: { sensor?: string; bpf_lsm?: boolean; tetragon_connected?: boolean; release?: string; observe_only?: string } | null;
+  kernel_reported_at?: string | null;
   /** machine (effigentd enrolled on it) | cloud (a cloud environment: hooks in a vendor's sessions, migration 019). */
   kind?: 'machine' | 'cloud';
   /** Cloud environments: claude-code-web | copilot | cursor | other. */
@@ -107,6 +110,8 @@ export interface ApiEndpointHealth {
   /** 0 = never email about a machine going offline (default); N = at most once per machine per N minutes (60…10080). */
   offline_alert_interval_minutes: number;
   email_hooks: boolean;
+  /** Email when effigentd is stopped while the machine keeps running, killed or crashed, or a kernel policy fails to load (default on). */
+  email_tamper: boolean;
   default_minutes: number;
   min_minutes: number;
   tick_seconds: number;
@@ -148,6 +153,20 @@ export interface ApiEventBody {
   tool_use_id?: string;
   /** tool_result only: how the call ended (never its output). */
   outcome?: ApiToolOutcome;
+  /** Hook events: what the call does (git, SQL, cloud, packages…), matched by policy or not. */
+  actions?: ApiAction[];
+}
+
+/** event.Action — read from a hook call by effigentd (hooks.classify). */
+export interface ApiAction {
+  kind: string; // force_push | destructive_sql | cloud_destroy | access | …
+  target?: string;
+  /** Where it points: aws_profile, aws_account, kube_context, gcloud_project, azure_subscription, terraform_workspace, pulumi_stack, db_host, … */
+  attrs?: Record<string, string>;
+  /** Policy environments its target belongs to (prod). */
+  envs?: string[];
+  /** The script it was found in. */
+  in?: string;
 }
 
 /** event.Outcome — from the agent's post-tool hook. */
@@ -238,7 +257,7 @@ export interface ApiApproval {
   requester?: ApiRequester;
   votes?: ApiVote[]; // in the order they were cast
   can_approve?: boolean; // this person may approve (a ticket may still be needed)
-  approve_refusal?: string; // self_approval_refused | not_a_person | already_voted | …
+  approve_refusal?: string; // self_approval_refused | not_a_person | requester_unknown | requester_unverified | already_voted | …
   approve_refusal_message?: string;
   quorum_warning?: string; // the group can't reach the quorum without an admin
 }

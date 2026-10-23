@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -53,6 +56,72 @@ func signalName(s os.Signal) string {
 		return "SIGTERM"
 	}
 	return s.String()
+}
+
+// Values of event.Event.Shutdown. The control plane alerts on a stop or an
+// unclean restart only when it's "no": a machine shutting down, rebooting or
+// losing power is not someone switching effigentd off.
+const (
+	shutdownSystem  = "system"
+	shutdownNo      = "no"
+	shutdownUnknown = "unknown"
+)
+
+// stopShutdown says whether a stop (why = signalName or the Windows service
+// reason) is part of the machine shutting down. systemState is systemd's
+// `systemctl is-system-running` ("" without systemd). macOS gives no
+// reliable sign: launchd sends the same SIGTERM for `launchctl bootout`
+// and for a shutdown, so that stays unknown.
+func stopShutdown(goos, why, systemState string) string {
+	if goos == "windows" {
+		switch why {
+		case "system shutdown":
+			return shutdownSystem
+		case "service stop":
+			return shutdownNo
+		}
+		return shutdownUnknown
+	}
+	switch systemState {
+	case "stopping":
+		return shutdownSystem
+	case "running", "degraded", "maintenance", "starting", "initializing":
+		return shutdownNo
+	}
+	if why == "SIGINT" { // Ctrl-C or kill -INT: a shutdown sends SIGTERM
+		return shutdownNo
+	}
+	return shutdownUnknown
+}
+
+// systemdState is `systemctl is-system-running` ("stopping" during a
+// shutdown or reboot), or "" without systemd or when it doesn't answer in
+// time. It exits non-zero for any state but "running", so only the output counts.
+func systemdState() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, "systemctl", "is-system-running").Output()
+	return strings.TrimSpace(string(out))
+}
+
+// uncleanShutdown says whether the previous run ended because the machine
+// went down: it booted after that run started (power loss, a crash of the
+// OS, a forced power-off) → "system"; it was already up → "no" (effigentd
+// was killed or crashed). boot is zero when unknown.
+func uncleanShutdown(boot time.Time, prev *runMarker) string {
+	if boot.IsZero() || prev == nil || prev.Started.IsZero() {
+		return shutdownUnknown
+	}
+	if boot.After(prev.Started) {
+		return shutdownSystem
+	}
+	return shutdownNo
 }
 
 // The run marker is written at start and removed on a clean stop; one left

@@ -4,6 +4,13 @@ Run your Effigent approvals and alerts through [Windmill](https://www.windmill.d
 approve paused agent actions from **Slack or Microsoft Teams** buttons, add your own
 routing (two approvers, on-call, tickets), and script Effigent from flows.
 
+> **Approvals need a person.** Effigent accepts an approval only from someone it can identify:
+> the console, the approval email's signed buttons, or the workspace's Effigent Slack app. An
+> API key (and so this flow) can **deny** a request but its **approve** is refused
+> (`403 not_a_person`): the name the flow reports for a button press is the flow's own claim,
+> and the person who pressed it could be the requester. Use the flow to route and to relay
+> denials; approve from the link it posts to the console.
+
 ```
 agent pauses ──► Effigent ──webhook──► Windmill flow ──► Slack / Teams: Approve · Deny
                     ▲                                              │
@@ -16,7 +23,7 @@ agent pauses ──► Effigent ──webhook──► Windmill flow ──► S
 |---|---|
 | `resource_type.effigent.json` | The `effigent` resource type: control plane URL + API key |
 | `scripts/get_approval.ts` | Read one approval request |
-| `scripts/decide_approval.ts` | Approve / deny a request (with the approver's name and a note) |
+| `scripts/decide_approval.ts` | Deny a request (with the approver's name and a note); approvals are refused for API keys |
 | `scripts/list_pending_approvals.ts` | Requests waiting for a decision |
 | `scripts/recent_blocked.ts` | Latest blocked agent actions (reports) |
 | `scripts/revoke_endpoint.ts` | Revoke a machine |
@@ -26,7 +33,7 @@ agent pauses ──► Effigent ──webhook──► Windmill flow ──► S
 ## Set up (about 10 minutes)
 
 1. **Effigent API key** — console → Settings → Integrations → *Create key*, name
-   `windmill`, scope **Decide approvals**. Copy the `efk_…` key (shown once).
+   `windmill`, scope **Deny approval requests**. Copy the `efk_…` key (shown once).
 2. **Windmill resource** — create a folder `effigent`, add the resource type from
    `resource_type.effigent.json` (Resources → Add resource type), then a resource
    `f/effigent/workspace` with `base_url` `https://api.effigent.ai` and the key.
@@ -41,10 +48,11 @@ agent pauses ──► Effigent ──webhook──► Windmill flow ──► S
    created for this webhook). In Effigent: Settings → Integrations → *Add webhook*,
    paste the URL, events **Approval requested**. Press *Send test*.
 
-Now a policy rule such as `command_approve: ["git push --force*"]` pauses the agent,
-the request appears in your Slack channel, and pressing **Approve** lets that one
-action run. The agent, the console and the audit trail show
-`approved by <approver> (via Windmill)` (the approver Windmill reports for the button press).
+Now a policy rule such as `command_approve: ["git push --force*"]` pauses the agent and
+the request appears in your Slack channel. Pressing **Deny** denies it at once (the agent, the
+console and the audit trail show `<approver> (via Windmill)`, the approver Windmill reports for
+the button press). **Approve** is refused by Effigent (see above): open the request in the
+console to approve it.
 
 ## How it stays safe
 

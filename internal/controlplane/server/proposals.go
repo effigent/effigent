@@ -429,6 +429,8 @@ func proposalDecider(p Principal, prop store.Proposal) string {
 	switch {
 	case p.Via == "api-key":
 		return "API keys can propose policy changes but never approve them"
+	case p.Via == "admin-token":
+		return "the admin token can propose policy changes but never decide them: a second admin signed in to the console must"
 	case !p.CanWrite():
 		return "only workspace admins and security admins decide policy changes"
 	case p.UserID == prop.Author:

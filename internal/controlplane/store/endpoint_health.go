@@ -114,37 +114,68 @@ func (s *Store) ClaimOfflineAlert(ctx context.Context, id string, interval time.
 	return err == nil, err
 }
 
+// Tamper alert kinds (migration 022), each with its own per-machine cooldown.
+const (
+	TamperStopped       = "daemon_stopped"     // effigentd stopped while the machine kept running
+	TamperUnclean       = "unclean_restart"    // killed or crashed while the machine kept running
+	TamperPolicyFailure = "policy_load_failed" // a kernel policy failed to load
+)
+
+var tamperAlertCol = map[string]string{TamperStopped: "stop_alerted_at", TamperUnclean: "unclean_alerted_at",
+	TamperPolicyFailure: "policy_fail_alerted_at"}
+
+// ClaimTamperAlert records that a tamper alert of this kind about the
+// endpoint goes out now, unless one went out less than cooldown ago. The
+// check and the mark are one update (the ClaimOfflineAlert pattern).
+func (s *Store) ClaimTamperAlert(ctx context.Context, id, kind string, cooldown time.Duration) (bool, error) {
+	col := tamperAlertCol[kind]
+	if col == "" {
+		return false, errors.New("unknown tamper alert kind " + kind)
+	}
+	err := s.db.QueryRow(ctx, `update cp.endpoints set `+col+` = now()
+		where id = $1 and (`+col+` is null or `+col+` <= now() - make_interval(secs => $2))
+		returning id`, id, int(cooldown.Seconds())).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // EndpointHealthSettings is a tenant's offline threshold and email choices.
 type EndpointHealthSettings struct {
 	OfflineAfterSeconds int  `json:"offline_after_seconds"`
 	EmailOffline        bool `json:"email_offline"`
 	// OfflineAlertIntervalMinutes: 0 = never email about a machine going
 	// offline (the default); N = at most once per machine per N minutes.
-	OfflineAlertIntervalMinutes int       `json:"offline_alert_interval_minutes"`
-	EmailHooks                  bool      `json:"email_hooks"`
-	UpdatedBy                   string    `json:"updated_by,omitempty"`
-	UpdatedAt                   time.Time `json:"updated_at,omitzero"`
-	Saved                       bool      `json:"saved"` // false: the defaults, nothing stored yet
+	OfflineAlertIntervalMinutes int  `json:"offline_alert_interval_minutes"`
+	EmailHooks                  bool `json:"email_hooks"`
+	// EmailTamper: email when effigentd is stopped while the machine keeps
+	// running, killed or crashed, or a kernel policy fails to load (default on).
+	EmailTamper bool      `json:"email_tamper"`
+	UpdatedBy   string    `json:"updated_by,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitzero"`
+	Saved       bool      `json:"saved"` // false: the defaults, nothing stored yet
 }
 
 // GetEndpointHealthSettings returns the tenant's settings, or the defaults
-// (defaultAfter, hook emails on, offline emails never) when it has none.
+// (defaultAfter, hook and tamper emails on, offline emails never) when it has none.
 func (s *Store) GetEndpointHealthSettings(ctx context.Context, tenant string, defaultAfter time.Duration) (EndpointHealthSettings, error) {
 	h := EndpointHealthSettings{Saved: true}
-	err := s.db.QueryRow(ctx, `select offline_after_seconds, email_offline, offline_alert_interval_minutes, email_hooks, updated_by, updated_at
+	err := s.db.QueryRow(ctx, `select offline_after_seconds, email_offline, offline_alert_interval_minutes, email_hooks, email_tamper, updated_by, updated_at
 		from cp.endpoint_health_settings where tenant_ref = $1`, tenant).
-		Scan(&h.OfflineAfterSeconds, &h.EmailOffline, &h.OfflineAlertIntervalMinutes, &h.EmailHooks, &h.UpdatedBy, &h.UpdatedAt)
+		Scan(&h.OfflineAfterSeconds, &h.EmailOffline, &h.OfflineAlertIntervalMinutes, &h.EmailHooks, &h.EmailTamper, &h.UpdatedBy, &h.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return EndpointHealthSettings{OfflineAfterSeconds: int(defaultAfter.Seconds()), EmailOffline: true, EmailHooks: true}, nil
+		return EndpointHealthSettings{OfflineAfterSeconds: int(defaultAfter.Seconds()), EmailOffline: true, EmailHooks: true, EmailTamper: true}, nil
 	}
 	return h, err
 }
 
 func (s *Store) PutEndpointHealthSettings(ctx context.Context, tenant string, h EndpointHealthSettings, by string) error {
-	_, err := s.db.Exec(ctx, `insert into cp.endpoint_health_settings (tenant_ref, offline_after_seconds, email_offline, email_hooks, updated_by, updated_at, offline_alert_interval_minutes)
-		values ($1, $2, $3, $4, $5, now(), $6)
+	_, err := s.db.Exec(ctx, `insert into cp.endpoint_health_settings (tenant_ref, offline_after_seconds, email_offline, email_hooks, updated_by, updated_at,
+			offline_alert_interval_minutes, email_tamper)
+		values ($1, $2, $3, $4, $5, now(), $6, $7)
 		on conflict (tenant_ref) do update set offline_after_seconds = $2, email_offline = $3, email_hooks = $4, updated_by = $5, updated_at = now(),
-			offline_alert_interval_minutes = $6`,
-		tenant, h.OfflineAfterSeconds, h.EmailOffline, h.EmailHooks, by, h.OfflineAlertIntervalMinutes)
+			offline_alert_interval_minutes = $6, email_tamper = $7`,
+		tenant, h.OfflineAfterSeconds, h.EmailOffline, h.EmailHooks, by, h.OfflineAlertIntervalMinutes, h.EmailTamper)
 	return err
 }

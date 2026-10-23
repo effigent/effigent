@@ -7,7 +7,7 @@ import { Ic } from '@/icons.tsx';
 import { useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiEndpointHealth, type ApiEnrollment } from '@/lib/api.ts';
-import { ago, dateTime, type EndpointRow, type HookRow } from '@/lib/live-map.ts';
+import { ago, dateTime, type EndpointRow, type HookRow, type KernelState } from '@/lib/live-map.ts';
 import type { AgentType } from '@/types.ts';
 import { AgentCell, Card, CardHead, CodeBlock, Empty, Loading, PageGuide, PageHead, ReadOnlyNote, Seg, StatusPill } from '@/components/ui.tsx';
 import { CLOUD_VENDORS, CloudEnvironments, type CloudVendor } from '@/components/CloudEnvironments.tsx';
@@ -73,12 +73,12 @@ function installCommand(os: Os, token: string, server: string): string {
 const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
   macos: {
     run: 'Run in Terminal on the Mac (asks for an admin password).',
-    does: 'Installs the Effigent package, enrolls the Mac, adds the Claude Code, Codex and Gemini CLI hooks to their machine-wide settings and starts the service. Their tool calls are checked against policy before they run.',
+    does: 'Installs the Effigent package, enrolls the Mac, adds the Claude Code, Codex, Gemini CLI and Cursor hooks to their machine-wide settings and starts the service. Their tool calls are checked against policy before they run.',
     fleet: 'Fleet (Jamf, Kandji, Intune): deploy the Effigent .pkg with a configuration profile for the ai.effigent domain that sets EnrollmentToken to a multi-use token.',
   },
   linux: {
     run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). Without systemd (containers, sandboxes) both run as background processes.',
-    does: 'Installs Tetragon and effigentd as services and enrolls the machine. Agents are blocked in the kernel (BPF LSM): programs, files and network.',
+    does: 'Installs Tetragon and effigentd as services, enrolls the machine and adds the Claude Code, Codex, Gemini CLI and Cursor hooks (--skip-hooks leaves them out). Agents are blocked in the kernel (BPF LSM): programs, files and network; the hooks add commands, MCP tools and approvals.',
     fleet: 'Fleet: run the same command from Ansible, cloud-init or your image build with a multi-use token.',
   },
   grokbot: {
@@ -88,7 +88,7 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
   },
   windows: {
     run: 'Run in PowerShell as Administrator. Windows support is in preview.',
-    does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code, Codex and Gemini CLI hooks. Their tool calls are checked against policy before they run.',
+    does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code, Codex, Gemini CLI and Cursor hooks. Their tool calls are checked against policy before they run.',
     fleet: 'Fleet (Intune Win32 app): powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token <multi-use token>.',
   },
   kubernetes: {
@@ -206,6 +206,26 @@ function hookProblemText(h: HookRow): string {
 
 const HOOK_BADGE: Record<HookRow['state'], string> = { installed: 'b-green', missing: 'b-red', modified: 'b-red', unreadable: 'b-gold' };
 
+const KERNEL_LABEL: Record<Exclude<KernelState, 'enforcing'>, string> = {
+  observe_only: 'observe-only', no_bpf_lsm: 'observe-only: BPF LSM off', tetragon_down: 'Tetragon disconnected', unreported: 'kernel state not reported',
+};
+const KERNEL_TEXT: Record<Exclude<KernelState, 'enforcing'>, string> = {
+  observe_only: "This kernel can't block, so effigentd runs the kernel layer observe-only: blocks become alerts and self-protection is off. Agent hooks still decide. Kernel enforcement needs a distro kernel 5.12 or newer with BTF and bpf in the LSM list (lsm= boot parameter).",
+  no_bpf_lsm: "BPF LSM isn't in this kernel's active LSM list, so the kernel layer only observes: blocks become alerts. Agent hooks still decide. Add bpf to the lsm= boot parameter and reboot.",
+  tetragon_down: "effigentd has lost its connection to Tetragon: agents that start now get no kernel policy, and policy changes don't reach the kernel until it reconnects (if Tetragon itself stopped, nothing is enforced by the kernel). Agent hooks still decide. effigentd reconnects on its own; check that Tetragon is running.",
+  unreported: "This effigentd doesn't report whether the kernel layer can enforce (BPF LSM, Tetragon connection): upgrade it to see it here.",
+};
+
+/** The row's kernel label and explanation, with effigentd's own reason when it sent one. */
+function kernelLabel(e: EndpointRow): string {
+  if (e.kernel === null || e.kernel === 'enforcing') return '';
+  return e.kernel === 'observe_only' && e.kernelReason ? `observe-only: ${e.kernelReason}` : KERNEL_LABEL[e.kernel];
+}
+function kernelText(e: EndpointRow): string {
+  if (e.kernel === null || e.kernel === 'enforcing') return '';
+  return e.kernel === 'observe_only' && e.kernelReason ? `Kernel enforcement off: ${e.kernelReason}. ${KERNEL_TEXT.observe_only}` : KERNEL_TEXT[e.kernel];
+}
+
 /** Offline alert email intervals in minutes (0 = never, the default). */
 const OFFLINE_EVERY: [number, string][] = [
   [0, 'Never'], [60, 'Every hour'], [360, 'Every 6 hours'], [720, 'Every 12 hours'], [1440, 'Once a day'], [10080, 'Once a week'],
@@ -222,7 +242,7 @@ function HealthSettings() {
   useEffect(() => {
     api.get<ApiEndpointHealth>('/endpoint-health').then((v) => { setH(v); setMins(String(v.offline_after_minutes)); }).catch((e) => setErr(apiErrorText(e)));
   }, [api]);
-  const save = async (patch: Partial<Pick<ApiEndpointHealth, 'offline_after_minutes' | 'email_offline' | 'offline_alert_interval_minutes' | 'email_hooks'>>) => {
+  const save = async (patch: Partial<Pick<ApiEndpointHealth, 'offline_after_minutes' | 'email_offline' | 'offline_alert_interval_minutes' | 'email_hooks' | 'email_tamper'>>) => {
     setSaving(true); setErr(null);
     try {
       const v = await api.send<ApiEndpointHealth>('PUT', '/endpoint-health', patch);
@@ -238,7 +258,7 @@ function HealthSettings() {
   const offlineEvery = h && h.email_offline ? h.offline_alert_interval_minutes : 0;
   return (
     <Card>
-      <CardHead title="Machine health alerts" sub="When a machine stops checking in, or an agent's hook is removed or turned off." />
+      <CardHead title="Machine health alerts" sub="When a machine stops checking in, effigentd is switched off, or an agent's hook is removed or turned off." />
       {err && <div className="callout bad" style={{ margin: '0 0 10px' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
       {!h ? (!err && <Loading />) : (
         <div style={{ display: 'grid', gap: 10, fontSize: 13 }}>
@@ -268,6 +288,14 @@ function HealthSettings() {
             <input type="checkbox" checked={h.email_hooks} disabled={!canWrite || saving} onChange={(e) => save({ email_hooks: e.target.checked })} />
             Email when an agent&apos;s hook is missing or turned off
           </label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={h.email_tamper} disabled={!canWrite || saving} onChange={(e) => save({ email_tamper: e.target.checked })} />
+            Email when effigentd is stopped while the machine keeps running, is killed or crashes, or a kernel policy fails to load
+          </label>
+          <div className="muted">
+            At most once an hour per machine (kernel policy failures once a day). A machine that sleeps, shuts down or restarts never sends this;
+            a stop is reported once the machine has stayed silent past the offline threshold, so restarts and upgrades don&apos;t either. On macOS effigentd can&apos;t tell a stop from a shutdown, so a stop there is reported only as offline.
+          </div>
           <div className="muted">
             {h.email_available ? (h.emails.length ? `Emails go to ${h.emails.join(', ')} (Settings → Notifications).` : 'No notification emails set (Settings → Notifications).') : 'Email is not configured on this control plane.'}
             {' '}Webhooks: subscribe to {h.webhook_events.join(', ')} (Settings → Integrations). Every change is in the audit trail.
@@ -289,6 +317,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
   const revoked = endpointRows.filter((e) => e.revoked);
   const online = eps.filter((e) => e.status === 'online');
   const kernel = eps.filter((e) => e.platform === 'linux');
+  const kernelOff = kernel.filter((e) => e.kernel === 'observe_only' || e.kernel === 'no_bpf_lsm' || e.kernel === 'tetragon_down');
   const observe = eps.filter((e) => e.platform !== 'linux');
   const current = eps.filter((e) => latestPolicy > 0 && e.policyVersion === latestPolicy).length;
   const newest = eps.reduce((m, e) => (cmpVersion(e.version, m) > 0 ? e.version : m), '0');
@@ -333,7 +362,12 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
               <span><span className="cell-main mono-sm" style={{ color: 'var(--txt)' }}>{e.hostname}</span><span className="cell-sub">{e.cloud ? `cloud environment · ${CLOUD_VENDORS[e.vendor as CloudVendor] ?? e.vendor}` : `${e.os} · ${e.arch}`}</span></span>
             </span>
           </td>
-          <td className="muted">{e.cloud ? 'Remote hooks' : e.platform === 'linux' ? 'Kernel (Tetragon)' : 'Agent hooks'}</td>
+          <td className="muted">
+            {e.cloud ? 'Remote hooks' : e.platform === 'linux' ? (e.kernel === null || e.hooksOnly ? 'Agent hooks' : 'Kernel (Tetragon)') : 'Agent hooks'}
+            {e.kernel !== null && e.kernel !== 'enforcing' && (
+              <span className="cell-sub" style={{ color: e.kernel === 'unreported' ? undefined : 'var(--gold)' }} title={kernelText(e)}>{kernelLabel(e)}</span>
+            )}
+          </td>
           <td className="mono-sm" style={{ color: cmpVersion(e.version, newest) < 0 ? 'var(--gold)' : undefined }}>{e.version || '—'}</td>
           <td className="mono-sm" style={{ color: latestPolicy > 0 && e.policyVersion !== latestPolicy && !e.revoked ? 'var(--gold)' : undefined }}>
             {e.policyVersion > 0 ? `v${e.policyVersion}` : 'default'}
@@ -373,6 +407,12 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
                     {e.stopped ? `${stopText(e.stopped)}. ` : `No heartbeat since ${dateTime(e.lastSeenAt)} and no stop was reported (asleep, off the network, killed, or the machine is gone). `}
                     {e.offlineAt !== null && `Marked offline ${dateTime(e.offlineAt)}.`}
                   </span>
+                </div>
+              )}
+              {e.kernel !== null && e.kernel !== 'enforcing' && (
+                <div className={e.kernel === 'unreported' ? 'callout' : 'callout warn'} style={{ margin: '0 0 10px' }}>
+                  <Ic n="alert" size={16} />
+                  <span>{kernelText(e)}</span>
                 </div>
               )}
               {e.hooks.length > 0 ? (
@@ -424,7 +464,8 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
 
       <div className="grid-4">
         <Card className="mini-stat"><div className="k">Endpoints online</div><div className="v">{online.length}/{eps.length}</div><div className="s">{eps.length - online.length} need attention</div></Card>
-        <Card className="mini-stat"><div className="k">Kernel-enforced</div><div className="v">{kernel.length}</div><div className="s">Linux · Tetragon BPF LSM, pid-scoped</div></Card>
+        <Card className="mini-stat"><div className="k">Kernel-enforced</div><div className="v">{kernel.length - kernelOff.length}</div>
+          <div className="s">{kernelOff.length > 0 ? `+ ${kernelOff.length} observe-only (old kernel, BPF LSM off or Tetragon disconnected)` : 'Linux · Tetragon BPF LSM, pid-scoped'}</div></Card>
         <Card className="mini-stat"><div className="k">Agent hooks</div><div className="v">{observe.length}</div><div className="s">macOS / Windows · Claude Code, Codex, Gemini CLI, Cursor checked before each action</div></Card>
         <Card className="mini-stat"><div className="k">On latest policy</div><div className="v">{current}/{eps.length}</div><div className="s">{latestPolicy > 0 ? `Published v${latestPolicy}` : 'Nothing published yet'}</div></Card>
       </div>

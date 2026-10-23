@@ -42,11 +42,13 @@ func statusCmd(args []string) {
 		fmt.Printf("%s effigentd %v running\n", mark(true), h["version"])
 		hooksOnly := h["sensor"] == "hooks"
 		if hooksOnly {
-			fmt.Printf("%s Agent hooks mode (no kernel enforcement on this OS)\n", mark(true))
+			fmt.Printf("%s Agent hooks mode (no kernel enforcement)\n", mark(true))
 		} else {
 			fmt.Printf("%s Tetragon connected\n", mark(yes("tetragon_connected")))
 		}
-		if hooksOnly {
+		if why, _ := h["observe_only"].(string); why != "" {
+			fmt.Printf("%s Kernel layer observe-only (kernel enforcement off): %s; agent hooks still enforce\n", mark(false), why)
+		} else if hooksOnly {
 		} else if yes("bpf_lsm") {
 			fmt.Printf("%s Blocking available (BPF LSM enabled)\n", mark(true))
 		} else {

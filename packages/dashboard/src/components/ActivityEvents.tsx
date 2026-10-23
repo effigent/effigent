@@ -8,7 +8,7 @@ import { RANGE_MS, useLive } from '@/live.tsx';
 import { useStore } from '@/store.tsx';
 import { apiErrorText, type ApiEvent } from '@/lib/api.ts';
 import { classify } from '@/lib/live-graph.ts';
-import { ago, dateTime, outcomeText, toConsoleEvent } from '@/lib/live-map.ts';
+import { ago, dateTime, IDENTITY_ATTRS, outcomeText, toConsoleEvent } from '@/lib/live-map.ts';
 import type { ConsoleEvent, EventType } from '@/types.ts';
 import { AgentGlyph, Card, CardHead, Empty, InfoTip, Loading, OutcomePill, RiskyTag } from '@/components/ui.tsx';
 
@@ -89,10 +89,12 @@ function withOutcomes(rows: Row[]): Row[] {
 
 const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 function eventsCsv(rows: Row[]): string {
-  const head = ['id', 'time', 'type', 'severity', 'outcome', 'agent', 'endpoint', 'action', 'target', 'rule', 'via', 'mode', 'command_class', 'ended'];
+  const head = ['id', 'time', 'type', 'severity', 'outcome', 'agent', 'endpoint', 'action', 'target', 'rule', 'via', 'mode', 'command_class', 'ended',
+    ...IDENTITY_ATTRS.map((a) => a.key), 'environments'];
   return [head.join(','), ...rows.map(({ ce: e }) => [
     e.id, e.at ? new Date(e.at).toISOString() : e.time, e.type, e.severity, e.outcome, e.agentType ?? '', e.endpointName ?? e.endpoint ?? '',
     e.summary, e.target ?? '', e.rule ?? '', e.via ?? '', e.mode ?? '', e.risk ?? '', e.ended ?? '',
+    ...IDENTITY_ATTRS.map((a) => e.identity?.find((i) => i.key === a.key)?.value ?? ''), (e.targetEnvs ?? []).join(' '),
   ].map(esc).join(','))].join('\n');
 }
 
@@ -263,7 +265,14 @@ export function ActivityEvents({ initialQuery, initialOutcome, initialRisky = fa
                     <td><span className="cell-main" style={{ display: 'block' }}>{typeLabel(e.type)}</span><span className="cell-sub">{e.severity}{e.mode ? ` · ${e.mode}` : ''}</span></td>
                     <td>{e.agentType ? <span className="agent-cell"><AgentGlyph type={e.agentType} size={24} /><span><span className="cell-main">{agentMeta(e.agentType).label}</span>{e.via && <span className="cell-sub">{e.via}</span>}</span></span> : <span className="muted">effigentd</span>}</td>
                     <td><span className="mono-sm">{e.endpointName ?? '—'}</span></td>
-                    <td style={{ maxWidth: 340 }}><span className="cell-main" style={{ display: 'block' }}>{e.summary}{e.risk === 'risky' && <RiskyTag />}</span><span className="cell-sub mono-sm" style={{ display: 'block', wordBreak: 'break-all' }}>{e.target}</span></td>
+                    <td style={{ maxWidth: 340 }}><span className="cell-main" style={{ display: 'block' }}>{e.summary}{e.risk === 'risky' && <RiskyTag />}</span><span className="cell-sub mono-sm" style={{ display: 'block', wordBreak: 'break-all' }}>{e.target}</span>
+                      {(e.identity || e.targetEnvs) && (
+                        <span className="cell-sub" title="Where the call pointed, read by effigentd from its flags, environment and config files"
+                          style={{ display: 'block', marginTop: 3, wordBreak: 'break-word' }}>
+                          {e.targetEnvs?.map((env) => <b key={env} style={{ color: 'var(--red)', marginRight: 6 }}>{env}</b>)}
+                          {e.identity?.map((i) => `${i.label} ${i.value}`).join(' · ')}
+                        </span>
+                      )}</td>
                     <td className="muted" style={{ maxWidth: 260, fontSize: 12.5 }}>{e.rule ?? '—'}</td>
                     <td>
                       <OutcomePill outcome={e.outcome} />

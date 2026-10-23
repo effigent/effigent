@@ -193,16 +193,19 @@ func TestIntegrations(t *testing.T) {
 		t.Fatalf("review_url: %v", req.Data["review_url"])
 	}
 
-	// an automation re-reads the request, then decides it with the API key
+	// an automation re-reads the request; with the API key it may deny it, never approve it
 	var a store.Approval
 	if code := call("GET", "/api/v1/approvals/"+ar.ID, k.Key, nil, &a); code != 200 || a.State != "pending" {
 		t.Fatalf("get approval: %d %+v", code, a)
 	}
-	if code := call("POST", "/api/v1/approvals/"+ar.ID+"/decision", k.Key, map[string]any{"decision": "approve", "name": "Dana (Slack)"}, nil); code != 200 {
+	if code := call("POST", "/api/v1/approvals/"+ar.ID+"/decision", k.Key, map[string]any{"decision": "approve", "name": "Dana (Slack)"}, nil); code != 403 {
+		t.Fatalf("key approval must be refused: %d", code)
+	}
+	if code := call("POST", "/api/v1/approvals/"+ar.ID+"/decision", k.Key, map[string]any{"decision": "deny", "name": "Dana (Slack)"}, nil); code != 200 {
 		t.Fatalf("key decision: %d", code)
 	}
 	dec := waitFor("approval.decided", 1)[0]
-	if ap, _ := dec.Data["approval"].(map[string]any); ap["state"] != "approved" || ap["decided_by_name"] != "Dana (Slack)" || ap["decided_by"] != "apikey:"+k.ID {
+	if ap, _ := dec.Data["approval"].(map[string]any); ap["state"] != "denied" || ap["decided_by_name"] != "Dana (Slack)" || ap["decided_by"] != "apikey:"+k.ID {
 		t.Fatalf("decided: %+v", dec.Data)
 	}
 

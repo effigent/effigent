@@ -52,8 +52,8 @@ type postureReport struct {
 	Policy      store.PolicyActivity `json:"policy"`
 	Anomalies   reportAnomalies      `json:"anomalies"`
 	Spend       *reportSpend         `json:"spend"`
-	// BreakGlass is filled by a registered "break_glass" section once that
-	// feature exists; null until then.
+	// BreakGlass is filled by the registered "break_glass" section
+	// (break_glass.go: store.BreakGlassActivity); null if it couldn't be built.
 	BreakGlass any            `json:"break_glass"`
 	Sections   map[string]any `json:"sections,omitempty"`
 	Notes      []string       `json:"notes"`

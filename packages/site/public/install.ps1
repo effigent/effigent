@@ -10,10 +10,16 @@
   Intune (Win32 app) install command:
     powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token eft_...
   Use a multi-use enrollment token from the console for a fleet.
+
+  A self-hosted control plane whose certificate comes from a private CA:
+    .\install.ps1 -Token eft_... -Server https://effigent-api.example.com -CaFile C:\path\ca.pem
+  The PEM bundle is kept as ca.pem in the state dir and trusted (with the system
+  roots) on every start.
 #>
 param(
   [string]$Token = "",
   [string]$Server = "https://api.effigent.ai",
+  [string]$CaFile = "",
   [string]$Version = "latest",
   [string]$Releases = "https://effigent.ai/releases/effigentd",
   [switch]$Uninstall
@@ -57,17 +63,28 @@ if ($want -ne $got) { Remove-Item $tmp -Force; throw "effigentd download failed 
 if (Get-Service effigentd -ErrorAction SilentlyContinue) { Stop-Service effigentd -ErrorAction SilentlyContinue }
 Move-Item $tmp $Exe -Force
 
+if ($CaFile) {
+  if (-not (Test-Path $CaFile -PathType Leaf) -or -not (Select-String -Path $CaFile -Pattern '-----BEGIN CERTIFICATE-----' -SimpleMatch -Quiet)) {
+    throw "-CaFile ${CaFile}: not a readable PEM certificate bundle"
+  }
+  # where effigentd trusts it on every start; a rerun with a new bundle replaces it
+  Copy-Item $CaFile (Join-Path $State "ca.pem") -Force
+}
 if (Test-Path (Join-Path $State "endpoint.json")) {
   Say "Already enrolled; keeping the existing enrollment"
 } elseif ($Token) {
   Say "Enrolling this machine with $Server"
-  & $Exe enroll --server $Server --token $Token --state-dir $State
+  if ($CaFile) {
+    & $Exe enroll --server $Server --token $Token --ca-file (Join-Path $State "ca.pem") --state-dir $State
+  } else {
+    & $Exe enroll --server $Server --token $Token --state-dir $State
+  }
   if ($LASTEXITCODE -ne 0) { throw "enrollment failed" }
 } else {
   throw "-Token is required for the first install (console: Enforcement -> Enroll a machine)"
 }
 
-Say "Adding the agent hooks (Claude Code, Codex, Gemini CLI)"
+Say "Adding the agent hooks (Claude Code, Codex, Gemini CLI, Cursor)"
 & $Exe install-hooks
 if ($LASTEXITCODE -ne 0) { throw "could not update the agents' managed settings" }
 

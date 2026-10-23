@@ -289,7 +289,8 @@ func (x *actx) npmManifest() {
 var pipValued = map[string]bool{"-r": true, "--requirement": true, "-c": true, "--constraint": true, "-i": true, "--index-url": true,
 	"--extra-index-url": true, "-f": true, "--find-links": true, "-e": true, "--editable": true, "-t": true, "--target": true,
 	"--python": true, "-p": true, "--with": true, "--from": true, "--index": true, "--default-index": true, "--group": true,
-	"--extra": true, "-E": true, "--source": true, "--prefix": true, "--root": true, "--trusted-host": true}
+	"--extra": true, "-E": true, "--source": true, "--prefix": true, "--root": true, "--trusted-host": true,
+	"--only-binary": true, "--no-binary": true}
 
 var pipSpecRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:==\s*([\w.+!-]+))?`)
 
@@ -361,6 +362,20 @@ func (x *actx) pip(prog string, rest []string, env map[string]string) {
 	for _, r := range flagValues(rest, "-r", "--requirement") {
 		x.requirements(resolveIn(r, x.cwd, x.home), 0)
 	}
+	if !x.pipBinaryOnly(rest, env) {
+		// an sdist (or a local project) is built: its setup.py / build backend runs
+		x.add(event.Action{Kind: "package_scripts", Target: how, Attrs: map[string]string{"ecosystem": "pypi"}})
+	}
+}
+
+// pipBinaryOnly: wheels only (--only-binary=:all:, uv --no-build, or the
+// same in the environment), so no package's build code runs.
+func (x *actx) pipBinaryOnly(rest []string, env map[string]string) bool {
+	if len(flagValues(rest, "--no-binary")) > 0 {
+		return false
+	}
+	return slices.Contains(flagValues(rest, "--only-binary"), ":all:") || hasFlag(rest, "--no-build") ||
+		strings.Contains(x.getenv(env, "PIP_ONLY_BINARY"), ":all:") || truthy(x.getenv(env, "UV_NO_BUILD"))
 }
 
 // normPyPI normalises a PyPI name (PEP 503).

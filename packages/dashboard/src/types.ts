@@ -120,6 +120,10 @@ export interface ConsoleEvent {
   /** How the tool call ended (agent post-tool hooks): "error · exit 2 · 1.2s". */
   ended?: string;
   endedOk?: boolean;
+  /** Where the call's actions pointed (cloud account, cluster, project, database), from their attrs. */
+  identity?: { key: string; label: string; value: string }[];
+  /** Policy environments those targets belong to (prod). */
+  targetEnvs?: string[];
 }
 
 export interface Approval {

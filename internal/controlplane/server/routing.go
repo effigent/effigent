@@ -85,7 +85,8 @@ func memberOf(g *store.ApproverGroup, userID, email string) *store.GroupMember {
 
 // canDecide applies the routing to a decision from the console or the API:
 // the routed group's members decide; workspace admins may step in (an
-// override, recorded as such); API keys need the approvals scope. Requests
+// override, recorded as such); API keys need the approvals scope (and can
+// only deny: voteRefusal refuses their approvals). Requests
 // without a group are for workspace admins, as before routing.
 func canDecide(p Principal, a store.Approval, c store.RoutingConfig) (ok, override bool, member *store.GroupMember) {
 	if p.Via == "api-key" {
@@ -362,9 +363,15 @@ func (s *Server) testRouting(w http.ResponseWriter, r *http.Request, p Principal
 		s.fail(w, err)
 		return
 	}
+	warning := quorumWarning(group, q, rules)
+	if rules.Excludes() && q.Unknown() {
+		// voteRefusal would refuse every approval of such a request
+		warning = "Effigent doesn't know who would be asking (" + requestedFrom(a) + "): with the requester kept out, every approval " +
+			"would be refused. Set the machine's owner (Machines) or map its OS user in People"
+	}
 	out := map[string]any{"route_id": "", "route_name": "", "group_id": "", "group_name": "", "default": route == nil && group != nil,
 		"approvals_required": rules.Required(), "exclude_requester": rules.Excludes(), "require_ticket": rules.RequireTicket,
-		"requester": q, "eligible_approvers": eligible(group, q, rules.Excludes()), "warning": quorumWarning(group, q, rules)}
+		"requester": q, "eligible_approvers": eligible(group, q, rules.Excludes()), "warning": warning}
 	if route != nil {
 		out["route_id"], out["route_name"] = route.ID, route.Name
 	}

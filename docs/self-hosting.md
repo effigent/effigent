@@ -162,12 +162,15 @@ or `curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --server https://e
 Kubernetes chart for nodes (`deploy/helm/effigent`) takes `server=https://effigent-api.example.com`.
 
 **Private CA.** If the control plane's certificate comes from your own CA, give effigentd the
-CA bundle once: `effigentd enroll --ca-file /path/ca.pem …` (or `EFFIGENT_CA_FILE`). The
-bundle is copied to `<state dir>/ca.pem` and trusted, in addition to the system roots, on
-every start. The installer scripts and the macOS package don't pass `--ca-file` yet: on those
-machines run `effigentd enroll --ca-file … --state-dir /var/lib/effigent` (Linux) or
-`/Library/Application Support/Effigent` (macOS) yourself before or instead of the installer's
-enrollment.
+CA bundle once: `install.sh … --ca-file /path/ca.pem` (Linux, macOS), `install.ps1 … -CaFile
+C:\path\ca.pem` (Windows), or `effigentd enroll --ca-file /path/ca.pem …` (or
+`EFFIGENT_CA_FILE`). The bundle is copied to `<state dir>/ca.pem` and trusted, in addition to
+the system roots, on every start; rerunning the installer with a new bundle replaces it. On
+macOS the installer leaves it in `/Library/Application Support/Effigent/ca.pem` and the
+package's post-install enrolls with it: that needs a `.pkg` built from this release on (with an
+older package, run `effigentd enroll --ca-file … --state-dir "/Library/Application
+Support/Effigent"` yourself). The release files themselves are downloaded with the system
+roots (`EFFIGENT_RELEASES` for a mirror).
 
 ## 5. Upgrade
 

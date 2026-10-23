@@ -32,6 +32,8 @@ func TestProposalDecider(t *testing.T) {
 		{"an API key", Principal{UserID: "apikey:k2", Role: "api_key", Via: "api-key", Scopes: []string{"policy"}}, prop, false},
 		{"the person who made the author's key", Principal{UserID: "user_ann", Role: "admin", Via: "clerk"}, byKey, false},
 		{"someone else, for a key's proposal", Principal{UserID: "user_bob", Role: "admin", Via: "clerk"}, byKey, true},
+		{"the admin token", Principal{UserID: "admin", Role: "admin", Via: "admin-token"}, prop, false},
+		{"an admin signed in through OIDC", Principal{UserID: "oidc|bob", Role: "admin", Via: "oidc"}, prop, true},
 	} {
 		if got := proposalDecider(c.p, c.prop) == ""; got != c.ok {
 			t.Errorf("%s: %v, want %v", c.name, got, c.ok)
@@ -148,6 +150,12 @@ func TestPolicyProposals(t *testing.T) {
 	}
 	if code, _ := as("user_ann", s.decideProposal, "POST", annProp.Proposal.ID, approve); code != 403 {
 		t.Fatalf("self-approval: %d", code)
+	}
+	// the admin token is no second admin: it can neither approve nor reject Ann's
+	for _, d := range []string{"approve", "reject"} {
+		if code := call("POST", "/api/v1/policy/proposals/"+annProp.Proposal.ID+"/decision", "", map[string]any{"decision": d}, nil); code != 403 {
+			t.Fatalf("the admin token's %s: %d", d, code)
+		}
 	}
 	var audit []store.AuditEntry
 	call("GET", "/api/v1/audit?action=policy.self_approval_refused", "", nil, &audit)

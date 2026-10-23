@@ -2,7 +2,7 @@
  * Control-plane JSON → the console's view types. Kept pure (no React) so the
  * mapping rules — status thresholds, outcome per event type — live in one place.
  */
-import type { ApiEndpoint, ApiEvent, ApiToolOutcome } from './api.ts';
+import type { ApiEndpoint, ApiEvent, ApiEventBody, ApiToolOutcome } from './api.ts';
 import { classify, launchedAs, type Classified } from './live-graph.ts';
 import type { ConsoleEvent, EventType, Outcome, Severity } from '@/types.ts';
 
@@ -37,6 +37,26 @@ export interface EndpointRow {
   /** A cloud environment (sessions in a vendor's cloud) rather than a machine. */
   cloud: boolean;
   vendor: string;
+  /** Linux kernel layer: enforcing, observe-only (old kernel / no BTF / no BPF LSM, as effigentd
+   *  reports it; or no BPF LSM / Tetragon down), or not reported by this effigentd; null where
+   *  there is no kernel layer (hooks sensor on a kernel that could block, macOS, cloud). */
+  kernel: KernelState | null;
+  /** Why effigentd runs the kernel layer observe-only ("kernel 5.4.0 older than 5.12; no BTF"). */
+  kernelReason: string;
+  /** effigentd runs with the agent hooks only (macOS, or Linux without Tetragon, e.g. no BTF). */
+  hooksOnly: boolean;
+}
+
+export type KernelState = 'enforcing' | 'observe_only' | 'no_bpf_lsm' | 'tetragon_down' | 'unreported';
+
+export function kernelState(e: ApiEndpoint): KernelState | null {
+  const k = e.kernel;
+  if (e.kind === 'cloud' || e.os.toLowerCase() !== 'linux') return null;
+  if (k?.sensor === 'hooks') return k.observe_only ? 'observe_only' : null; // a hooks-only install on a kernel without BTF
+  if (!k) return 'unreported';
+  if (!k.tetragon_connected) return 'tetragon_down';
+  if (k.observe_only) return 'observe_only';
+  return k.bpf_lsm ? 'enforcing' : 'no_bpf_lsm';
 }
 
 export interface HookRow {
@@ -115,7 +135,8 @@ export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
     platform: os === 'linux' ? 'linux' : os === 'darwin' ? 'macos' : 'other',
     version: e.version, policyVersion: e.policy_version, status, lastSeenAt: seen, enrolledAt: ms(e.enrolled_at) ?? 0, revoked: e.revoked,
     hooks, hookProblems: e.revoked ? [] : problems, hooksReportedAt: ms(e.hooks_reported_at), offlineAt, stopped,
-    cloud, vendor: e.vendor ?? '',
+    cloud, vendor: e.vendor ?? '', kernel: e.revoked ? null : kernelState(e), kernelReason: e.kernel?.observe_only ?? '',
+    hooksOnly: e.kernel?.sensor === 'hooks',
   };
 }
 
@@ -166,6 +187,28 @@ function toolSummary(c: Classified): string {
   return c.full;
 }
 
+/** The action attrs that say where a call pointed (effigentd hooks/cloud.go, sql.go), in display order. */
+export const IDENTITY_ATTRS: { key: string; label: string }[] = [
+  { key: 'aws_profile', label: 'AWS profile' }, { key: 'aws_account', label: 'AWS account' },
+  { key: 'kube_context', label: 'kube context' }, { key: 'gcloud_project', label: 'gcloud project' },
+  { key: 'azure_subscription', label: 'Azure subscription' }, { key: 'terraform_workspace', label: 'Terraform workspace' },
+  { key: 'pulumi_stack', label: 'Pulumi stack' }, { key: 'db_host', label: 'DB host' },
+];
+
+/** The identity attrs of an event's actions, merged (distinct values joined), and their environments. */
+export function identityOf(b: ApiEventBody): { identity: { key: string; label: string; value: string }[]; envs: string[] } {
+  const acts = b.actions ?? [];
+  const identity = IDENTITY_ATTRS.flatMap(({ key, label }) => {
+    const vals = [...new Set(acts.map((a) => {
+      const v = a.attrs?.[key] ?? '';
+      const name = key === 'azure_subscription' ? a.attrs?.azure_subscription_name : '';
+      return v && name ? `${name} (${v})` : v;
+    }).filter(Boolean))];
+    return vals.length ? [{ key, label, value: vals.join(', ') }] : [];
+  });
+  return { identity, envs: [...new Set(acts.flatMap((a) => a.envs ?? []))] };
+}
+
 export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): ConsoleEvent {
   const b = e.body ?? {};
   const at = ms(e.time) ?? 0;
@@ -196,6 +239,7 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
     default: summary = b.message || e.type;
   }
   const severity: Severity = e.severity === 'high' || e.severity === 'medium' ? e.severity : 'info';
+  const { identity, envs } = identityOf(b);
   return {
     id: `ev-${e.id}`, at, time: clock(at), ago: '',
     type, severity, outcome: OUTCOME[e.type] ?? 'system', title: mcp && e.type === 'exec' ? 'Called an MCP tool' : TITLE[e.type] ?? e.type,
@@ -205,6 +249,7 @@ export function toConsoleEvent(e: ApiEvent, hostById: Map<string, string>): Cons
     rule: b.rule || undefined, via: b.via || undefined, mode: (b.mode as ConsoleEvent['mode']) || undefined,
     risk: c?.kind === 'command' ? c.risk : undefined,
     riskRule: c?.kind === 'command' ? c.rule : undefined,
+    identity: identity.length ? identity : undefined, targetEnvs: envs.length ? envs : undefined,
   };
 }
 
