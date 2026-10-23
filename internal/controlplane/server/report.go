@@ -69,6 +69,15 @@ type reportMachines struct {
 	HooksHealthy    int            `json:"hooks_healthy"`
 	HookProblems    []hookProblem  `json:"hook_problems"`
 	ByOS            map[string]int `json:"by_os"`
+	// kernel layer observe-only now (old kernel, no BTF, BPF LSM off; observe_only.go)
+	ObserveOnly         int                  `json:"observe_only"`
+	ObserveOnlyMachines []observeOnlyMachine `json:"observe_only_machines"`
+}
+
+type observeOnlyMachine struct {
+	EndpointID string `json:"endpoint_id"`
+	Hostname   string `json:"hostname"`
+	Reason     string `json:"reason"`
 }
 
 type hookProblem struct {
@@ -199,7 +208,7 @@ func (s *Server) buildReport(ctx context.Context, tenant string, days int, now t
 		return rep, err
 	}
 	offlineAfter := time.Duration(health.OfflineAfterSeconds) * time.Second
-	m := reportMachines{HookProblems: []hookProblem{}, ByOS: map[string]int{}}
+	m := reportMachines{HookProblems: []hookProblem{}, ByOS: map[string]int{}, ObserveOnlyMachines: []observeOnlyMachine{}}
 	byID := map[string]store.Endpoint{}
 	for _, e := range eps {
 		byID[e.ID] = e
@@ -219,6 +228,10 @@ func (s *Server) buildReport(ctx context.Context, tenant string, days int, now t
 		} else {
 			m.OfflineNow++
 		}
+		if why := observeOnlyOf(e.Kernel); why != "" {
+			m.ObserveOnly++
+			m.ObserveOnlyMachines = append(m.ObserveOnlyMachines, observeOnlyMachine{EndpointID: e.ID, Hostname: e.Hostname, Reason: why})
+		}
 		if hr := parseHookReport(e.Hooks); hr != nil {
 			m.HooksReporting++
 			if probs := hr.problems(); len(probs) == 0 {
@@ -234,6 +247,7 @@ func (s *Server) buildReport(ctx context.Context, tenant string, days int, now t
 		}
 	}
 	sort.Slice(m.HookProblems, func(i, j int) bool { return m.HookProblems[i].Hostname < m.HookProblems[j].Hostname })
+	sort.Slice(m.ObserveOnlyMachines, func(i, j int) bool { return m.ObserveOnlyMachines[i].Hostname < m.ObserveOnlyMachines[j].Hostname })
 	rep.Machines = m
 
 	// agents in use, by person and team (the daily activity rollup)
@@ -712,6 +726,9 @@ func reportMessage(rep postureReport, origin string) notify.Message {
 	machines := fmt.Sprintf("%d enrolled (%d new), %d online now, %d seen in the period", m.Enrolled, m.EnrolledInRange, m.OnlineNow, m.SeenInRange)
 	if m.HooksReporting > 0 {
 		machines += fmt.Sprintf("; agent hooks healthy on %d of %d", m.HooksHealthy, m.HooksReporting)
+	}
+	if m.ObserveOnly > 0 {
+		machines += "; kernel layer observe-only on " + plural(int64(m.ObserveOnly), "machine", "machines")
 	}
 	proposals := int64(0)
 	for _, n := range rep.Policy.Proposals {

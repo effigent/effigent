@@ -66,7 +66,14 @@ export function Report({ initialDays }: { initialDays?: string }) {
                   ['Seen in the period', num(rep.machines.seen_in_period)],
                   ['Online now / offline', `${rep.machines.online_now} / ${rep.machines.offline_now}`],
                   ['Hooks reporting / healthy', `${rep.machines.hooks_reporting} / ${rep.machines.hooks_healthy}`],
+                  ['Kernel layer observe-only', num(rep.machines.observe_only ?? 0)],
                 ]} />
+                {(rep.machines.observe_only_machines ?? []).length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div className="section-label">Kernel observes only (agent hooks still enforce)</div>
+                    {rep.machines.observe_only_machines!.map((m) => <div key={m.endpoint_id} className="mono-sm">{m.hostname}: {m.reason}</div>)}
+                  </div>
+                )}
                 {rep.machines.hook_problems.length > 0 && (
                   <div style={{ marginTop: 10 }}>
                     <div className="section-label">Hook missing or switched off</div>

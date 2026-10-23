@@ -71,7 +71,8 @@ export function Inventory({ initialTab }: { initialTab?: string }) {
         <>
           <div className="grid-4">
             <Card className="mini-stat"><div className="k">Agents on machines</div><div className="v">{data.agents.length}</div>
-              <div className="s">{new Set(data.agents.map((a) => a.agent)).size} kinds on {new Set(data.agents.map((a) => a.endpoint_id)).size} of {data.machines} machines</div></Card>
+              <div className="s">{new Set(data.agents.map((a) => a.agent)).size} kinds on {new Set(data.agents.map((a) => a.endpoint_id)).size} of {data.machines} machines
+                {data.observe_only_machines ? ` · ${data.observe_only_machines} ${data.observe_only_machines === 1 ? 'machine' : 'machines'} observe-only` : ''}</div></Card>
             <Card className="mini-stat"><div className="k">Not enforced</div><div className="v" style={{ color: notCovered ? 'var(--gold)' : undefined }}>{notCovered}</div>
               <div className="s">{count('hooks_off')} hook off · {count('detection_only')} seen only · {count('unmanaged')} not under policy</div></Card>
             <Card className="mini-stat"><div className="k">MCP servers</div><div className="v">{data.mcp_servers.length}</div>
@@ -117,7 +118,8 @@ function AgentsCard({ agents, days, filtered }: { agents: ApiInventoryAgent[]; d
                   <td><Link className="link" href="/enforcement">{a.hostname}</Link><div className="mono-sm">{a.os}</div></td>
                   <td className="mono-sm">{personLabel(a.person)}</td>
                   <td><CoverageBadge s={a.status} />{a.note && <div className="muted" style={{ fontSize: 12, maxWidth: 320 }}>{a.note}</div>}</td>
-                  <td className="mono-sm">{(a.enforced_by ?? []).join(' + ') || '—'}</td>
+                  <td className="mono-sm">{(a.enforced_by ?? []).map((b) => (b === 'kernel' && a.observe_only ? 'kernel (observe-only)' : b)).join(' + ') || '—'}
+                    {a.observe_only && <div><span className="badge b-gold" title="The kernel layer only observes here: blocks become alerts. Agent hooks still enforce. Kernel enforcement needs a 5.12+ kernel with BTF and BPF LSM.">observe-only: {a.observe_only}</span></div>}</td>
                   <td className="mono-sm">{ago(a.first_seen)}</td>
                   <td className="mono-sm">{ago(a.last_seen)}</td>
                   <td className="right tnum">{a.events.toLocaleString('en-US')}</td>

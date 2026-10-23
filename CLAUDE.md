@@ -394,7 +394,9 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   `kernel: {sensor, bpf_lsm, tetragon_connected}` (`cpclient.Client.Kernel`, `kernelStatus` in `cmd/effigentd/main.go`;
   `tetragon_connected` goes false when the event stream drops, `tetragon.Client.OnDisconnect`). Machines shows a Linux
   machine as observe-only (BPF LSM off / Tetragon disconnected) or "not reported" (older build) and doesn't count it
-  as kernel-enforced. Not yet used by Inventory coverage, the posture report or alerts. A kernel policy reload keeps
+  as kernel-enforced. Inventory coverage doesn't use it (a kernel sensor still counts as `kernel`), but Inventory shows each
+  row's `observe_only` reason and `observe_only_machines`, and the posture report counts `machines.observe_only` (+ a list
+  with reasons, and a line in the report email). A kernel policy reload keeps
   each old document until its replacement loads (`engine.apply`), so a failed reload leaves the previous policy in place.
   Kernel enforcement needs 5.12 with BTF and `bpf` in the LSM list (the guard's `inode_setattr`/unlink/rename arguments).
   Short of that nothing refuses: `install.sh` warns and installs (no BTF and no Tetragon running → Tetragon skipped,

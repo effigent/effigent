@@ -28,8 +28,8 @@ export function createInventoryFixture(now: number) {
     agent('alex-mbp', 'ep-alex-mbp', 'darwin', 'cursor-agent', 'alex.wang', 2210, 33, 40, 'enforced', ['hooks'], 'denylist', undefined, 'installed'),
     agent('alex-mbp', 'ep-alex-mbp', 'darwin', 'gemini-cli', 'alex.wang', 140, 12, 60 * 30, 'hooks_off', null, 'denylist', 'its hook is installed: nothing is enforced', 'installed'),
     agent('sarah-ws', 'ep-sarah-ws', 'linux', 'claude-code', 'sarah.lee', 3876, 52, 8, 'enforced', ['hooks', 'kernel'], 'denylist', undefined, 'installed'),
-    agent('raj-ws', 'ep-raj-ws', 'linux', 'claude-code', 'raj.patel', 9934, 60, 3, 'enforced', ['kernel'], 'denylist',
-      'kernel only: its hook is missing (commands, tools, MCP and approvals aren’t checked)', 'missing'),
+    { ...agent('raj-ws', 'ep-raj-ws', 'linux', 'claude-code', 'raj.patel', 9934, 60, 3, 'enforced', ['kernel'], 'denylist',
+      'kernel only: its hook is missing (commands, tools, MCP and approvals aren’t checked)', 'missing'), observe_only: 'BPF LSM off' },
     agent('mike-mbp', 'ep-mike-mbp', 'darwin', 'codex', 'mike.tan', 1530, 20, 95, 'enforced', ['hooks'], 'monitor'),
     agent('priya-mba', 'ep-priya-mba', 'darwin', 'aider', 'priya.shah', 880, 6, 60 * 5, 'detection_only', null, 'denylist',
       'no hook exists for this agent and the machine has no kernel layer: seen, not controlled'),
@@ -87,7 +87,7 @@ export function createInventoryFixture(now: number) {
     const since = now - days * day * 60_000;
     const recent = <T extends { last_seen: string }>(xs: T[]) => xs.filter((x) => Date.parse(x.last_seen) >= since);
     return {
-      days, since: new Date(since).toISOString(), generated_at: new Date(now).toISOString(), machines: 13,
+      days, since: new Date(since).toISOString(), generated_at: new Date(now).toISOString(), machines: 13, observe_only_machines: 1,
       agents: recent(agents), mcp_servers: recent(mcp).map((s) => ({ ...s, uses: recent(s.uses) })), unmanaged_people: unmanaged,
       spend_vendors: ['anthropic', 'copilot', 'cursor'], hook_agents: { 'claude-code': 'claude', codex: 'codex', 'gemini-cli': 'gemini', 'cursor-agent': 'cursor' },
     };
@@ -163,7 +163,7 @@ export function createInventoryFixture(now: number) {
       days, from: from.toISOString(), to: to.toISOString(), generated_at: new Date(now).toISOString(),
       machines: { enrolled: 13, enrolled_in_period: days >= 30 ? 2 : 0, seen_in_period: 12, online_now: 11, offline_now: 2, hooks_reporting: 10, hooks_healthy: 8,
         hook_problems: [{ endpoint_id: 'ep-alex-mbp', hostname: 'alex-mbp', agents: ['gemini'] }, { endpoint_id: 'ep-emma-mba', hostname: 'emma-mba', agents: ['claude'] }],
-        by_os: { darwin: 8, linux: 5 } },
+        by_os: { darwin: 8, linux: 5 }, observe_only: 1, observe_only_machines: [{ endpoint_id: 'ep-raj-ws', hostname: 'raj-ws', reason: 'BPF LSM off' }] },
       agents: {
         in_use: [
           { agent: 'claude-code', machines: 8, people: 7, events: n(24_000) }, { agent: 'cursor-agent', machines: 2, people: 2, events: n(6_100) },

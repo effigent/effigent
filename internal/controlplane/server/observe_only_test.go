@@ -187,4 +187,23 @@ func TestObserveOnlyAlerts(t *testing.T) {
 	if n := len(audits("endpoint.observe_only")); n != 2 {
 		t.Fatalf("a capable machine was audited observe-only (%d)", n)
 	}
+
+	// Inventory and the posture report count the observe-only machine
+	var inv struct {
+		Machines    int `json:"machines"`
+		ObserveOnly int `json:"observe_only_machines"`
+	}
+	if code := call("GET", "/api/v1/inventory?days=7", "", nil, &inv); code != 200 || inv.Machines != 2 || inv.ObserveOnly != 1 {
+		t.Fatalf("inventory %d %+v", code, inv)
+	}
+	var rep struct {
+		Machines struct {
+			ObserveOnly int                  `json:"observe_only"`
+			List        []observeOnlyMachine `json:"observe_only_machines"`
+		} `json:"machines"`
+	}
+	if code := call("GET", "/api/v1/report?days=7", "", nil, &rep); code != 200 || rep.Machines.ObserveOnly != 1 || len(rep.Machines.List) != 1 ||
+		rep.Machines.List[0].Hostname != "grok-bot-oldkernel" || rep.Machines.List[0].Reason != "kernel 5.4.0 older than 5.12" {
+		t.Fatalf("report %d %+v", code, rep.Machines)
+	}
 }

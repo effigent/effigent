@@ -93,6 +93,8 @@ type agentView struct {
 	By        []string  `json:"enforced_by"`
 	Note      string    `json:"note,omitempty"`
 	HookState string    `json:"hook_state,omitempty"`
+	// ObserveOnly: why the machine's kernel layer only observes (observe_only.go)
+	ObserveOnly string `json:"observe_only,omitempty"`
 }
 
 // mcpAllowCheck answers whether a server is allowed for an agent by the
@@ -246,7 +248,7 @@ func (s *Server) getInventory(w http.ResponseWriter, r *http.Request, p Principa
 		}
 		agents = append(agents, agentView{inventoryMachine: machineOfID(a.EndpointID), Agent: a.Agent, Owner: e.Owner,
 			Person: personOf(e, ""), OS: e.OS, FirstSeen: a.FirstAt, LastSeen: a.LastAt, Events: a.Events, Mode: a.Mode,
-			Status: st, By: by, Note: note, HookState: h.State})
+			Status: st, By: by, Note: note, HookState: h.State, ObserveOnly: observeOnlyOf(e.Kernel)})
 	}
 
 	// MCP servers
@@ -364,15 +366,18 @@ func (s *Server) getInventory(w http.ResponseWriter, r *http.Request, p Principa
 			vendors = append(vendors, v)
 		}
 	}
-	enrolled := 0
+	enrolled, observeOnly := 0, 0
 	for _, e := range eps {
 		if !e.Revoked {
 			enrolled++
+			if observeOnlyOf(e.Kernel) != "" {
+				observeOnly++
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"days": days, "since": since, "generated_at": now,
-		"machines": enrolled, "agents": agents, "mcp_servers": mcp,
+		"machines": enrolled, "observe_only_machines": observeOnly, "agents": agents, "mcp_servers": mcp,
 		"unmanaged_people": unmanaged, "spend_vendors": vendors,
 		"hook_agents": inventory.HookAgent,
 	})
