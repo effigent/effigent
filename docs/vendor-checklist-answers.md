@@ -215,10 +215,23 @@ Cursor's docs. Open questions:
   in the last 30 days.
 - **Self-approval is refused by default, admins included.** A refused attempt is audited as
   `approval.self_approval_refused`. Each routing rule has this as a setting, on by default.
+- **No benefit of the doubt (new):** where a rule keeps the requester out, an approval is
+  refused when Effigent can't prove the approver isn't the requester:
+  - nobody is known behind the request (no machine owner, nothing mapped in People):
+    `requester_unknown`, with a message naming the machine and OS user and what to fix;
+  - the requester is known by email and the approver's email isn't known (or by console
+    account and the approver's isn't): `requester_unverified`.
+  The routing test (Team & Approvers) warns about a machine whose requester is unknown.
+- **Only people approve (new):** API keys and the admin token can deny a request, never
+  approve one (`not_a_person`). People approve in the console, with the approval email's
+  signed buttons (the recipient's address, which must be in the routed group), or with the
+  workspace's Effigent Slack app (Slack's verified profile email, checked against the console's
+  admins or the group). An automation that posts its own Slack/Teams buttons (the Windmill
+  flow) can relay a deny, but approvals go through one of those three.
 - **Two approvers:** a routing rule (e.g. one matching prod) can require two different people.
   - Any single deny denies the request.
   - An admin stepping in counts as one vote, never a bypass.
-  - API keys and the admin token never count toward a two-person quorum.
+  - API keys and the admin token never approve at all.
   - One person can't vote twice through two channels (console, email, Slack).
   - The agent is let through only at quorum. The console (and Slack, where enabled) shows
     "1 of 2 approved" meanwhile.
@@ -226,9 +239,13 @@ Cursor's docs. Open questions:
 
 **Limits:**
 - The OS user and git emails are what the machine reports, not verified.
-- Matching the requester against a console user's emails needs Clerk's backend key; without it
-  only user ids and the email/Slack address match.
-- When one approver is enough, API keys aren't checked as the requester.
+- Matching the requester against a console user's emails needs Clerk's backend key (or, self
+  hosted, the console users' sign-ins); without it an approver known only by console account is
+  refused on requests whose requester is known by email, until they're added with their email
+  to an approver group.
+- **Rollout:** with the requester excluded by default, a workspace whose machines have no owner
+  and no People mapping can't approve anything until owners are set (or a rule lets requesters
+  approve their own requests).
 
 **Where:** `internal/controlplane/server` (`castVote`), migration 012. DB test
 `TestTwoPersonApproval`.
@@ -240,7 +257,9 @@ Cursor's docs. Open questions:
   exception, or changing a machine's owner or teams. Each is validated first; a policy also
   gets a dry-run compile.
 - **Approving:** another admin or security admin must approve. The author can't approve their
-  own proposal, nor can the person who created the API key it came from. API keys never approve.
+  own proposal, nor can the person who created the API key it came from. API keys and the admin
+  token never approve or reject (new for the admin token): a second admin signed in to the
+  console must.
 - **Stale proposals:** a policy proposal written against an older version is marked
   superseded instead of overwriting a newer policy.
 - **Turning it off** is itself a proposal. There is no emergency bypass.

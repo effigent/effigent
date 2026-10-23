@@ -84,6 +84,10 @@ func (q Requester) Matches(userID string, emails []string) bool {
 	return false
 }
 
+// Unknown: nobody is known to have asked (a Label alone, "dana on host-7",
+// matches no one).
+func (q Requester) Unknown() bool { return len(q.UserIDs) == 0 && len(q.Emails) == 0 }
+
 // Merge adds another resolution of the requester (the one made at decision time).
 func (q Requester) Merge(o Requester) Requester {
 	out := Requester{UserIDs: slices.Clone(q.UserIDs), Emails: slices.Clone(q.Emails), Label: cmpStr(q.Label, o.Label)}

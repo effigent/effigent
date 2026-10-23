@@ -19,7 +19,7 @@ interface Webhook {
 interface Delivery { id: number; event_type: string; attempts: number; state: string; last_status: number | null; last_error: string; created_at: string }
 
 const SCOPES: { id: string; label: string }[] = [
-  { id: 'approvals', label: 'Decide approvals' },
+  { id: 'approvals', label: 'Deny approval requests (only people approve)' },
   { id: 'endpoints', label: 'Enroll & revoke machines' },
   { id: 'policy', label: 'Publish policy' },
 ];

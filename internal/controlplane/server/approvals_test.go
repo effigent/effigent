@@ -54,8 +54,9 @@ func TestApprovalFlow(t *testing.T) {
 	}
 	_, key, _ := ed25519.GenerateKey(nil)
 	slack := &slackRecorder{}
-	srv := httptest.NewServer((&Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, ConsoleOrigin: "https://app.example", SlackEnabled: true,
-		Notify: &notify.Sender{HTTP: &http.Client{Transport: slack}}}).Handler())
+	s := &Server{Store: st, Key: key, Auth: auth, Logf: t.Logf, ConsoleOrigin: "https://app.example", SlackEnabled: true,
+		Notify: &notify.Sender{HTTP: &http.Client{Transport: slack}}}
+	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
 	call := func(method, path, bearer string, body any, out any) int {
@@ -92,6 +93,10 @@ func TestApprovalFlow(t *testing.T) {
 		if code := call("POST", "/ep/v1/enroll", "-", map[string]any{"token": tok.Token.Token, "info": map[string]string{"hostname": host}}, &er); code != 200 {
 			t.Fatalf("enroll: %d", code)
 		}
+		// a known requester (requests keep them out, so an unknown one can't be approved)
+		if code := call("PATCH", "/api/v1/endpoints/"+er.EndpointID, "", map[string]any{"owner": "user_dana"}, nil); code != 200 {
+			t.Fatalf("owner: %d", code)
+		}
 		return er.Secret
 	}
 	laptop, other := enroll("dana-mbp"), enroll("ci-box")
@@ -125,7 +130,8 @@ func TestApprovalFlow(t *testing.T) {
 	}
 	decide := func(id, decision, note string) int {
 		t.Helper()
-		return call("POST", "/api/v1/approvals/"+id+"/decision", "", map[string]any{"decision": decision, "note": note, "name": "Sam Sec"}, nil)
+		code, _ := consoleDecision(s, tenant, "user_sam", "admin", id, map[string]any{"decision": decision, "note": note, "name": "Sam Sec"})
+		return code
 	}
 
 	// ---- first request: pending, Slack notified once ----
@@ -153,6 +159,10 @@ func TestApprovalFlow(t *testing.T) {
 	}
 
 	// ---- approve: the next call consumes it, the one after asks again ----
+	// (only a signed-in person approves: not the admin token)
+	if code := call("POST", "/api/v1/approvals/"+r1.ID+"/decision", "", map[string]any{"decision": "approve", "name": "Sam Sec"}, nil); code != 403 {
+		t.Fatalf("admin token approved: %d", code)
+	}
 	if code := decide(r1.ID, "approve", "ok for the release"); code != 200 {
 		t.Fatalf("approve: %d", code)
 	}

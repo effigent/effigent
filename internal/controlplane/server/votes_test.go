@@ -26,6 +26,9 @@ func TestVoteRefusal(t *testing.T) {
 	danaConsole := approver{Voter: "user_dana", UserID: "user_dana", Person: true}
 	danaEmail := approver{Voter: "link:email:dana@acme.io", Emails: []string{"dana@acme.io"}, Person: true} // the link only knows the address
 	key := approver{Voter: "apikey:k1", Via: "api-key"}
+	adminToken := approver{Voter: "admin", Via: "admin-token"}
+	idOnly := approver{Voter: "user_ann", UserID: "user_ann", Person: true}                               // no directory, in no group
+	emailOnly := approver{Voter: "link:email:ann@acme.io", Emails: []string{"ann@acme.io"}, Person: true} // a link, ann not in any group
 	one := store.Approval{ApprovalsRequired: 1, ExcludeRequester: true}
 	two := store.Approval{ApprovalsRequired: 2, ExcludeRequester: true}
 	voted := two
@@ -47,9 +50,12 @@ func TestVoteRefusal(t *testing.T) {
 		{"the requester, by email (an admin too: roles don't matter)", one, danaEmail, true, "", refuseSelf},
 		{"the requester may deny", one, danaConsole, false, "", ""},
 		{"requester allowed by the rule", selfOK, danaConsole, true, "", ""},
-		{"an API key on a one-person request", one, key, true, "", ""},
+		{"an API key never approves", one, key, true, "", refuseNotPerson},
+		{"the admin token never approves", one, adminToken, true, "", refuseNotPerson},
+		{"not even where the requester may approve", selfOK, key, true, "", refuseNotPerson},
 		{"an API key can't be one of two people", two, key, true, "", refuseNotPerson},
-		{"an API key may still deny a two-person request", two, key, false, "", ""},
+		{"an API key may still deny", one, key, false, "", ""},
+		{"the admin token may still deny", two, adminToken, false, "", ""},
 		{"same person through another channel", voted, ann, true, "", refuseVoted},
 		{"same person can't deny after approving", voted, ann, false, "", refuseVoted},
 		{"ticket missing", ticket, ann, true, "", refuseTicket},
@@ -59,6 +65,44 @@ func TestVoteRefusal(t *testing.T) {
 		if got, _ := voteRefusal(c.a, dana, c.who, c.approve, c.ticket); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+
+	// Who asked must be known, and comparable with the voter, before a
+	// request that keeps its requester out can be approved.
+	nobody := store.Requester{UserIDs: []string{}, Emails: []string{}, Label: "dana on build-7"}
+	byEmail := store.Requester{Emails: []string{"dana@acme.io"}, Label: "dana@acme.io"}
+	byID := store.Requester{UserIDs: []string{"user_dana"}, Label: "user_dana"}
+	unknown := one
+	unknown.Hostname, unknown.OSUser = "build-7", "dana"
+	for _, c := range []struct {
+		name string
+		a    store.Approval
+		q    store.Requester
+		who  approver
+		want string
+	}{
+		{"nobody known to have asked", unknown, nobody, ann, refuseUnknown},
+		{"an admin override doesn't help either", unknown, nobody, approver{Voter: "user_boss", UserID: "user_boss", Emails: []string{"boss@acme.io"}, Person: true}, refuseUnknown},
+		{"unknown, but the rule lets requesters approve", selfOK, nobody, ann, ""},
+		{"unknown requester: deny still works", unknown, nobody, ann, ""}, // approve=false below
+		{"requester by email, voter without one", one, byEmail, idOnly, refuseUnverified},
+		{"requester by email, voter with another email", one, byEmail, emailOnly, ""},
+		{"requester by user id, voter by email only", one, byID, emailOnly, refuseUnverified},
+		{"requester by user id, voter another user", one, byID, idOnly, ""},
+		{"requester by user id and voter is them", one, byID, danaConsole, refuseSelf},
+		{"requester by email, rule lets requesters approve", selfOK, byEmail, idOnly, ""},
+	} {
+		approve := c.name != "unknown requester: deny still works"
+		got, msg := voteRefusal(c.a, c.q, c.who, approve, "")
+		if got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+		if got == refuseUnknown && (!strings.Contains(msg, "OS user dana on build-7") || !strings.Contains(msg, "People")) {
+			t.Errorf("%s: message doesn't say why or what to do: %s", c.name, msg)
+		}
+	}
+	if _, msg := voteRefusal(one, dana, key, true, ""); !strings.Contains(msg, "console") || !strings.Contains(msg, "deny") {
+		t.Errorf("not_a_person message: %s", msg)
 	}
 }
 
@@ -358,8 +402,16 @@ func TestTwoPersonApproval(t *testing.T) {
 		t.Fatalf("vote after the decision: %d %s", code, body)
 	}
 
-	// 3. an admin outside the group steps in: one vote, not a bypass
+	// 3. an admin outside the group steps in: one vote, not a bypass. The
+	// requester is known by email, so an admin whose email nobody knows
+	// (in no group, not in the directory) can't be told apart from them.
 	r3 := ask(3, "Bash: git push origin dev")
+	if code, out := console("user_ghost", "admin", r3.ID, map[string]any{"decision": "approve"}); code != 403 || out.Code != refuseUnverified ||
+		!strings.Contains(out.Error, "only by email") {
+		t.Fatalf("admin without a known email: %d %+v", code, out)
+	}
+	s.Directory = userEmailDirectory{"user_boss": {"Boss@Acme.io"}}
+	defer func() { s.Directory = nil }()
 	if code, out := console("user_boss", "admin", r3.ID, map[string]any{"decision": "approve", "name": "Boss"}); code != 200 || out.State != "pending" || !out.Votes[0].AdminOverride {
 		t.Fatalf("admin's vote: %d %+v", code, out)
 	}
@@ -407,10 +459,32 @@ func TestTwoPersonApproval(t *testing.T) {
 	}
 	var list []listView
 	call("GET", "/api/v1/approvals?state=pending", "", nil, &list)
-	if len(list) != 1 || list[0].ID != r5.ID || !list[0].CanApprove { // the admin token isn't the requester
+	if len(list) != 1 || list[0].ID != r5.ID || list[0].CanApprove || list[0].ApproveRefusal != refuseNotPerson { // the admin token may only deny
 		t.Fatalf("list: %+v", list)
 	}
 	if code, out := console("user_ann", "member", r5.ID, map[string]any{"decision": "approve"}); code != 200 || out.State != "approved" {
 		t.Fatalf("another member: %d %+v", code, out)
 	}
+}
+
+// consoleDecision decides an approval as a signed-in console user (Clerk),
+// on the handler directly: the admin token and API keys can't approve.
+func consoleDecision(s *Server, tenant, user, role, id string, body map[string]any) (int, []byte) {
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/v1/approvals/"+id+"/decision", bytes.NewReader(b))
+	req.SetPathValue("id", id)
+	rec := httptest.NewRecorder()
+	s.decideApproval(rec, req, Principal{UserID: user, Tenant: tenant, Role: role, Via: "clerk"})
+	return rec.Code, rec.Body.Bytes()
+}
+
+// userEmailDirectory knows console users' verified emails (like Clerk with
+// CLERK_SECRET_KEY, or the self-hosted StoreDirectory).
+type userEmailDirectory map[string][]string
+
+func (d userEmailDirectory) MemberRole(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (d userEmailDirectory) UserEmails(_ context.Context, _, userID string) ([]string, error) {
+	return d[userID], nil
 }

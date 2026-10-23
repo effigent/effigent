@@ -1,6 +1,6 @@
 {
   "summary": "Effigent: approve agent actions in Slack or Teams",
-  "description": "Triggered by an Effigent webhook (approval.requested). Re-reads the request from Effigent, posts it to Slack and/or Microsoft Teams with Approve / Deny buttons, waits, and sends the decision back. Set the Slack/Teams target in the 'ask' step and the Effigent resource (default f/effigent/workspace) in 'current' and 'decide'. A timeout does nothing: the request expires in Effigent and the action stays blocked.",
+  "description": "Triggered by an Effigent webhook (approval.requested). Re-reads the request from Effigent, posts it to Slack and/or Microsoft Teams with Approve / Deny buttons, waits, and sends the decision back. Effigent accepts only the Deny from an API key: approving needs a person (console, approval email or the Effigent Slack app), so an Approve here is refused with 403 not_a_person. Set the Slack/Teams target in the 'ask' step and the Effigent resource (default f/effigent/workspace) in 'current' and 'decide'. A timeout does nothing: the request expires in Effigent and the action stays blocked.",
   "schema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",

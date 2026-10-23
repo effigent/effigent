@@ -22,7 +22,11 @@ import (
 // email link, Slack — is a vote through castVote: the requester can't
 // approve their own request (admins included), a two-approver request needs
 // two different people (an admin stepping in is one of them, never both),
-// and any deny denies.
+// and any deny denies. Only people approve: an API key or the admin token may
+// deny, never approve. Where the requester must be kept out, a person can
+// approve only when the control plane can tell them apart from the requester:
+// it refuses when it doesn't know who asked, or knows them only by an
+// identifier it doesn't have for the voter.
 
 // approver is who is deciding, as far as the control plane can tell.
 type approver struct {
@@ -43,6 +47,12 @@ const (
 	refuseNotPerson = "not_a_person"
 	refuseTicket    = "ticket_required"
 	refuseVoted     = "already_voted"
+	// refuseUnknown: the request excludes its requester, but nobody is known
+	// to have asked (no machine owner, nothing mapped in People).
+	refuseUnknown = "requester_unknown"
+	// refuseUnverified: the requester is known by emails (or console accounts)
+	// and the voter by none, so the two can't be compared.
+	refuseUnverified = "requester_unverified"
 )
 
 // voteRefusal says why who can't cast this vote on a ("" = they can). The
@@ -58,14 +68,46 @@ func voteRefusal(a store.Approval, requester store.Requester, who approver, appr
 		return "", "" // whoever may decide may deny, the requester too
 	}
 	switch {
-	case a.ExcludeRequester && who.Person && requester.Matches(who.UserID, who.Emails):
+	case !who.Person:
+		return refuseNotPerson, "only a signed-in person can approve a request: an API key or the admin token can deny one but not approve it. " +
+			"Approve it in the Effigent console, with the approval email's buttons or in Slack (the workspace's Effigent app)"
+	case a.ExcludeRequester && requester.Unknown():
+		return refuseUnknown, "Effigent doesn't know who asked for this (" + requestedFrom(a) + "), so it can't make sure you aren't " +
+			"approving your own request. Set the machine's owner (Machines) or map its OS user in People, then approve again; " +
+			"or let requesters approve their own requests on this rule (Team & Approvers)"
+	case a.ExcludeRequester && requester.Matches(who.UserID, who.Emails):
 		return refuseSelf, "you are the requester (" + cmpOr(requester.Label, "this machine's user") + "): someone else must approve it"
-	case a.ApprovalsRequired > 1 && !who.Person:
-		return refuseNotPerson, fmt.Sprintf("this request needs %d different people to approve; an API key or the admin token can't be one of them", a.ApprovalsRequired)
+	case a.ExcludeRequester && !comparable(requester, who):
+		by, fix := "email", "add yourself with your email to an approver group (Team & Approvers)"
+		if len(requester.Emails) == 0 {
+			by, fix = "console account", "add your email to an approver group (Team & Approvers) so Effigent knows your console account, "+
+				"or set the machine's owner as an email (Machines)"
+		}
+		return refuseUnverified, "Effigent knows the requester (" + cmpOr(requester.Label, requestedFrom(a)) + ") only by " + by +
+			" and has no " + by + " for you, so it can't make sure you aren't approving your own request: " + fix + ", then approve again"
 	case a.RequireTicket && ticket == "":
 		return refuseTicket, "approving this request needs a ticket reference (e.g. SEC-123 or a link)"
 	}
 	return "", ""
+}
+
+// comparable reports whether who can be told apart from the requester: the
+// voter has an email when the requester is known by email, else a console
+// user id when the requester is known by one.
+func comparable(q store.Requester, who approver) bool {
+	if len(q.Emails) > 0 {
+		return len(who.Emails) > 0
+	}
+	return len(q.UserIDs) == 0 || who.UserID != ""
+}
+
+// requestedFrom names where a request came from, for refusal messages.
+func requestedFrom(a store.Approval) string {
+	where := cmpOr(a.Hostname, "an unknown machine")
+	if a.OSUser != "" {
+		return "OS user " + a.OSUser + " on " + where
+	}
+	return where
 }
 
 // requesterOf resolves who asked for a request: the machine's owner (an
@@ -149,7 +191,26 @@ func (s *Server) resolveRequester(ctx context.Context, a store.Approval) (store.
 			return store.Requester{}, err
 		}
 	}
-	return requesterOf(owner, a.Hostname, a.OSUser, git, people), nil
+	q := requesterOf(owner, a.Hostname, a.OSUser, git, people)
+	// an owner set as a console user id: its emails too, when the directory
+	// can list them, so an approver known only by email can be compared
+	if d, ok := s.Directory.(userEmails); ok && s.Directory != nil {
+		for _, id := range q.UserIDs {
+			es, err := d.UserEmails(ctx, a.Tenant, id)
+			if err != nil {
+				s.Logf("directory %s: %v", a.Tenant, err)
+				continue
+			}
+			var lower []string // the directory's slice may be its cache: copied
+			for _, e := range es {
+				if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+					lower = append(lower, e)
+				}
+			}
+			q = q.Merge(store.Requester{Emails: lower})
+		}
+	}
+	return q, nil
 }
 
 // rulesFor is how requests on a route (nil = the default) are decided.

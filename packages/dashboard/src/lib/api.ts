@@ -257,7 +257,7 @@ export interface ApiApproval {
   requester?: ApiRequester;
   votes?: ApiVote[]; // in the order they were cast
   can_approve?: boolean; // this person may approve (a ticket may still be needed)
-  approve_refusal?: string; // self_approval_refused | not_a_person | already_voted | …
+  approve_refusal?: string; // self_approval_refused | not_a_person | requester_unknown | requester_unverified | already_voted | …
   approve_refusal_message?: string;
   quorum_warning?: string; // the group can't reach the quorum without an admin
 }

@@ -268,6 +268,18 @@ func TestApprovalRouting(t *testing.T) {
 	call("POST", "/api/v1/enrollment-tokens", "", map[string]any{}, &tok)
 	var er EnrollResponse
 	call("POST", "/ep/v1/enroll", "-", map[string]any{"token": tok.Token.Token, "info": map[string]string{"hostname": "dana-mbp"}}, &er)
+	// nobody known behind the machine: the test warns that approvals would be refused
+	call("POST", "/api/v1/approval-routing/test", "", map[string]any{"summary": "Bash: ls", "hostname": "dana-mbp", "os_user": "dana"}, &tr)
+	if w, _ := tr["warning"].(string); !strings.Contains(w, "doesn't know who would be asking (OS user dana on dana-mbp)") {
+		t.Fatalf("unknown requester warning: %v", tr)
+	}
+	if code := call("PATCH", "/api/v1/endpoints/"+er.EndpointID, "", map[string]any{"owner": "user_dana"}, nil); code != 200 {
+		t.Fatalf("owner: %d", code)
+	}
+	call("POST", "/api/v1/approval-routing/test", "", map[string]any{"summary": "Bash: ls", "hostname": "dana-mbp", "os_user": "dana"}, &tr)
+	if w, _ := tr["warning"].(string); strings.Contains(w, "doesn't know") {
+		t.Fatalf("warning with an owner: %v", tr)
+	}
 	ask := func(n int, summary string) endpointApprovalResp {
 		var r endpointApprovalResp
 		call("POST", "/ep/v1/approvals", er.Secret, map[string]any{"fingerprint": "fp1:" + strings.Repeat(fmt.Sprintf("%02x", n), 32), "agent": "claude-code",
@@ -297,9 +309,9 @@ func TestApprovalRouting(t *testing.T) {
 	}
 	// an admin steps in: decided, and recorded as an override
 	var dec store.Approval
-	if code := call("POST", "/api/v1/approvals/"+r1.ID+"/decision", "", map[string]any{"decision": "approve", "name": "Boss"}, &dec); code != 200 ||
-		!strings.Contains(dec.DecidedByName, "(admin, for DevOps)") {
-		t.Fatalf("admin override: %d %+v", code, dec)
+	dcode, dbody := consoleDecision(s, tenant, "user_boss", "admin", r1.ID, map[string]any{"decision": "approve", "name": "Boss"})
+	if _ = json.Unmarshal(dbody, &dec); dcode != 200 || !strings.Contains(dec.DecidedByName, "(admin, for DevOps)") {
+		t.Fatalf("admin override: %d %s", dcode, dbody)
 	}
 	var audit []store.AuditEntry
 	call("GET", "/api/v1/audit?action=approval.approve", "", nil, &audit)

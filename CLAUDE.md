@@ -144,7 +144,7 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   default, else workspace admins as before). Only the group's members are emailed; decisions
   (`POST /approvals/{id}/decision`, now gated in the handler, not the route) by members (any
   role), or admins/security_admins as an override (name + audit `admin_override`), or API keys
-  with `approvals`. Email links re-check membership at decision time. Console: Team & Approvers
+  with `approvals` (deny only, see below). Email links re-check membership at decision time. Console: Team & Approvers
   (`/team`). `GET|PUT /api/v1/approval-routing` (audited before/after),
   `POST /api/v1/approval-routing/test` (also takes an unsaved `config`).
 
@@ -171,6 +171,15 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   a vote short of the quorum; the Slack message is updated with "1 of 2" (`chat.update`).
   The requester check needs `CLERK_SECRET_KEY` to know a console user's emails
   (`UserEmails`, 2 min cache); without it only user ids and the Slack/email address match.
+  Only people approve: API keys and the admin token may deny but every approve is
+  `not_a_person` (403), whatever the quorum. Where `exclude_requester` holds, a person's approve is
+  refused unless the voter can be told apart from the requester: `requester_unknown` (no owner, no
+  People mapping: the requester has no user id or email) or `requester_unverified` (requester known
+  by email and the voter has none, or by user id only and the voter has no user id; `comparable` in
+  `votes.go`). `resolveRequester` adds an owner user id's emails from the directory. `/approval-routing/test`
+  warns when the requester would be unknown. Rollout: a workspace with ownerless, unmapped machines
+  can't approve until owners are set; the shell e2e scripts `test/hooks/approval.sh` / `remote.sh`
+  still approve with the admin token and need updating.
 
 - **Policy change approval** (migration 013, `server/proposals.go`): per tenant
   `cp.policy_settings.policy_change_approval`. On, every change that publishes a version —
@@ -179,8 +188,9 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   `{pending_approval, proposal, message}`; audit `policy.propose`, webhook `policy.proposed`,
   email to the notification emails). `GET /api/v1/policy/proposals` (with `stale`,
   `can_decide`/`why`, `base` for the diff), `POST /policy/proposals/{id}/decision`
-  (`approve` | `reject`; people only: an admin/security_admin who isn't the author nor, for
-  a key-made proposal, the key's creator; refusals audited `policy.self_approval_refused`),
+  (`approve` | `reject`; people only — never an API key or the admin token — an admin/security_admin
+  who isn't the author nor, for a key-made proposal, the key's creator; refusals audited
+  `policy.self_approval_refused`),
   `DELETE /policy/proposals/{id}` (author withdraws). Approving claims the proposal first, then
   applies it exactly as the direct call (re-opened if applying fails on a 5xx, superseded on a
   4xx). A policy proposal written on an older version is superseded on approval (re-propose);
@@ -192,7 +202,7 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
 ## 2c. Integrations (API keys, webhooks)
 
 - **API keys** (`efk_…`, sha256 in `cp.api_keys`): scopes `read` (every GET; always
-  added), `approvals` (decide), `endpoints` (enroll tokens, revoke, owner), `policy`
+  added), `approvals` (deny only: approving needs a person), `endpoints` (enroll tokens, revoke, owner), `policy`
   (publish). Routes opt in with `s.scoped("<scope>", write, h)`; `s.console(write, h)`
   stays people-only (keys, webhooks, notifications). Principal `apikey:<id>`, via `api-key`.
 - **Webhooks** (`cp.webhooks`, migration 005): https only; private/loopback/link-local/
@@ -927,9 +937,9 @@ npm run -w @effigent/site build                     # site
   in Slack via the workspace's Slack app (identity checked, see 2b), or from the signed
   email buttons; a rule can need two different people, keep the requester out and need a
   ticket. Limits: the requester comes from the machine owner, the hook's OS user (mapped in
-  People) and git emails — the last two are what the machine reports, not verified; API keys
-  and the admin token can't count toward two-person approval and aren't checked as the
-  requester when one approver suffices; the agent's message says only "pending" until the
+  People) and git emails — the last two are what the machine reports, not verified (an
+  unknown requester means nobody can approve where the requester is kept out); API keys and
+  the admin token can deny but never approve; the agent's message says only "pending" until the
   quorum (the "1 of 2" wording would be in effigentd).
 - Break-glass / self-protection / gated binaries (2l): break-glass: the user who ran it is self-asserted, a revoked code still works on a machine that stays offline,
   use is known only on reconnect, and an open window can't be ended early on the machine (a restart restores it). Self-protection covers the agent tree only: `systemctl stop effigentd`

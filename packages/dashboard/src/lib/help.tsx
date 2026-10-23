@@ -57,7 +57,7 @@ export const HELP: Record<string, ReactNode> = {
 
   // settings
   notifications: <>Who is told when an agent pauses for approval. Each email carries Approve / Deny buttons signed for that person and that request.</>,
-  changeApproval: <>With this on, publishing a policy, adding or removing an exception and changing a machine’s owner become <b>proposals</b>: another admin or security admin approves them before anything is published. API keys can propose but never approve; turning this off is a proposal too. There is no emergency bypass.</>,
+  changeApproval: <>With this on, publishing a policy, adding or removing an exception and changing a machine’s owner become <b>proposals</b>: another admin or security admin approves them before anything is published. API keys and the admin token can propose but never approve; turning this off is a proposal too. There is no emergency bypass.</>,
   ticketTemplate: <>Approvers can attach a ticket (SEC-123 or a link) when they approve. With a template, keys become links to your tracker.</>,
   retention: <>How long agent events stay in the database before they move to the archive (never under 90 days). A <b>legal hold</b> keeps every event and archive object until it is released: nothing is deleted, and the archive objects get an S3 Object Lock legal hold.</>,
   integrations: <><b>API keys</b> let your scripts and automations read and act (each key has scopes). <b>Webhooks</b> push events to your systems, signed so the receiver can check they came from Effigent.</>,

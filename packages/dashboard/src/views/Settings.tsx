@@ -149,7 +149,7 @@ function PolicyChangeApproval() {
       <Row title="Require a second admin" desc="Publishing a policy, adding or removing an exception and changing a machine’s owner wait in Policies until another admin or security admin approves. Turning this off needs approval too.">
         {v ? <Switch on={v.policy_change_approval} onChange={toggle} label="Require a second admin" /> : <span className="muted">…</span>}
       </Row>
-      {v?.policy_change_approval && <div className="muted" style={{ padding: '0 20px 14px', fontSize: 13 }}>Pending changes: <Link href="/policies" className="view-all">Policies</Link>. API keys can propose, never approve; there is no emergency bypass.</div>}
+      {v?.policy_change_approval && <div className="muted" style={{ padding: '0 20px 14px', fontSize: 13 }}>Pending changes: <Link href="/policies" className="view-all">Policies</Link>. API keys and the admin token can propose, never approve; there is no emergency bypass.</div>}
       {err && <div className="callout bad" style={{ margin: '0 20px 14px' }}><Ic n="alert" size={16} /><span>{err}</span></div>}
       {!canWrite && <div style={{ padding: '0 20px 14px' }}><ReadOnlyNote what="change this" /></div>}
     </Card>
