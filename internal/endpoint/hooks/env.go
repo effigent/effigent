@@ -37,9 +37,19 @@ var agentEnvSet = []string{
 	"AZURE_CLIENT_SECRET", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_API_KEY",
 }
 
+// maxSecretEnv caps the other secret-named variables forwarded as "set".
+const maxSecretEnv = 64
+
+// secretEnvName: any other variable named like a secret (DB_PASSWORD,
+// STRIPE_API_KEY, npm_config__authToken…) is forwarded as "set", by name only.
+func secretEnvName(k string) bool {
+	return len(k) <= 128 && secretName(strings.ToUpper(k))
+}
+
 // AgentEnv picks the forwarded variables out of an environment (os.Environ form).
 func AgentEnv(environ []string) map[string]string {
 	out := map[string]string{}
+	secrets := 0
 	for _, kv := range environ {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok || v == "" {
@@ -48,6 +58,11 @@ func AgentEnv(environ []string) map[string]string {
 		switch {
 		case slices.Contains(agentEnvSet, k):
 			out[k] = "set"
+		case secretEnvName(k):
+			if secrets < maxSecretEnv {
+				out[k] = "set"
+				secrets++
+			}
 		case slices.Contains(agentEnvValues, k):
 			out[k] = clip(stripCreds(v), 300)
 		}
@@ -58,10 +73,16 @@ func AgentEnv(environ []string) map[string]string {
 // CleanAgentEnv keeps only forwarded names from a map the daemon received.
 func CleanAgentEnv(m map[string]string) map[string]string {
 	out := map[string]string{}
+	secrets := 0
 	for k, v := range m {
 		switch {
 		case slices.Contains(agentEnvSet, k):
 			out[k] = "set"
+		case secretEnvName(k):
+			if secrets < maxSecretEnv {
+				out[k] = "set"
+				secrets++
+			}
 		case slices.Contains(agentEnvValues, k) && v != "":
 			out[k] = clip(stripCreds(v), 300)
 		}

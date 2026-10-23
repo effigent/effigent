@@ -436,7 +436,10 @@ or not; `engine.scrub` redacts their targets.
   vulnerabilities only for pinned versions. Fails open: the error is `osv_error` on the installs.
 - Agent environment: `effigentd hook` sends `X-Effigent-Agent-Env` (base64 JSON;
   `hooks.AgentEnv`): cloud profile/project/subscription names, DB hosts, model base URLs,
-  registries, git-hook switches; API keys only as `set`; URLs without credentials. The daemon
+  registries, git-hook switches; API keys only as `set`, and so is any other variable named like a
+  secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `*PRIVATE_KEY*`, `*CREDENTIAL*`…; ≤ 64, names
+  only, never values); URLs without credentials. `credential_read` also covers credential helpers
+  (`git credential fill`, `git credential-<helper> get`, `docker-credential-* get|list`). The daemon
   keeps only those names (`CleanAgentEnv`), records them on the session's `agent_start`
   (`agent_env`), and uses them for targets, model_endpoint and model_api_key.
 - Files are read as the agent's OS user (`perm_unix.go`: owner/group/other bits, groups via
