@@ -130,7 +130,9 @@ SDK calls from code aren't seen.
   git dependencies in package.json. Every `--extra-index-url` counts, because an extra index is
   how dependency confusion works.
 - `package_scripts`: npm/yarn installs without `--ignore-scripts`. pnpm ≥ 10 and bun already
-  block dependency scripts by default.
+  block dependency scripts by default. Python installs (pip, uv, uvx, pipx, poetry/pdm/rye add)
+  unless wheels only (`--only-binary=:all:`, uv `--no-build`, `PIP_ONLY_BINARY`, `UV_NO_BUILD`):
+  building an sdist runs its `setup.py` / build backend.
 - `package_install`: any install by name.
 
 Package managers covered:
@@ -164,7 +166,8 @@ Package managers covered:
 **New:** pushes are read refspec by refspec:
 - `protected_push`: a push to a branch in `protected_branches` (default main, master, trunk,
   prod, production, release*). Covers `HEAD:main`, a bare `git push` (branch read from
-  `.git/HEAD`), `--all` and `--mirror`, and `gh pr merge` (noting `--admin`).
+  `.git/HEAD`, sent where `push.default` says: `upstream` follows `branch.<name>.merge`, `matching`
+  counts as protected), `--all` and `--mirror`, and `gh pr merge` (noting `--admin`).
 - `force_push`: `-f`, `--force-with-lease`, `+refspec`, `--mirror`, in any position.
 - `branch_delete`: `--delete`, `:branch`, `branch -D`.
 - `history_rewrite`: `reset --hard`, `clean -f`, `filter-branch` / `filter-repo`,
@@ -178,8 +181,9 @@ These are also found inside scripts and npm scripts. Example policy:
 
 **Limits:**
 - git aliases and git run from other programs aren't followed.
-- The branch for a bare push is read from `.git/HEAD`, so the push's upstream configuration
-  isn't consulted.
+- For a bare push, `push.default` and `branch.<name>.merge` are read from `git -c`, the
+  repository's config and `~/.gitconfig` / `~/.config/git/config`; `remote.<name>.push` refspecs
+  and config includes aren't.
 - Server-side branch protection remains the backstop.
 
 **Where:** `hooks/git.go`.

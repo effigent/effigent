@@ -118,7 +118,7 @@ mcp_pins:
         <ul className="doc-list">
           <li><b>Unlisted.</b> With <code>package_allow</code> set, anything else is <code>package_unlisted</code>. PyPI names are normalised, so <code>Requests</code> and <code>requests</code> are one package.</li>
           <li><b>Registry.</b> An install from a URL, a git spec, an extra PyPI index or a registry outside <code>package_registries</code> is <code>package_registry</code>.</li>
-          <li><b>Install scripts.</b> npm, pnpm, yarn and bun installs that run lifecycle scripts are <code>package_scripts</code>.</li>
+          <li><b>Install scripts.</b> npm, pnpm, yarn and bun installs that run lifecycle scripts are <code>package_scripts</code>, and so are Python installs that may build a source distribution (no <code>--only-binary=:all:</code>).</li>
           <li><b>Malicious and vulnerable.</b> When a list names them, effigentd looks the packages up in OSV, including the OpenSSF malicious-packages data, with one batched query per call and an hour&apos;s cache. <code>npm ci</code> is checked against the lockfile&apos;s versions.</li>
         </ul>
       </DocSection>

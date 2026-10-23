@@ -396,7 +396,7 @@ Agent hooks only (Claude Code, Codex, Gemini CLI, Cursor; the kernel sees none o
 URL, `mcp__server__tool`) and returns `event.Action{kind, target, attrs, envs, in}`. Kinds:
 `policy.ActionKinds` (git: protected_push / force_push / branch_delete / history_rewrite /
 hook_bypass; destructive_sql / sql_write; cloud_change / cloud_destroy / access; package_install
-/ _unlisted / _registry / _scripts / _malicious / _vulnerable; guardrail_edit; credential_read;
+/ _unlisted / _registry / _scripts [npm/yarn without --ignore-scripts; Python installs that may build an sdist] / _malicious / _vulnerable; guardrail_edit; credential_read;
 remote_script; fs_destroy; mcp_unlisted; mcp_changed; model_endpoint / model_api_key; session
 rules exfil_sequence / untrusted_then_risky). Every hook event carries them (`actions`), matched
 or not; `engine.scrub` redacts their targets.
@@ -410,7 +410,8 @@ or not; `engine.scrub` redacts their targets.
   `current-context`), gcloud project (flag, env, active configuration), Azure default
   subscription (`azureProfile.json`), Terraform workspace (`.terraform/environment`,
   `TF_WORKSPACE`), Pulumi stack, DB host (flags, URLs, `PGHOST`…, client default localhost),
-  pushed branch (refspec, else `.git/HEAD`). Policy top-level `environments: {prod: {aws_profiles,
+  pushed branch (refspec, else `.git/HEAD` sent by `push.default`: `upstream`/`tracking` → `branch.<x>.merge`,
+  `matching` = protected; read from `git -c`, repo config, `~/.gitconfig`). Policy top-level `environments: {prod: {aws_profiles,
   aws_accounts, kube_contexts, gcloud_projects, azure_subscriptions, terraform_workspaces,
   pulumi_stacks, hosts, mcp_servers, match_unknown}}` (templates and docs set `match_unknown: true`; the
   field itself defaults to false); an entry `kind@prod` matches only actions

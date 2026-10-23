@@ -184,7 +184,7 @@ var ActionKinds = map[string]string{
 	"package_install":    "installing a package by name (npm, pip, uv, poetry, cargo, go, gem, brew, npx…)",
 	"package_unlisted":   "a package outside package_allow",
 	"package_registry":   "an install from a registry outside package_registries (or a URL / git spec / extra index)",
-	"package_scripts":    "an npm/pnpm/yarn/bun install that runs install scripts (no --ignore-scripts)",
+	"package_scripts":    "an npm/yarn install that runs install scripts (no --ignore-scripts), or a Python install that may build an sdist (no --only-binary=:all: / --no-build)",
 	"package_malicious":  "a package listed as malicious in OSV (OpenSSF malicious packages); looked up online",
 	"package_vulnerable": "a pinned package version with a known vulnerability in OSV; looked up online",
 	"guardrail_edit":     "writing CI config, CODEOWNERS, git hooks, agent settings, shell startup files, cron, launchd, systemd",
