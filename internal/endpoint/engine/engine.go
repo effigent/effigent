@@ -371,12 +371,21 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 	}
 	loadPhase(guardFirst)
 	loadPhase(rest)
+	e.mu.Lock()
+	old := slices.Clone(root.Policies)
+	e.mu.Unlock()
 	var loaded []string
+	failed := map[string]bool{} // doc suffixes (-lsm, -net, -guard…) whose new version didn't load
 	for i, d := range docs {
 		if err := errs[i]; err != nil {
+			failed[docSuffix(d.Name)] = true
+			msg := "failed to load kernel policy: " + err.Error()
+			if slices.ContainsFunc(old, func(n string) bool { return docSuffix(n) == docSuffix(d.Name) }) {
+				msg += "; the previous version stays loaded"
+			}
 			e.logf("load policy %s: %v", d.Name, err)
 			e.emit(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "high", Agent: root.Agent,
-				AgentPID: root.PID, Rule: d.Name, Message: "failed to load kernel policy: " + err.Error()})
+				AgentPID: root.PID, Rule: d.Name, Message: msg})
 			continue
 		}
 		loaded = append(loaded, d.Name)
@@ -386,21 +395,43 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 			AgentPID: root.PID, Mode: string(rule.Mode), Rule: strings.Join(loaded, ","),
 			Message: fmt.Sprintf("%d kernel policies loaded in %dms", len(loaded), time.Since(start).Milliseconds())})
 	}
+	// Make-before-break per document: an old policy is removed only once its
+	// replacement is in, so a reload that fails never leaves the agent with
+	// less than it had.
 	e.mu.Lock()
-	old := root.Policies
-	for _, n := range old {
+	var keep, drop []string
+	for _, n := range root.Policies {
+		if failed[docSuffix(n)] {
+			keep = append(keep, n)
+		} else {
+			drop = append(drop, n)
+		}
+	}
+	for _, n := range drop {
 		delete(e.byPolicy, n)
 	}
-	root.Policies = loaded
-	for _, n := range loaded {
+	root.Policies = append(keep, loaded...)
+	for _, n := range root.Policies {
 		e.byPolicy[n] = root
 	}
 	e.mu.Unlock()
-	for _, n := range old {
+	for _, n := range drop {
 		if err := e.enf.Delete(ctx, n); err != nil {
 			e.logf("delete policy %s: %v", n, err)
 		}
 	}
+}
+
+var docGenRE = regexp.MustCompile(`-g\d+`)
+
+// docSuffix is the part of a kernel policy's name after its generation
+// (eff-claude-42-g3-lsm → -lsm): the same document across reloads.
+func docSuffix(name string) string {
+	locs := docGenRE.FindAllStringIndex(name, -1)
+	if len(locs) == 0 {
+		return name
+	}
+	return name[locs[len(locs)-1][1]:]
 }
 
 func (e *Engine) onExit(ctx context.Context, r event.Raw) {
