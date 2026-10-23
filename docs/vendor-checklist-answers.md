@@ -479,11 +479,15 @@ audited.
 - **Commands that print secrets:** `gh auth token`, `aws configure get` / `export-credentials` /
   `secretsmanager get-secret-value`, `gcloud auth print-access-token`, `az account get-access-token`,
   `security find-*-password`, vault, op, doppler, bw, pass, and `kubectl get secret -o`.
+- **Credential helpers:** `git credential fill`, `git credential-<helper> get` (osxkeychain,
+  libsecret, manager, store…), and `docker-credential-* get` / `list`.
 - **Reading the whole environment:** `env`, `printenv`, `export -p`.
 - **Secret variables on the command line:** `$GITHUB_TOKEN`-style.
 
 **Secrets in environment variables:** the hook forwards which key variables are set
-(`ANTHROPIC_API_KEY: set`), never their values. Redaction now strips `NAME_TOKEN=…`-style values
+(`ANTHROPIC_API_KEY: set`), and so is any variable named like a secret (`DB_PASSWORD`,
+`STRIPE_API_KEY`…: TOKEN, SECRET, PASSWORD, PASSWD, API_KEY, PRIVATE_KEY, CREDENTIAL; up to 64),
+by name only, never their values. Redaction now strips `NAME_TOKEN=…`-style values
 from everything sent (see 28).
 
 ### 18. Break-glass during an outage: **Yes** (new)
