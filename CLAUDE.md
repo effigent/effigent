@@ -905,8 +905,8 @@ npm run -w @effigent/site build                     # site
   and the admin token can't count toward two-person approval and aren't checked as the
   requester when one approver suffices; the agent's message says only "pending" until the
   quorum (the "1 of 2" wording would be in effigentd).
-- Break-glass / self-protection / gated binaries (2l): break-glass: the user who ran it is self-asserted, a revoked code still works on a machine that stays offline, and
-  use is known only on reconnect. Self-protection covers the agent tree only: `systemctl stop effigentd`
+- Break-glass / self-protection / gated binaries (2l): break-glass: the user who ran it is self-asserted, a revoked code still works on a machine that stays offline,
+  use is known only on reconnect, and an open window can't be ended early on the machine (a restart restores it). Self-protection covers the agent tree only: `systemctl stop effigentd`
   (systemd sends the signal), Tetragon's local gRPC API (127.0.0.1:54321) and root outside the agent tree
   aren't blocked; path prefixes also cover same-prefixed siblings; Linux only. Gated binaries match exact
   paths (a copy elsewhere escapes in denylist mode), shims exist only under `effigentd run`, the gate
