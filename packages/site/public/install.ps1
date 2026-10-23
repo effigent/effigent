@@ -67,7 +67,7 @@ if (Test-Path (Join-Path $State "endpoint.json")) {
   throw "-Token is required for the first install (console: Enforcement -> Enroll a machine)"
 }
 
-Say "Adding the agent hooks (Claude Code, Codex, Gemini CLI)"
+Say "Adding the agent hooks (Claude Code, Codex, Gemini CLI, Cursor)"
 & $Exe install-hooks
 if ($LASTEXITCODE -ne 0) { throw "could not update the agents' managed settings" }
 

@@ -913,7 +913,8 @@ npm run -w @effigent/site build                     # site
   Claude Code gives no exit code for a successful command; durations measured by effigentd are
   approximate; a post hook that times out or a daemon that is down loses the outcome (never the
   call). Post-tool payloads were checked against docs and Codex's tests, not live agents.
-- Agents with hooks (`effigentd install-hooks`, run by the macOS pkg and install.ps1;
+- Agents with hooks (`effigentd install-hooks`, run by the macOS pkg, install.ps1 and, on Linux,
+  install.sh after the daemon answers (`--skip-hooks` = kernel only; `--uninstall` removes them first);
   `--agents claude,codex,gemini,cursor` (default), `--remove`, `--exclusive`): each agent's calls are
   translated to Claude Code's canonical tools (`internal/endpoint/hooks/agents.go`), so
   one policy (deny + approval lists, `mcp__<server>__<tool>` names) covers all four.

@@ -73,12 +73,12 @@ function installCommand(os: Os, token: string, server: string): string {
 const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
   macos: {
     run: 'Run in Terminal on the Mac (asks for an admin password).',
-    does: 'Installs the Effigent package, enrolls the Mac, adds the Claude Code, Codex and Gemini CLI hooks to their machine-wide settings and starts the service. Their tool calls are checked against policy before they run.',
+    does: 'Installs the Effigent package, enrolls the Mac, adds the Claude Code, Codex, Gemini CLI and Cursor hooks to their machine-wide settings and starts the service. Their tool calls are checked against policy before they run.',
     fleet: 'Fleet (Jamf, Kandji, Intune): deploy the Effigent .pkg with a configuration profile for the ai.effigent domain that sets EnrollmentToken to a multi-use token.',
   },
   linux: {
     run: 'Run as a user with sudo. Needs systemd and a kernel with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). Without systemd (containers, sandboxes) both run as background processes.',
-    does: 'Installs Tetragon and effigentd as services and enrolls the machine. Agents are blocked in the kernel (BPF LSM): programs, files and network.',
+    does: 'Installs Tetragon and effigentd as services, enrolls the machine and adds the Claude Code, Codex, Gemini CLI and Cursor hooks (--skip-hooks leaves them out). Agents are blocked in the kernel (BPF LSM): programs, files and network; the hooks add commands, MCP tools and approvals.',
     fleet: 'Fleet: run the same command from Ansible, cloud-init or your image build with a multi-use token.',
   },
   grokbot: {
@@ -88,7 +88,7 @@ const OS_NOTES: Record<Os, { run: string; does: string; fleet: string }> = {
   },
   windows: {
     run: 'Run in PowerShell as Administrator. Windows support is in preview.',
-    does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code, Codex and Gemini CLI hooks. Their tool calls are checked against policy before they run.',
+    does: 'Installs effigentd as a service, enrolls the machine and adds the Claude Code, Codex, Gemini CLI and Cursor hooks. Their tool calls are checked against policy before they run.',
     fleet: 'Fleet (Intune Win32 app): powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Token <multi-use token>.',
   },
   kubernetes: {

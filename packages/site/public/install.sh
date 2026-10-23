@@ -1,10 +1,10 @@
 #!/bin/sh
 # Effigent endpoint installer (Linux and macOS). Installs effigentd as a
 # service, enrolls this machine with your organization, and starts enforcing.
-# Linux: also installs Tetragon (kernel enforcement); without systemd (containers,
-# sandboxes) both run as background processes until the next reboot. macOS: installs the
-# release .pkg (checksum-verified), which adds the Claude Code, Codex and Gemini CLI
-# hooks to their machine-wide settings.
+# Linux: also installs Tetragon (kernel enforcement) and adds the Claude Code, Codex,
+# Gemini CLI and Cursor hooks to their machine-wide settings; without systemd (containers,
+# sandboxes) both daemons run as background processes until the next reboot. macOS: installs
+# the release .pkg (checksum-verified), which adds the same agent hooks.
 #
 #   curl -fsSL https://effigent.ai/install.sh | sudo sh -s -- --token eft_...
 #
@@ -13,7 +13,8 @@
 #   --server URL         control plane (default https://api.effigent.ai)
 #   --version VERSION    effigentd version (default: latest)
 #   --skip-tetragon      Tetragon is already installed and running (Linux)
-#   --uninstall          stop and remove effigentd (leaves Tetragon)
+#   --skip-hooks         kernel enforcement only: don't add the agent hooks (Linux)
+#   --uninstall          stop and remove effigentd and its agent hooks (leaves Tetragon)
 set -eu
 
 SERVER="https://api.effigent.ai"
@@ -22,6 +23,7 @@ TETRAGON_VERSION="v1.7.1"
 VERSION="latest"
 TOKEN=""
 SKIP_TETRAGON=0
+SKIP_HOOKS=0
 UNINSTALL=0
 
 while [ $# -gt 0 ]; do
@@ -30,6 +32,7 @@ while [ $# -gt 0 ]; do
     --server) SERVER="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     --skip-tetragon) SKIP_TETRAGON=1; shift ;;
+    --skip-hooks) SKIP_HOOKS=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -80,7 +83,7 @@ if [ "$(uname -s)" = Darwin ]; then
   [ -s "$STATE/endpoint.json" ] || die "enrollment failed (token expired, used up or mistyped?): see /Library/Logs/Effigent/install.log, then rerun with a new token"
   echo
   echo "Done. This machine now appears in the console under Enforcement."
-  echo "macOS has no kernel enforcement: Claude Code, Codex and Gemini CLI tool calls are checked through their hooks."
+  echo "macOS has no kernel enforcement: Claude Code, Codex, Gemini CLI and Cursor tool calls are checked through their hooks."
   exit 0
 fi
 
@@ -90,8 +93,19 @@ fi
 SYSTEMD=0
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then SYSTEMD=1; fi
 
+# has_cmd SUBCOMMAND: the installed effigentd knows it. An older build would take an
+# unknown subcommand for a daemon start, so look for its name in the binary first.
+has_cmd() {
+  { grep -a -q "$1" /usr/local/bin/effigentd || grep -q "$1" /usr/local/bin/effigentd; } 2>/dev/null
+}
+
 if [ "$UNINSTALL" = 1 ]; then
   say "Removing effigentd"
+  # The hooks go first: they refuse every tool call once the daemon is gone.
+  if has_cmd install-hooks; then
+    /usr/local/bin/effigentd install-hooks --remove >/dev/null 2>&1 ||
+      warn "could not remove every agent hook (Claude Code, Codex, Gemini CLI, Cursor managed settings); their tool calls are refused until the effigentd entries are removed"
+  fi
   if [ "$SYSTEMD" = 1 ]; then
     systemctl disable --now effigentd 2>/dev/null || true
     rm -f /etc/systemd/system/effigentd.service
@@ -99,7 +113,7 @@ if [ "$UNINSTALL" = 1 ]; then
   fi
   pkill -x effigentd 2>/dev/null || true # a daemon started by hand
   # agents pointed at the model gateway would lose their model without the daemon
-  { grep -a -q install-gateway /usr/local/bin/effigentd || grep -q install-gateway /usr/local/bin/effigentd; } 2>/dev/null && { /usr/local/bin/effigentd install-gateway --remove --agents claude,codex 2>/dev/null || true; }
+  has_cmd install-gateway && { /usr/local/bin/effigentd install-gateway --remove --agents claude,codex 2>/dev/null || true; }
   rm -f /usr/local/bin/effigentd
   if [ "$SYSTEMD" = 0 ] && pkill -x tetragon 2>/dev/null; then # nothing else manages it here
     sleep 1; umount /run/tetragon/cgroup2 2>/dev/null || true
@@ -273,7 +287,28 @@ say "Waiting for effigentd"
 i=0
 until /usr/local/bin/effigentd status >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
 /usr/local/bin/effigentd status || die "effigentd did not come up: $LOGHINT"
+
+# ---- agent hooks ----------------------------------------------------------
+# Added once the daemon answers: the hooks fail closed, so an agent's tool calls are
+# refused while effigentd is down. They're written whether or not an agent is installed
+# yet (one picks them up when it is), and a failure here doesn't undo the install.
+HOOKS=0
+if [ "$SKIP_HOOKS" = 1 ]; then
+  :
+elif ! has_cmd install-hooks; then
+  warn "effigentd $VERSION can't add agent hooks; install a newer version for command, MCP and approval rules"
+else
+  say "Adding the agent hooks (Claude Code, Codex, Gemini CLI, Cursor)"
+  if /usr/local/bin/effigentd install-hooks >/dev/null; then
+    HOOKS=1
+  else
+    warn "could not update every agent's machine-wide settings (see above); rerun: sudo effigentd install-hooks"
+  fi
+fi
+
 echo
 echo "Done. This machine now appears in the console under Machines."
+[ "$HOOKS" = 0 ] || echo "Claude Code, Codex, Gemini CLI and Cursor tool calls are also checked through their hooks (commands, MCP tools, approvals)."
 [ "$SYSTEMD" = 1 ] || echo "No systemd: Tetragon and effigentd stop at the next reboot; rerun this installer to start them again."
+[ "$SYSTEMD" = 1 ] || [ "$HOOKS" = 0 ] || echo "Until then the agent hooks refuse every tool call (they fail closed); 'sudo effigentd install-hooks --remove' takes them out."
 [ "$LSM_OK" = 1 ] || echo "Blocking turns on after you enable BPF LSM and reboot (see the warning above)."
