@@ -42,7 +42,7 @@ export default function Kubernetes() {
       <DocSection>
         <H2>Requirements</H2>
         <ul className="doc-list">
-          <li><b>Linux nodes with BTF and BPF LSM.</b> Check on a node: <code>ls /sys/kernel/btf/vmlinux</code> and <code>cat /sys/kernel/security/lsm</code>, which must include <code>bpf</code>. Without BPF LSM effigentd still sees and reports every agent, but can&apos;t block. Many managed node images leave it off; turning it on is a kernel boot parameter (<code>lsm=…,bpf</code>) in the node image.</li>
+          <li><b>For kernel enforcement: Linux nodes with a 5.12+ kernel, BTF and BPF LSM.</b> Check on a node: <code>ls /sys/kernel/btf/vmlinux</code> and <code>cat /sys/kernel/security/lsm</code>, which must include <code>bpf</code>. Without BPF LSM (or on an older kernel) effigentd runs the kernel layer observe-only: it still sees and reports every agent, but can&apos;t block. Without BTF Tetragon can&apos;t start, so the node gets the agent hooks only (pods that mount the hook socket). Either way the hooks still enforce. Many managed node images leave BPF LSM off; turning it on is a kernel boot parameter (<code>lsm=…,bpf</code>) in the node image.</li>
           <li><b>Privileged pods.</b> Tetragon and effigentd use the node&apos;s process view and network (<code>hostPID</code>, <code>hostNetwork</code>, <code>privileged</code>). With Pod Security Admission, label their namespaces <code>pod-security.kubernetes.io/enforce=privileged</code>.</li>
           <li><b>Kubernetes 1.23+</b> and Helm 3, or Docker 20.10+ on a plain host. amd64 or arm64.</li>
           <li><b>Outbound HTTPS</b> to <code>api.effigent.ai</code> (policy and events) and image pulls from <code>ghcr.io</code> and <code>quay.io</code>.</li>
