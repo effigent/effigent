@@ -178,8 +178,11 @@ allow / deny / require_approval) are compiled per machine by `internal/controlpl
   by email and the voter has none, or by user id only and the voter has no user id; `comparable` in
   `votes.go`). `resolveRequester` adds an owner user id's emails from the directory. `/approval-routing/test`
   warns when the requester would be unknown. Rollout: a workspace with ownerless, unmapped machines
-  can't approve until owners are set; the shell e2e scripts `test/hooks/approval.sh` / `remote.sh`
-  still approve with the admin token and need updating.
+  can't approve until owners are set. The shell e2e scripts `test/hooks/approval.sh` / `remote.sh`
+  approve as a person: "Sam Sec" signs in through a stand-in OIDC issuer (`test/hooks/fakeidp`,
+  loopback, `EFFIGENT_OIDC_*` with `EFFIGENT_OIDC_ADMIN_EMAILS`), the machine's owner is set first
+  (`grok-bot@example.test`) so the requester is known, and the admin token only denies (they check
+  that its approve is `not_a_person`).
 
 - **Policy change approval** (migration 013, `server/proposals.go`): per tenant
   `cp.policy_settings.policy_change_approval`. On, every change that publishes a version —
@@ -547,7 +550,7 @@ or not; `engine.scrub` redacts their targets.
   `hooks/session_test.go`, `hooks/mcppin_test.go`, `hooks/result_test.go` (each agent's
   documented post-tool payload), `cmd/effigentd/installhooks_test.go`, `osv/osv_test.go`,
   `compile/actions_test.go` (round trip incl. mcp_pins), `redact_test.go`; `test/hooks/approval.sh`
-  (53 checks) runs force_push / curl|sh / workflow writes / DROP TABLE approval / prod AWS_PROFILE
+  (56 checks) runs force_push / curl|sh / workflow writes / DROP TABLE approval / prod AWS_PROFILE
   via the hook env / exfil_sequence / a changed pinned `.mcp.json` / a PostToolUseFailure outcome
   through a real hook process, daemon and local control plane. OSV's response shape was
   checked against the live API (2026-10-21); the live lookup isn't in an automated test. The
@@ -668,7 +671,7 @@ Full write-up, vendor research with links: `docs/cloud-agents.md`.
   - `cloud_envs_test.go` (DB)
   - `cloudtoken_test.go`, `hooks/copilot_test.go`, `cmd/effigentd/remote_test.go`
   - `peer_test.go`, `cred_linux_test.go`, `socket_linux_test.go` (Linux)
-  - `test/hooks/remote.sh` (32 checks: real hook binary, local control plane)
+  - `test/hooks/remote.sh` (36 checks: real hook binary, local control plane)
   - `test/hooks/cloudsetup.sh` (10 checks: setup script + wrapper in a Linux container, root setup,
     non-root agent)
   - `test/containers/hooksock.sh` (kind without Tetragon: socket deny / approval / kernel identity;
