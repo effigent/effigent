@@ -37,6 +37,7 @@ type Enforcer interface {
 type Doc struct {
 	Name string
 	YAML []byte
+	LSM  bool // carries LSM hooks: can't load on a kernel without BPF LSM
 }
 
 type Root struct {
@@ -76,7 +77,8 @@ type Engine struct {
 	bgTimer    *time.Timer
 	guard      *policy.SelfProtect // FR Q20 self-protection, injected into every tracked agent's kernel rule when SelfProtectionOn
 	gateExempt []string            // FR Q3 effigentd's own binary paths, injected into any rule that gates binaries
-	observe    bool                // the kernel can't block here (old kernel, no BTF, no BPF LSM): kernel rules only observe
+	observe    string              // why the kernel can't block here (old kernel, no BTF, no BPF LSM): kernel rules only observe
+	noLSM      bool                // BPF LSM off: documents with LSM hooks aren't loaded (they can't be)
 }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
@@ -343,7 +345,7 @@ func (e *Engine) ruleFor(root *Root) policy.Rule {
 	// would_block and the guard, whose hooks need 5.12's argument layout, isn't
 	// loaded. Last, so nothing above puts an override back. Hooks don't use
 	// this rule: they still decide.
-	if e.observe {
+	if e.observe != "" {
 		if k.Mode == policy.Denylist || k.Mode == policy.Allowlist {
 			k.Mode = policy.Monitor
 		}
@@ -353,12 +355,17 @@ func (e *Engine) ruleFor(root *Root) policy.Rule {
 }
 
 // SetObserveOnly makes every kernel rule observe-only (monitor, no
-// self-protection): for kernels older than 5.12, without BTF or without BPF
-// LSM. Call before any agent is tracked; it also re-applies live roots.
-func (e *Engine) SetObserveOnly(on bool) {
+// self-protection) for the reason given (kernel older than 5.12, no BTF, BPF
+// LSM off; "" = the kernel can block). lsm says whether the kernel takes LSM
+// hooks at all: without them those documents aren't loaded, and a load failure
+// on an observe-only kernel is expected, so it is reported as info, not as a
+// high-severity failure. Call before any agent is tracked; it also re-applies
+// live roots.
+func (e *Engine) SetObserveOnly(why string, lsm bool) {
 	e.mu.Lock()
-	changed := e.observe != on
-	e.observe = on
+	noLSM := why != "" && !lsm
+	changed := e.observe != why || e.noLSM != noLSM
+	e.observe, e.noLSM = why, noLSM
 	pids := e.livePIDsLocked()
 	e.mu.Unlock()
 	if changed {
@@ -385,6 +392,22 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 	if err != nil {
 		e.logf("render policy for %s[%d]: %v", root.Agent, root.PID, err)
 		return
+	}
+	e.mu.Lock()
+	observe, noLSM := e.observe, e.noLSM
+	e.mu.Unlock()
+	var skipped []string
+	if noLSM {
+		docs = slices.DeleteFunc(docs, func(d Doc) bool {
+			if d.LSM {
+				skipped = append(skipped, d.Name)
+			}
+			return d.LSM
+		})
+	}
+	if len(skipped) > 0 {
+		e.emit(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "info", Agent: root.Agent, AgentPID: root.PID,
+			Rule: strings.Join(skipped, ","), Message: "observe-only: " + observe + "; kernel policies with LSM hooks not loaded (agent hooks still enforce)"})
 	}
 	// Load in parallel: each policy costs a BPF program load (~400ms), and
 	// until they are in, the agent's execs are only observed, not enforced.
@@ -433,7 +456,11 @@ func (e *Engine) apply(ctx context.Context, root *Root, rule policy.Rule, gen ui
 				msg += "; the previous version stays loaded"
 			}
 			e.logf("load policy %s: %v", d.Name, err)
-			e.emit(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: "high", Agent: root.Agent,
+			sev := "high"
+			if observe != "" { // expected on this kernel: not a failure to alert on
+				sev, msg = "info", "observe-only: "+observe+"; "+msg
+			}
+			e.emit(event.Event{Time: time.Now(), Type: event.PolicyLoad, Severity: sev, Agent: root.Agent,
 				AgentPID: root.PID, Rule: d.Name, Message: msg})
 			continue
 		}

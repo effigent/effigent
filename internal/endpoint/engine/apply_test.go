@@ -26,7 +26,7 @@ func (f *fakeEnf) PolicyName(agent string, pid uint32, gen uint64) string {
 }
 
 func (f *fakeEnf) Render(name string, _ uint32, _ policy.Rule) ([]Doc, error) {
-	return []Doc{{Name: name + "-lsm", YAML: []byte(name + "-lsm")}, {Name: name + "-net", YAML: []byte(name + "-net")}}, nil
+	return []Doc{{Name: name + "-lsm", YAML: []byte(name + "-lsm"), LSM: true}, {Name: name + "-net", YAML: []byte(name + "-net")}}, nil
 }
 
 func (f *fakeEnf) Add(_ context.Context, y []byte) error {
@@ -144,7 +144,7 @@ func TestObserveOnlyKernelRule(t *testing.T) {
 	}
 
 	// Old kernel / no BTF / no BPF LSM: the live agent is re-applied observe-only, no guard.
-	e.SetObserveOnly(true)
+	e.SetObserveOnly("kernel 5.4.0 older than 5.12", true)
 	if enf.last.Mode != policy.Monitor || enf.last.SelfProtect != nil {
 		t.Fatalf("observe-only kernel: mode %s, guard %v", enf.last.Mode, enf.last.SelfProtect)
 	}
@@ -164,10 +164,72 @@ func TestObserveOnlyKernelRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	e2 := New(pol2, nil, enf, func(event.Event) {}, func(string, ...any) {}, false)
-	e2.SetObserveOnly(true)
+	e2.SetObserveOnly("kernel 5.4.0 older than 5.12", true)
 	e2.track(ctx, &Root{Agent: "grok-bot", PID: 43}, event.Raw{})
 	if enf.last.Mode != policy.Learn {
 		t.Errorf("learn became %s", enf.last.Mode)
+	}
+}
+
+// TestObserveOnlyLoadFailures: an observe-only kernel's expected failures are
+// info events, never the high-severity failure the control plane alerts on;
+// without BPF LSM the documents with LSM hooks aren't even tried. A capable
+// kernel's failure stays high.
+func TestObserveOnlyLoadFailures(t *testing.T) {
+	ctx := context.Background()
+	run := func(why string, lsm bool, fail map[string]bool) (*fakeEnf, []event.Event) {
+		enf := &fakeEnf{fail: fail}
+		var mu sync.Mutex
+		var events []event.Event
+		e := New(&policy.Policy{}, nil, enf, func(ev event.Event) { mu.Lock(); events = append(events, ev); mu.Unlock() },
+			func(string, ...any) {}, false)
+		e.SetObserveOnly(why, lsm)
+		root := &Root{Agent: "grok-bot", PID: 42}
+		e.apply(ctx, root, policy.Rule{Mode: policy.Denylist}, 1)
+		e.apply(ctx, root, policy.Rule{Mode: policy.Denylist}, 2) // a reload: the same again
+		return enf, events
+	}
+	count := func(evs []event.Event, sev, contains string) int {
+		n := 0
+		for _, ev := range evs {
+			if ev.Type == event.PolicyLoad && ev.Severity == sev && strings.Contains(ev.Message, contains) {
+				n++
+			}
+		}
+		return n
+	}
+
+	// BPF LSM off: -lsm is skipped (not tried), -net loads, nothing is high.
+	enf, evs := run("BPF LSM off", false, map[string]bool{"-lsm": true})
+	if got := enf.set(); !slices.Equal(got, []string{"eff-grok-bot-42-g2-net"}) {
+		t.Fatalf("loaded %v", got)
+	}
+	if n := count(evs, "high", ""); n != 0 {
+		t.Errorf("%d high policy events on an observe-only kernel", n)
+	}
+	if n := count(evs, "info", "observe-only: BPF LSM off; kernel policies with LSM hooks not loaded"); n != 2 {
+		t.Errorf("%d skip events, want one per apply: %+v", n, evs)
+	}
+
+	// An old kernel with BPF LSM: everything is tried; a failure is info.
+	enf, evs = run("kernel 5.4.0 older than 5.12", true, map[string]bool{"-lsm": true})
+	if got := enf.set(); !slices.Equal(got, []string{"eff-grok-bot-42-g2-net"}) {
+		t.Fatalf("loaded %v", got)
+	}
+	if n := count(evs, "high", ""); n != 0 {
+		t.Errorf("%d high policy events on an observe-only kernel", n)
+	}
+	if n := count(evs, "info", "observe-only: kernel 5.4.0 older than 5.12; failed to load kernel policy"); n != 2 {
+		t.Errorf("%d info failures, want 2: %+v", n, evs)
+	}
+
+	// A capable kernel: a load failure is still high, and nothing is skipped.
+	_, evs = run("", false, map[string]bool{"-lsm": true})
+	if n := count(evs, "high", "failed to load kernel policy"); n != 2 {
+		t.Errorf("%d high failures on a capable kernel, want 2", n)
+	}
+	if n := count(evs, "info", "observe-only"); n != 0 {
+		t.Errorf("observe-only events on a capable kernel: %+v", evs)
 	}
 }
 

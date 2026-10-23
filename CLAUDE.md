@@ -402,7 +402,13 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   layer observe-only (`engine.SetObserveOnly`: enforcing modes render as monitor, no self-protection guard; hooks unchanged)
   and the heartbeat's `kernel` adds `release` + `observe_only` (the reason, e.g. `kernel 5.4.0 older than 5.12; no BTF`),
   which Machines shows as "observe-only: <reason>" (also for a hooks-only Linux machine). `EFFIGENT_SKIP_KERNEL_CHECK` is
-  retired (accepted, ignored).
+  retired (accepted, ignored). Observe-only is a known state, not a tamper signal (`server/observe_only.go`): effigentd
+  skips the LSM documents when BPF LSM is off (`engine.Doc.LSM`) and reports observe-only load failures as `info`
+  (`observe-only: <reason>; …`), never high; the control plane raises no `policy_load_failed` for a machine whose stored
+  `kernel.observe_only` is set (older builds still send high), and audits `endpoint.observe_only` (actor via `system`,
+  no email, no webhook) once when a heartbeat enters the state (previous report swapped under a row lock in
+  `SetEndpointKernel`; first report included, leaving and re-entering audits again). A failure batch that lands before
+  an older build's first kernel heartbeat can still alert once.
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
   `offline_alert_interval_minutes`, `email_hooks`, `email_tamper`; people only; audited `endpoint_health.update`
   before/after). `GET /api/v1/endpoints`
