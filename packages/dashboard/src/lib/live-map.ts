@@ -43,6 +43,8 @@ export interface EndpointRow {
   kernel: KernelState | null;
   /** Why effigentd runs the kernel layer observe-only ("kernel 5.4.0 older than 5.12; no BTF"). */
   kernelReason: string;
+  /** effigentd runs with the agent hooks only (macOS, or Linux without Tetragon, e.g. no BTF). */
+  hooksOnly: boolean;
 }
 
 export type KernelState = 'enforcing' | 'observe_only' | 'no_bpf_lsm' | 'tetragon_down' | 'unreported';
@@ -50,10 +52,10 @@ export type KernelState = 'enforcing' | 'observe_only' | 'no_bpf_lsm' | 'tetrago
 export function kernelState(e: ApiEndpoint): KernelState | null {
   const k = e.kernel;
   if (e.kind === 'cloud' || e.os.toLowerCase() !== 'linux') return null;
-  if (k?.observe_only) return 'observe_only'; // also a hooks-only install on a kernel without BTF
-  if (k?.sensor === 'hooks') return null;
+  if (k?.sensor === 'hooks') return k.observe_only ? 'observe_only' : null; // a hooks-only install on a kernel without BTF
   if (!k) return 'unreported';
   if (!k.tetragon_connected) return 'tetragon_down';
+  if (k.observe_only) return 'observe_only';
   return k.bpf_lsm ? 'enforcing' : 'no_bpf_lsm';
 }
 
@@ -134,6 +136,7 @@ export function toEndpointRow(e: ApiEndpoint, now: number): EndpointRow {
     version: e.version, policyVersion: e.policy_version, status, lastSeenAt: seen, enrolledAt: ms(e.enrolled_at) ?? 0, revoked: e.revoked,
     hooks, hookProblems: e.revoked ? [] : problems, hooksReportedAt: ms(e.hooks_reported_at), offlineAt, stopped,
     cloud, vendor: e.vendor ?? '', kernel: e.revoked ? null : kernelState(e), kernelReason: e.kernel?.observe_only ?? '',
+    hooksOnly: e.kernel?.sensor === 'hooks',
   };
 }
 

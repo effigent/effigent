@@ -363,7 +363,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
             </span>
           </td>
           <td className="muted">
-            {e.cloud ? 'Remote hooks' : e.platform === 'linux' ? (e.kernel === null ? 'Agent hooks' : 'Kernel (Tetragon)') : 'Agent hooks'}
+            {e.cloud ? 'Remote hooks' : e.platform === 'linux' ? (e.kernel === null || e.hooksOnly ? 'Agent hooks' : 'Kernel (Tetragon)') : 'Agent hooks'}
             {e.kernel !== null && e.kernel !== 'enforcing' && (
               <span className="cell-sub" style={{ color: e.kernel === 'unreported' ? undefined : 'var(--gold)' }} title={kernelText(e)}>{kernelLabel(e)}</span>
             )}
