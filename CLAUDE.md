@@ -393,8 +393,13 @@ Migration 014 (`cp.endpoints.hooks/hooks_reported_at/hooks_changed_at/offline_at
   machine as observe-only (BPF LSM off / Tetragon disconnected) or "not reported" (older build) and doesn't count it
   as kernel-enforced. Not yet used by Inventory coverage, the posture report or alerts. A kernel policy reload keeps
   each old document until its replacement loads (`engine.apply`), so a failed reload leaves the previous policy in place.
-  Kernel floor 5.12 with BTF and `bpf` in the LSM list (the guard's `inode_setattr`/unlink/rename arguments): `install.sh`
-  refuses older kernels unless `EFFIGENT_SKIP_KERNEL_CHECK=1`, and warns (observe-only) without BPF LSM.
+  Kernel enforcement needs 5.12 with BTF and `bpf` in the LSM list (the guard's `inode_setattr`/unlink/rename arguments).
+  Short of that nothing refuses: `install.sh` warns and installs (no BTF and no Tetragon running → Tetragon skipped,
+  effigentd `--sensor hooks`, no `Requires=tetragon.service`); effigentd (`cmd/effigentd/kernelfloor.go`) runs the kernel
+  layer observe-only (`engine.SetObserveOnly`: enforcing modes render as monitor, no self-protection guard; hooks unchanged)
+  and the heartbeat's `kernel` adds `release` + `observe_only` (the reason, e.g. `kernel 5.4.0 older than 5.12; no BTF`),
+  which Machines shows as "observe-only: <reason>" (also for a hooks-only Linux machine). `EFFIGENT_SKIP_KERNEL_CHECK` is
+  retired (accepted, ignored).
 - Console API: `GET|PUT /api/v1/endpoint-health` (`offline_after_minutes`, `email_offline`,
   `offline_alert_interval_minutes`, `email_hooks`, `email_tamper`; people only; audited `endpoint_health.update`
   before/after). `GET /api/v1/endpoints`

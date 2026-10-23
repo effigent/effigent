@@ -207,13 +207,24 @@ function hookProblemText(h: HookRow): string {
 const HOOK_BADGE: Record<HookRow['state'], string> = { installed: 'b-green', missing: 'b-red', modified: 'b-red', unreadable: 'b-gold' };
 
 const KERNEL_LABEL: Record<Exclude<KernelState, 'enforcing'>, string> = {
-  no_bpf_lsm: 'observe-only: BPF LSM off', tetragon_down: 'Tetragon disconnected', unreported: 'kernel state not reported',
+  observe_only: 'observe-only', no_bpf_lsm: 'observe-only: BPF LSM off', tetragon_down: 'Tetragon disconnected', unreported: 'kernel state not reported',
 };
 const KERNEL_TEXT: Record<Exclude<KernelState, 'enforcing'>, string> = {
+  observe_only: "This kernel can't block, so effigentd runs the kernel layer observe-only: blocks become alerts and self-protection is off. Agent hooks still decide. Kernel enforcement needs a distro kernel 5.12 or newer with BTF and bpf in the LSM list (lsm= boot parameter).",
   no_bpf_lsm: "BPF LSM isn't in this kernel's active LSM list, so the kernel layer only observes: blocks become alerts. Agent hooks still decide. Add bpf to the lsm= boot parameter and reboot.",
   tetragon_down: "effigentd has lost its connection to Tetragon: agents that start now get no kernel policy, and policy changes don't reach the kernel until it reconnects (if Tetragon itself stopped, nothing is enforced by the kernel). Agent hooks still decide. effigentd reconnects on its own; check that Tetragon is running.",
   unreported: "This effigentd doesn't report whether the kernel layer can enforce (BPF LSM, Tetragon connection): upgrade it to see it here.",
 };
+
+/** The row's kernel label and explanation, with effigentd's own reason when it sent one. */
+function kernelLabel(e: EndpointRow): string {
+  if (e.kernel === null || e.kernel === 'enforcing') return '';
+  return e.kernel === 'observe_only' && e.kernelReason ? `observe-only: ${e.kernelReason}` : KERNEL_LABEL[e.kernel];
+}
+function kernelText(e: EndpointRow): string {
+  if (e.kernel === null || e.kernel === 'enforcing') return '';
+  return e.kernel === 'observe_only' && e.kernelReason ? `Kernel enforcement off: ${e.kernelReason}. ${KERNEL_TEXT.observe_only}` : KERNEL_TEXT[e.kernel];
+}
 
 /** Offline alert email intervals in minutes (0 = never, the default). */
 const OFFLINE_EVERY: [number, string][] = [
@@ -306,7 +317,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
   const revoked = endpointRows.filter((e) => e.revoked);
   const online = eps.filter((e) => e.status === 'online');
   const kernel = eps.filter((e) => e.platform === 'linux');
-  const kernelOff = kernel.filter((e) => e.kernel === 'no_bpf_lsm' || e.kernel === 'tetragon_down');
+  const kernelOff = kernel.filter((e) => e.kernel === 'observe_only' || e.kernel === 'no_bpf_lsm' || e.kernel === 'tetragon_down');
   const observe = eps.filter((e) => e.platform !== 'linux');
   const current = eps.filter((e) => latestPolicy > 0 && e.policyVersion === latestPolicy).length;
   const newest = eps.reduce((m, e) => (cmpVersion(e.version, m) > 0 ? e.version : m), '0');
@@ -354,7 +365,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
           <td className="muted">
             {e.cloud ? 'Remote hooks' : e.platform === 'linux' ? (e.kernel === null ? 'Agent hooks' : 'Kernel (Tetragon)') : 'Agent hooks'}
             {e.kernel !== null && e.kernel !== 'enforcing' && (
-              <span className="cell-sub" style={{ color: e.kernel === 'unreported' ? undefined : 'var(--gold)' }} title={KERNEL_TEXT[e.kernel]}>{KERNEL_LABEL[e.kernel]}</span>
+              <span className="cell-sub" style={{ color: e.kernel === 'unreported' ? undefined : 'var(--gold)' }} title={kernelText(e)}>{kernelLabel(e)}</span>
             )}
           </td>
           <td className="mono-sm" style={{ color: cmpVersion(e.version, newest) < 0 ? 'var(--gold)' : undefined }}>{e.version || '—'}</td>
@@ -401,7 +412,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
               {e.kernel !== null && e.kernel !== 'enforcing' && (
                 <div className={e.kernel === 'unreported' ? 'callout' : 'callout warn'} style={{ margin: '0 0 10px' }}>
                   <Ic n="alert" size={16} />
-                  <span>{KERNEL_TEXT[e.kernel]}</span>
+                  <span>{kernelText(e)}</span>
                 </div>
               )}
               {e.hooks.length > 0 ? (
@@ -454,7 +465,7 @@ export function Enforcement({ initialEndpoint }: { initialEndpoint?: string }) {
       <div className="grid-4">
         <Card className="mini-stat"><div className="k">Endpoints online</div><div className="v">{online.length}/{eps.length}</div><div className="s">{eps.length - online.length} need attention</div></Card>
         <Card className="mini-stat"><div className="k">Kernel-enforced</div><div className="v">{kernel.length - kernelOff.length}</div>
-          <div className="s">{kernelOff.length > 0 ? `+ ${kernelOff.length} observe-only (BPF LSM off or Tetragon disconnected)` : 'Linux · Tetragon BPF LSM, pid-scoped'}</div></Card>
+          <div className="s">{kernelOff.length > 0 ? `+ ${kernelOff.length} observe-only (old kernel, BPF LSM off or Tetragon disconnected)` : 'Linux · Tetragon BPF LSM, pid-scoped'}</div></Card>
         <Card className="mini-stat"><div className="k">Agent hooks</div><div className="v">{observe.length}</div><div className="s">macOS / Windows · Claude Code, Codex, Gemini CLI, Cursor checked before each action</div></Card>
         <Card className="mini-stat"><div className="k">On latest policy</div><div className="v">{current}/{eps.length}</div><div className="s">{latestPolicy > 0 ? `Published v${latestPolicy}` : 'Nothing published yet'}</div></Card>
       </div>

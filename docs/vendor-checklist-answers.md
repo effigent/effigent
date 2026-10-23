@@ -667,12 +667,15 @@ against a 30-day baseline. A new agent learns silently for 7 days first. Optiona
   reports of conflicts with Falcon or Wiz sensors, but we haven't tested next to them
   (`footprint.md` §3.3 now has a Wiz row: an eBPF sensor whose hooks aren't public). A pilot
   machine with your sensor is the honest next step.
-- **Minimum kernel:** 5.12 with BTF and `bpf` in the active LSM list (Ubuntu needs `lsm=…,bpf`
-  and a reboot). The installer refuses older kernels (`EFFIGENT_SKIP_KERNEL_CHECK=1` overrides)
-  and warns but installs observe-only without BPF LSM.
-- **Kernel layer health is visible:** every heartbeat reports `bpf_lsm` and whether Tetragon is
-  connected; Machines flags a Linux machine that is only observing and doesn't count it as
-  kernel-enforced. Inventory, the posture report and alerts don't use it yet.
+- **Kernel enforcement needs:** 5.12 with BTF and `bpf` in the active LSM list (Ubuntu needs
+  `lsm=…,bpf` and a reboot). On anything older, without BTF or without BPF LSM the installer
+  warns and installs anyway: the kernel layer runs observe-only (alerts, no blocking, no
+  self-protection) and the agent hooks still enforce. Without BTF Tetragon isn't installed and
+  effigentd runs with the hooks only.
+- **Kernel layer health is visible:** every heartbeat reports `bpf_lsm`, whether Tetragon is
+  connected, the kernel release and why the kernel layer is observe-only; Machines flags such a
+  machine with that reason and doesn't count it as kernel-enforced. Inventory, the posture
+  report and alerts don't use it yet.
 - **Failed reload:** a kernel policy that fails to load leaves the previous version loaded
   instead of removing it. A machine whose first policy never loads still runs unenforced
   (there is no fail-closed option that kills the agent yet).

@@ -112,6 +112,8 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endp
 			Sensor            string `json:"sensor"`
 			BPFLSM            *bool  `json:"bpf_lsm"`
 			TetragonConnected *bool  `json:"tetragon_connected"`
+			Release           string `json:"release,omitempty"`      // uname -r
+			ObserveOnly       string `json:"observe_only,omitempty"` // why the kernel can't block (old kernel, no BTF, BPF LSM off)
 		} `json:"kernel"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req)
@@ -121,7 +123,7 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, ep store.Endp
 	}
 	if k := req.Kernel; k != nil {
 		// stored as reported, but only the known fields
-		k.Sensor = clip(k.Sensor, 32)
+		k.Sensor, k.Release, k.ObserveOnly = clip(k.Sensor, 32), clip(k.Release, 128), clip(k.ObserveOnly, 300)
 		b, _ := json.Marshal(k)
 		if err := s.Store.SetEndpointKernel(r.Context(), ep.ID, b); err != nil {
 			s.fail(w, err)

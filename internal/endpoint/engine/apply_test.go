@@ -116,6 +116,61 @@ func TestApplyKeepsOldPoliciesWhenReloadFails(t *testing.T) {
 	}
 }
 
+// ruleEnf records the last rule rendered for the kernel.
+type ruleEnf struct {
+	fakeEnf
+	last policy.Rule
+}
+
+func (f *ruleEnf) Render(name string, pid uint32, r policy.Rule) ([]Doc, error) {
+	f.mu.Lock()
+	f.last = r
+	f.mu.Unlock()
+	return f.fakeEnf.Render(name, pid, r)
+}
+
+func TestObserveOnlyKernelRule(t *testing.T) {
+	pol, err := policy.Parse([]byte("defaults:\n  mode: denylist\n  exec_deny: [/usr/bin/curl]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enf := &ruleEnf{fakeEnf: fakeEnf{fail: map[string]bool{}}}
+	e := New(pol, nil, enf, func(event.Event) {}, func(string, ...any) {}, false)
+	ctx := context.Background()
+	e.SetGuard(ctx, &policy.SelfProtect{Paths: []string{"/var/lib/effigent"}, KillPIDs: []uint32{1}})
+	e.track(ctx, &Root{Agent: "grok-bot", PID: 42}, event.Raw{})
+	if enf.last.Mode != policy.Denylist || enf.last.SelfProtect == nil {
+		t.Fatalf("enforcing kernel: mode %s, guard %v", enf.last.Mode, enf.last.SelfProtect)
+	}
+
+	// Old kernel / no BTF / no BPF LSM: the live agent is re-applied observe-only, no guard.
+	e.SetObserveOnly(true)
+	if enf.last.Mode != policy.Monitor || enf.last.SelfProtect != nil {
+		t.Fatalf("observe-only kernel: mode %s, guard %v", enf.last.Mode, enf.last.SelfProtect)
+	}
+	if len(enf.last.ExecDeny) == 0 {
+		t.Error("the deny list should still be rendered (as would_block)")
+	}
+	if a := e.Agents(); len(a) != 1 || a[0].Mode != policy.Monitor {
+		t.Errorf("tracked agent: %+v", a)
+	}
+	// The hooks' rule is the policy's: they still enforce.
+	if r := e.RuleFor("grok-bot"); r.Mode != policy.Denylist {
+		t.Errorf("hook rule mode %s", r.Mode)
+	}
+	// A learn-mode agent stays learn (it records what runs).
+	pol2, err := policy.Parse([]byte("defaults:\n  mode: learn\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2 := New(pol2, nil, enf, func(event.Event) {}, func(string, ...any) {}, false)
+	e2.SetObserveOnly(true)
+	e2.track(ctx, &Root{Agent: "grok-bot", PID: 43}, event.Raw{})
+	if enf.last.Mode != policy.Learn {
+		t.Errorf("learn became %s", enf.last.Mode)
+	}
+}
+
 func TestDocSuffix(t *testing.T) {
 	for in, want := range map[string]string{
 		"eff-claude-42-g3-lsm":    "-lsm",

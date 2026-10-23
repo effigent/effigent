@@ -160,12 +160,16 @@ process, though, and Tetragon's base sensors trace every exec and exit on the ho
   - Tetragon's LSM hooks need kernel ≥ 5.7, `CONFIG_BPF_LSM=y`, and `bpf` in the active LSM
     list; otherwise you add it to `lsm=` on the kernel command line and reboot
     ([Tetragon hooks docs](https://tetragon.io/docs/concepts/tracing-policy/hooks/)).
-  - **Effigent needs ≥ 5.12** with BTF (`/sys/kernel/btf/vmlinux`) and `bpf` in the active
-    LSM list: the self-protection guard reads `inode_setattr`, unlink and rename arguments in
-    the layout those kernels have (`tetragon/render.go`). `install.sh` refuses older kernels
-    (`EFFIGENT_SKIP_KERNEL_CHECK=1` installs anyway) and warns, but continues observe-only,
-    without `bpf` in the LSM list. effigentd reports `bpf_lsm` and whether Tetragon is
-    connected with every heartbeat; the console's Machines view flags observe-only machines.
+  - **Kernel enforcement needs ≥ 5.12** with BTF (`/sys/kernel/btf/vmlinux`) and `bpf` in the
+    active LSM list: the self-protection guard reads `inode_setattr`, unlink and rename
+    arguments in the layout those kernels have (`tetragon/render.go`). Short of that,
+    `install.sh` warns (what's missing and how to fix it) and installs anyway: effigentd runs
+    the kernel layer observe-only (blocks become `would_block` alerts, the self-protection
+    guard isn't loaded) and the agent hooks still enforce. Without BTF Tetragon can't start, so
+    unless one is already running the installer skips it and effigentd runs with the hooks
+    only. effigentd reports `bpf_lsm`, whether Tetragon is connected, the kernel release and
+    the observe-only reason (`kernel … older than 5.12`, `no BTF`, `BPF LSM off`) with every
+    heartbeat; the console's Machines view flags observe-only machines with that reason.
   - **Ubuntu** builds `CONFIG_BPF_LSM` but does not list `bpf` in `CONFIG_LSM`, so it is off
     by default. An Ubuntu kernel-team proposal to change this was posted in September 2026
     ([thread](https://lists.ubuntu.com/archives/kernel-team/2026-September/171489.html)); its

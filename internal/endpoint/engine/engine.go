@@ -76,6 +76,7 @@ type Engine struct {
 	bgTimer    *time.Timer
 	guard      *policy.SelfProtect // FR Q20 self-protection, injected into every tracked agent's kernel rule when SelfProtectionOn
 	gateExempt []string            // FR Q3 effigentd's own binary paths, injected into any rule that gates binaries
+	observe    bool                // the kernel can't block here (old kernel, no BTF, no BPF LSM): kernel rules only observe
 }
 
 func (e *Engine) stop(pid int) error { return stopProcess(pid) }
@@ -338,7 +339,33 @@ func (e *Engine) ruleFor(root *Root) policy.Rule {
 	if len(k.GatedExec) > 0 {
 		k.GateExempt = e.gateExempt
 	}
+	// A kernel that can't block (SetObserveOnly): matches are reported as
+	// would_block and the guard, whose hooks need 5.12's argument layout, isn't
+	// loaded. Last, so nothing above puts an override back. Hooks don't use
+	// this rule: they still decide.
+	if e.observe {
+		if k.Mode == policy.Denylist || k.Mode == policy.Allowlist {
+			k.Mode = policy.Monitor
+		}
+		k.SelfProtect = nil
+	}
 	return k
+}
+
+// SetObserveOnly makes every kernel rule observe-only (monitor, no
+// self-protection): for kernels older than 5.12, without BTF or without BPF
+// LSM. Call before any agent is tracked; it also re-applies live roots.
+func (e *Engine) SetObserveOnly(on bool) {
+	e.mu.Lock()
+	changed := e.observe != on
+	e.observe = on
+	pids := e.livePIDsLocked()
+	e.mu.Unlock()
+	if changed {
+		for _, pid := range pids {
+			e.reapply(context.Background(), pid)
+		}
+	}
 }
 
 // bgActiveLocked reports whether a break-glass window is currently open.

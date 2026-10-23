@@ -157,28 +157,39 @@ case "$(uname -m)" in
 esac
 
 # ---- kernel checks -------------------------------------------------------
+# Kernel enforcement needs 5.12+ (the self-protection guard hooks inode_setattr, unlink
+# and rename with the argument layout those kernels have), BTF (Tetragon needs it) and
+# bpf in the active LSM list. Short of that the install goes on: effigentd runs the
+# kernel layer observe-only (it finds out on its own and reports why) and the agent
+# hooks still enforce. EFFIGENT_SKIP_KERNEL_CHECK is retired: nothing refuses a kernel
+# any more, so it is accepted and ignored.
 say "Checking the kernel"
 KREL="$(uname -r)"
-# 5.12+: the self-protection guard hooks inode_setattr, unlink and rename with the
-# argument layout those kernels have. EFFIGENT_SKIP_KERNEL_CHECK=1 installs anyway.
+OBSERVE="" # why the kernel layer only observes ("" = it can block)
+observe() { OBSERVE="${OBSERVE:+$OBSERVE; }$1"; }
 KMAJ="$(echo "$KREL" | cut -d. -f1)"
 KMIN="$(echo "$KREL" | cut -d. -f2 | sed 's/[^0-9].*//')"
 case "$KMAJ$KMIN" in ''|*[!0-9]*) KMAJ=0; KMIN=0 ;; esac
 if [ "$KMAJ" -lt 5 ] || { [ "$KMAJ" -eq 5 ] && [ "$KMIN" -lt 12 ]; }; then
-  if [ "${EFFIGENT_SKIP_KERNEL_CHECK:-0}" = 1 ]; then
-    warn "kernel $KREL is older than 5.12: kernel enforcement and self-protection may not load (EFFIGENT_SKIP_KERNEL_CHECK=1)."
-  else
-    die "kernel $KREL is older than 5.12 (or unrecognised), the minimum for kernel enforcement. Use a distro kernel 5.12+ (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023)."
-  fi
+  observe "kernel $KREL older than 5.12"
+  warn "kernel $KREL is older than 5.12 (or unrecognised): the kernel layer can't block or protect effigentd here."
 fi
-[ -e /sys/kernel/btf/vmlinux ] || die "kernel $KREL has no BTF (/sys/kernel/btf/vmlinux). Use a distro kernel 5.12+ with BTF (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023)."
+BTF=1
+if [ ! -e /sys/kernel/btf/vmlinux ]; then
+  BTF=0
+  observe "no BTF"
+  warn "kernel $KREL has no BTF (/sys/kernel/btf/vmlinux), which Tetragon needs: unless Tetragon is already running, it isn't installed and effigentd runs with the agent hooks only."
+fi
 # Some minimal images don't mount securityfs; it's where the active LSMs are listed.
 [ -e /sys/kernel/security/lsm ] || mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
-LSM_OK=0
-if grep -qw bpf /sys/kernel/security/lsm 2>/dev/null; then LSM_OK=1; fi
-if [ "$LSM_OK" = 0 ]; then
-  warn "BPF LSM is not enabled, so effigentd can watch agents but cannot block them yet."
+if ! grep -qw bpf /sys/kernel/security/lsm 2>/dev/null; then
+  observe "BPF LSM off"
+  warn "BPF LSM is not enabled, so the kernel layer can watch agents but cannot block them."
   warn "Enable it: add 'lsm=$(cat /sys/kernel/security/lsm 2>/dev/null),bpf' to GRUB_CMDLINE_LINUX in /etc/default/grub, run update-grub (or grub2-mkconfig), reboot."
+fi
+if [ -n "$OBSERVE" ]; then
+  warn "installing anyway: the kernel layer runs observe-only (kernel enforcement off: blocks become alerts, no self-protection); the agent hooks still enforce."
+  warn "For kernel enforcement use a distro kernel 5.12+ with BTF and bpf in the LSM list (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023), then rerun this installer."
 fi
 
 # ---- effigentd ------------------------------------------------------------
@@ -228,7 +239,14 @@ tetragon_running() {
   if [ "$SYSTEMD" = 1 ]; then systemctl is-active --quiet tetragon; else pgrep -x tetragon >/dev/null 2>&1; fi
 }
 
-if [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
+# No BTF: Tetragon can't start, so effigentd runs with the agent hooks only (one already
+# running, e.g. with its own --btf file, or --skip-tetragon, is used as usual).
+HOOKS_ONLY=0
+if [ "$BTF" = 0 ] && [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
+  HOOKS_ONLY=1
+  say "Skipping Tetragon (no BTF): effigentd runs with the agent hooks only"
+  [ "$SKIP_HOOKS" = 0 ] || warn "--skip-hooks on a kernel without BTF: nothing will block agents here, effigentd only reports them."
+elif [ "$SKIP_TETRAGON" = 0 ] && ! tetragon_running; then
   say "Installing Tetragon $TETRAGON_VERSION"
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
   TGZ="tetragon-$TETRAGON_VERSION-$ARCH.tar.gz"
@@ -281,14 +299,19 @@ fi
 
 # ---- start effigentd ------------------------------------------------------
 EFFIGENTD_ARGS="--tetragon $TETRAGON_ADDR --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl --keep-policies-on-exit"
+TG_AFTER=" tetragon.service"; TG_REQUIRES="Requires=tetragon.service"
+if [ "$HOOKS_ONLY" = 1 ]; then
+  EFFIGENTD_ARGS="--sensor hooks --state-dir /var/lib/effigent --output none --log-file /var/log/effigent/events.jsonl"
+  TG_AFTER=""; TG_REQUIRES=""
+fi
 if [ "$SYSTEMD" = 1 ]; then
 cat > /etc/systemd/system/effigentd.service <<UNIT
 [Unit]
 Description=Effigent endpoint agent (AI agent monitoring and enforcement)
 Documentation=https://effigent.ai/docs/quickstart
-After=network-online.target tetragon.service
+After=network-online.target$TG_AFTER
 Wants=network-online.target
-Requires=tetragon.service
+$TG_REQUIRES
 
 [Service]
 ExecStart=/usr/local/bin/effigentd $EFFIGENTD_ARGS
@@ -304,7 +327,7 @@ systemctl restart effigentd
 LOGHINT="journalctl -u effigentd"
 else
   SOCK="${TETRAGON_ADDR#unix://}"
-  if [ "$SOCK" != "$TETRAGON_ADDR" ]; then
+  if [ "$HOOKS_ONLY" = 0 ] && [ "$SOCK" != "$TETRAGON_ADDR" ]; then
     i=0 # effigentd retries Tetragon on its own, but don't race its first start
     until [ -S "$SOCK" ] || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
     [ -S "$SOCK" ] || warn "Tetragon has not opened $SOCK yet: see /var/log/tetragon/tetragon.out"
@@ -344,4 +367,11 @@ echo "Done. This machine now appears in the console under Machines."
 [ "$HOOKS" = 0 ] || echo "Claude Code, Codex, Gemini CLI and Cursor tool calls are also checked through their hooks (commands, MCP tools, approvals)."
 [ "$SYSTEMD" = 1 ] || echo "No systemd: Tetragon and effigentd stop at the next reboot; rerun this installer to start them again."
 [ "$SYSTEMD" = 1 ] || [ "$HOOKS" = 0 ] || echo "Until then the agent hooks refuse every tool call (they fail closed); 'sudo effigentd install-hooks --remove' takes them out."
-[ "$LSM_OK" = 1 ] || echo "Blocking turns on after you enable BPF LSM and reboot (see the warning above)."
+if [ -n "$OBSERVE" ]; then
+  if [ "$HOOKS" = 1 ]; then
+    echo "Kernel layer: observe-only (kernel enforcement off): $OBSERVE; hooks still enforce."
+  else
+    echo "Kernel layer: observe-only (kernel enforcement off): $OBSERVE; the agent hooks aren't installed, so nothing blocks agents here."
+  fi
+  echo "Kernel enforcement needs a distro kernel 5.12+ with BTF and bpf in the LSM list (see the warnings above); rerun this installer after the change."
+fi

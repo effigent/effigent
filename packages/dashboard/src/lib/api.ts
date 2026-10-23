@@ -51,7 +51,7 @@ export interface ApiEndpoint {
   stopped_at?: string | null;
   stop?: { signal?: string; via?: string; os_user?: string } | null;
   /** The kernel layer effigentd reports with each heartbeat (migration 023; null from older builds). */
-  kernel?: { sensor?: string; bpf_lsm?: boolean; tetragon_connected?: boolean } | null;
+  kernel?: { sensor?: string; bpf_lsm?: boolean; tetragon_connected?: boolean; release?: string; observe_only?: string } | null;
   kernel_reported_at?: string | null;
   /** machine (effigentd enrolled on it) | cloud (a cloud environment: hooks in a vendor's sessions, migration 019). */
   kind?: 'machine' | 'cloud';

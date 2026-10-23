@@ -115,7 +115,20 @@ func TestEndpointKernelStatus(t *testing.T) {
 	k, _ = kernel()
 	got = nil
 	_ = json.Unmarshal(k, &got)
-	if got["bpf_lsm"] != true || got["tetragon_connected"] != false {
+	if got["bpf_lsm"] != true || got["tetragon_connected"] != false || got["observe_only"] != nil {
+		t.Fatalf("kernel: %s", k)
+	}
+
+	// an old kernel without BTF, hooks only: the release and the reason are kept
+	if code := call("POST", "/ep/v1/heartbeat", ep.Secret, map[string]any{"policy_version": 0, "version": "v0.9.1",
+		"kernel": map[string]any{"sensor": "hooks", "bpf_lsm": false, "tetragon_connected": false,
+			"release": "5.4.0-150-generic", "observe_only": "kernel 5.4.0-150-generic older than 5.12; no BTF; BPF LSM off"}}, nil); code != 200 {
+		t.Fatalf("heartbeat: %d", code)
+	}
+	k, _ = kernel()
+	got = nil
+	_ = json.Unmarshal(k, &got)
+	if got["release"] != "5.4.0-150-generic" || got["observe_only"] != "kernel 5.4.0-150-generic older than 5.12; no BTF; BPF LSM off" || got["sensor"] != "hooks" {
 		t.Fatalf("kernel: %s", k)
 	}
 }

@@ -45,9 +45,17 @@ func bpfLSMEnabled() bool {
 }
 
 // kernelStatus is what the heartbeat says about the kernel layer: without
-// BPF LSM, or with Tetragon unreachable, a Linux machine only observes.
-func kernelStatus(sensor string) map[string]any {
-	return map[string]any{"sensor": sensor, "bpf_lsm": bpfLSMEnabled(), "tetragon_connected": tgConnected.Load()}
+// BPF LSM, or with Tetragon unreachable, a Linux machine only observes;
+// observeOnly says why the kernel can't block (kernelfloor.go), "" when it can.
+func kernelStatus(sensor, observeOnly string) map[string]any {
+	k := map[string]any{"sensor": sensor, "bpf_lsm": bpfLSMEnabled(), "tetragon_connected": tgConnected.Load()}
+	if rel := kernelRelease(); rel != "" {
+		k["release"] = rel
+	}
+	if observeOnly != "" {
+		k["observe_only"] = observeOnly
+	}
+	return k
 }
 
 func main() {
@@ -190,6 +198,12 @@ func daemon() {
 	}
 
 	hooksOnly := *sensor == "hooks"
+	// An old kernel (< 5.12), no BTF or no BPF LSM: the kernel layer only
+	// observes (nothing that overrides a syscall is loaded); hooks still decide.
+	observeOnly := kernelObserveOnly()
+	if observeOnly != "" {
+		logger.Printf("kernel layer observe-only (kernel enforcement off): %s; agent hooks still enforce", observeOnly)
+	}
 	var tg *tetragon.Client
 	var enf engine.Enforcer // stays nil in hooks mode: nothing to load into a kernel
 	if !hooksOnly {
@@ -244,6 +258,7 @@ func daemon() {
 	}
 
 	eng := engine.New(pol, raw, enf, emit, logger.Printf, *verbose)
+	eng.SetObserveOnly(observeOnly != "")
 	if cp != nil { // a break-glass window a previous run opened lasts until it ends
 		if id, until, ok := bgActiveWindow(*stateDir, time.Now()); ok {
 			eng.SetBreakGlass(ctx, id, until)
@@ -265,7 +280,7 @@ func daemon() {
 		client = &cpclient.Client{
 			State: cp, Dir: *stateDir, Logf: logger.Printf, AgentVersion: version,
 			// whether the kernel layer can enforce, with every heartbeat
-			Kernel: func() any { return kernelStatus(*sensor) },
+			Kernel: func() any { return kernelStatus(*sensor, observeOnly) },
 			// each agent's hook, reported to the control plane when it changes
 			Hooks: func() any {
 				o := hookstate.Default(*sensor)
@@ -349,6 +364,7 @@ func daemon() {
 					"tetragon_connected": tgConnected.Load(),
 					"sensor":             *sensor,
 					"bpf_lsm":            bpfLSMEnabled(),
+					"observe_only":       observeOnly,
 					"policy_version":     policyVersion.Load(),
 					"version":            version,
 				}
